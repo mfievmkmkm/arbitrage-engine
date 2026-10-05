@@ -1,0 +1,4 @@
+aiogram>=3.13,<4
+ccxt>=4.4,<5
+python-dotenv>=1,<2
+aiosqlite>=0.20,<1
