@@ -6,6 +6,7 @@ from .discovery import RotatingUniverse
 from .health import VenueHealth
 from .instruments import from_market,min_notional_ok
 from .net_edge import calculate as net_edge
+from .funding_service import FundingService
 FEE_BPS={"binance":5.0,"bybit":5.5,"okx":5.0,"bitget":6.0,"gateio":7.5,"mexc":6.0,"bingx":6.0};ALLOWED=set(FEE_BPS)
 @dataclass
 class Quote: exchange:str;symbol:str;bids:list;asks:list;fetched:float
@@ -28,14 +29,14 @@ def evaluate(buy,sell,notional,max_age,now=None):
 class Scanner:
  def __init__(self,exchanges,notional,max_age,universe_size=120,batch_size=30,concurrency=8):
   self.ids=[x for x in exchanges if x in ALLOWED];self.notional=notional;self.max_age=max_age;self.universe_size=universe_size;self.batch_size=batch_size;self.concurrency=concurrency
-  self.clients={};self.symbols={};self.specs={};self.errors={};self.health=VenueHealth();self.paused=False;self.last_scan=None;self.universe=None
+  self.clients={};self.symbols={};self.specs={};self.funding=None;self.errors={};self.health=VenueHealth();self.paused=False;self.last_scan=None;self.universe=None
  async def start(self):
   async def init(name):
    c=getattr(ccxt,name)({"enableRateLimit":True,"options":{"defaultType":"swap"}})
    try:
     ms=await c.load_markets();self.clients[name]=c;valid=[m for m in ms.values() if m.get("swap") and m.get("linear") and m.get("settle")=="USDT" and m.get("active") is not False];self.symbols[name]={m["symbol"] for m in valid};self.specs[name]={m["symbol"]:from_market(name,m) for m in valid}
    except Exception as e:self.errors[name]=type(e).__name__;await c.close()
-  await asyncio.gather(*(init(x) for x in self.ids));self.universe=RotatingUniverse(self.symbols,self.universe_size,self.batch_size)
+  await asyncio.gather(*(init(x) for x in self.ids));self.universe=RotatingUniverse(self.symbols,self.universe_size,self.batch_size);self.funding=FundingService(self.clients)
  async def close(self):await asyncio.gather(*(c.close() for c in self.clients.values()),return_exceptions=True)
  async def scan(self):
   if self.paused:return []
@@ -56,4 +57,9 @@ class Scanner:
      if not min_notional_ok(self.specs[a.exchange][a.symbol],self.notional) or not min_notional_ok(self.specs[b.exchange][b.symbol],self.notional):continue
      r=evaluate(a,b,self.notional,self.max_age,now)
      if r and r["hypothetical_edge"]>0:ops.append(r)
-  self.last_scan=now;return sorted(ops,key=lambda x:x["hypothetical_edge"],reverse=True)[:50]
+  ops=sorted(ops,key=lambda x:x["hypothetical_edge"],reverse=True)[:50]
+  if self.funding:
+   for o in ops[:10]:
+    carry,known=await self.funding.pair_carry_pct(o["buy"],o["sell"],o["symbol"]);o["funding_pct"]=carry;o["funding_known"]=known;o["hypothetical_edge"]=net_edge(o["executable"],o["fee_pct"],carry,0.0).net_pct
+   ops.sort(key=lambda x:x["hypothetical_edge"],reverse=True)
+  self.last_scan=now;return ops
