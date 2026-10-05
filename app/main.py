@@ -12,7 +12,7 @@ from .reports import build_replay_report
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
 diary=Diary(config.db_path)
-scanner=Scanner(config.exchanges,config.notional,config.max_age)
+scanner=Scanner(config.exchanges,config.notional,config.max_age,config.universe_size,config.scan_batch_size,config.scan_concurrency)
 paper=PaperEngine(diary,config.paper_capital,config.max_paper_positions,
  config.paper_target_convergence,config.paper_trailing_drawdown,config.paper_max_seconds)
 latest=[]; dp=Dispatcher()
@@ -54,10 +54,17 @@ async def text_for(s):
   count,last,best=await diary.summary(); trades,pnl,wins=await diary.paper_stats()
   stamp=datetime.fromtimestamp(last,timezone.utc).strftime("%d.%m %H:%M UTC") if last else "—"
   return f"📔 ДНЕВНИК\nНаблюдений: {count}\nПоследнее: {stamp}\nЗакрыто paper: {trades}\nPaper NET: {pnl:+.4f} USD\nПрибыльных: {wins}"
- if s=="exchanges":return "🏦 ПЛОЩАДКИ\n"+"\n".join(f"{x}: {'🟢' if x in scanner.clients else '🔴'}" for x in scanner.ids)+"\n\nРеальная торговля выключена."
+ if s=="exchanges":
+  health=scanner.health.snapshot()
+  lines=[]
+  for x in scanner.ids:
+   h=health.get(x,{})
+   lines.append(f"{x}: {'🟢' if x in scanner.clients else '🔴'} • success {h.get('success_pct',0):.0f}% • {h.get('latency_ms','—')} ms")
+  return "🏦 ПЛОЩАДКИ\n"+"\n".join(lines)+"\n\nLIVE выключен."
  if s=="status":
   stamp=datetime.fromtimestamp(scanner.last_scan,timezone.utc).strftime("%H:%M:%S UTC") if scanner.last_scan else "—"
-  return f"📡 СТАТУС\nСканер: {'⏸' if scanner.paused else '🟢'}\nБирж: {len(scanner.clients)}\nПоследний цикл: {stamp}\nPaper: {len(paper.positions)}/{paper.max_positions}\nLIVE: ОТКЛЮЧЕН"
+  coverage=scanner.universe.coverage if scanner.universe else 0
+  return f"📡 СТАТУС\nUniverse: {coverage} рынков\nСканер: {'⏸' if scanner.paused else '🟢'}\nБирж: {len(scanner.clients)}\nПоследний цикл: {stamp}\nPaper: {len(paper.positions)}/{paper.max_positions}\nLIVE: ОТКЛЮЧЕН"
  return "Неизвестный раздел"
 
 @dp.message(CommandStart())
