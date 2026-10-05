@@ -54,7 +54,7 @@ class Scanner:
   for qs in grouped.values():
    for a in qs:
     for b in qs:
-     if not min_notional_ok(self.specs[a.exchange][a.symbol],self.notional) or not min_notional_ok(self.specs[b.exchange][b.symbol],self.notional):continue
+     if not min_notional_ok(self.specs[a.exchange][a.symbol],self.notional,a.asks[0][0]) or not min_notional_ok(self.specs[b.exchange][b.symbol],self.notional,b.bids[0][0]):continue
      r=evaluate(a,b,self.notional,self.max_age,now)
      if r and r["hypothetical_edge"]>0:ops.append(r)
   ops=sorted(ops,key=lambda x:x["hypothetical_edge"],reverse=True)[:50]
