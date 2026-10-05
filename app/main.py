@@ -7,6 +7,7 @@ from .config import config
 from .db import Diary
 from .engine import Scanner
 from .paper import PaperEngine
+from .reports import build_replay_report
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -19,7 +20,8 @@ latest=[]; dp=Dispatcher()
 def menu():
  return InlineKeyboardMarkup(inline_keyboard=[
   [InlineKeyboardButton(text="🔎 Возможности",callback_data="top"),InlineKeyboardButton(text="🧪 Paper",callback_data="paper")],
-  [InlineKeyboardButton(text="📔 Дневник",callback_data="diary"),InlineKeyboardButton(text="📡 Статус",callback_data="status")],
+  [InlineKeyboardButton(text="📔 Дневник",callback_data="diary"),InlineKeyboardButton(text="🧠 Replay",callback_data="replay")],
+  [InlineKeyboardButton(text="📡 Статус",callback_data="status")],
   [InlineKeyboardButton(text="🏦 Биржи",callback_data="exchanges")],
   [InlineKeyboardButton(text="⏸ Пауза",callback_data="pause"),InlineKeyboardButton(text="▶️ Продолжить",callback_data="resume")]])
 
@@ -43,6 +45,11 @@ def fmt_paper():
 async def text_for(s):
  if s=="top":return fmt_top()
  if s=="paper":return fmt_paper()
+ if s=="replay":
+  rows,report=await build_replay_report(diary)
+  if not rows:return "🧠 REPLAY\nПока недостаточно закрытых paper-сделок."
+  b=rows[0]
+  return f"🧠 REPLAY • исследовательский\nСделок: {b['trades']}\nЛучший кандидат: target {b['target']*100:.0f}% / trailing {b['trailing']*100:.0f}% / {b['seconds']//60} мин\nNET: {b['net']:+.4f} USD\nWin rate: {b['win_rate']:.1f}%\nMax DD: {b['max_drawdown']:.4f} USD\n\n⚠️ In-sample: параметры автоматически не меняются."
  if s=="diary":
   count,last,best=await diary.summary(); trades,pnl,wins=await diary.paper_stats()
   stamp=datetime.fromtimestamp(last,timezone.utc).strftime("%d.%m %H:%M UTC") if last else "—"
@@ -57,14 +64,14 @@ async def text_for(s):
 async def start(m:Message):
  if allowed(m.from_user.id):await m.answer("⚡ ARBITRAGE ENGINE\nРежим: DISCOVERY + PAPER",reply_markup=menu())
 
-@dp.message(Command("top","paper","diary","exchanges","status","pause","resume"))
+@dp.message(Command("top","paper","diary","replay","exchanges","status","pause","resume"))
 async def commands(m:Message):
  if not allowed(m.from_user.id):return
  s=m.text.split()[0].lstrip("/").split("@")[0]
  if s in ("pause","resume"):scanner.paused=s=="pause";s="status"
  await m.answer(await text_for(s),reply_markup=menu())
 
-@dp.callback_query(F.data.in_({"top","paper","diary","exchanges","status","pause","resume"}))
+@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","pause","resume"}))
 async def callbacks(q:CallbackQuery):
  if not allowed(q.from_user.id):await q.answer("Нет доступа",show_alert=True);return
  s=q.data
