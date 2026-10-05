@@ -2,7 +2,7 @@ import json,aiosqlite,time
 SCHEMA="""CREATE TABLE IF NOT EXISTS observations(id INTEGER PRIMARY KEY,ts REAL,symbol TEXT,buy TEXT,sell TEXT,raw REAL,executable REAL,fee_pct REAL,hypothetical_edge REAL,notional REAL,payload TEXT);
 CREATE INDEX IF NOT EXISTS idx_observations_ts ON observations(ts);
 CREATE TABLE IF NOT EXISTS paper_positions(id INTEGER PRIMARY KEY AUTOINCREMENT,symbol TEXT,buy TEXT,sell TEXT,notional REAL,entry_buy REAL,entry_sell REAL,entry_spread REAL,opened_at REAL,best_net_usd REAL,current_net_usd REAL,current_spread REAL,status TEXT,closed_at REAL,close_reason TEXT);
-CREATE TABLE IF NOT EXISTS paper_marks(id INTEGER PRIMARY KEY AUTOINCREMENT,position_id INTEGER,ts REAL,net_usd REAL,spread REAL);"""
+CREATE TABLE IF NOT EXISTS paper_marks(id INTEGER PRIMARY KEY AUTOINCREMENT,position_id INTEGER,ts REAL,net_usd REAL,spread REAL);\nCREATE TABLE IF NOT EXISTS execution_events(id INTEGER PRIMARY KEY AUTOINCREMENT,trade_id TEXT,ts REAL,kind TEXT,venue TEXT,symbol TEXT,side TEXT,qty REAL,price REAL,fee REAL,reason TEXT,payload TEXT);\nCREATE INDEX IF NOT EXISTS idx_execution_trade ON execution_events(trade_id,ts);"""
 class Diary:
  def __init__(self,path):self.path=path
  async def init(self):
@@ -27,6 +27,15 @@ class Diary:
  async def paper_stats(self):
   async with aiosqlite.connect(self.path) as d:
    async with d.execute("SELECT COUNT(*),COALESCE(SUM(current_net_usd),0),COALESCE(SUM(CASE WHEN current_net_usd>0 THEN 1 ELSE 0 END),0) FROM paper_positions WHERE status='CLOSED'") as c:return await c.fetchone()
+ async def record_execution_event(self,event):
+  row=event.row()
+  async with aiosqlite.connect(self.path) as d:
+   await d.execute("INSERT INTO execution_events(trade_id,ts,kind,venue,symbol,side,qty,price,fee,reason,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(row["trade_id"],row["ts"],row["kind"],row["venue"],row["symbol"],row["side"],row["qty"],row["price"],row["fee"],row["reason"],json.dumps(row)))
+   await d.commit()
+ async def execution_history(self,trade_id):
+  async with aiosqlite.connect(self.path) as d:
+   d.row_factory=aiosqlite.Row
+   async with d.execute("SELECT * FROM execution_events WHERE trade_id=? ORDER BY ts,id",(trade_id,)) as cur:return [dict(x) for x in await cur.fetchall()]
  async def replay_trades(self,limit=500):
   async with aiosqlite.connect(self.path) as d:
    d.row_factory=aiosqlite.Row
