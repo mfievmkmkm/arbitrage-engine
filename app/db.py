@@ -30,7 +30,7 @@ class Diary:
  async def replay_trades(self,limit=500):
   async with aiosqlite.connect(self.path) as d:
    d.row_factory=aiosqlite.Row
-   async with d.execute("SELECT id,entry_spread,opened_at FROM paper_positions WHERE status='CLOSED' ORDER BY id DESC LIMIT ?",(limit,)) as c:ps=await c.fetchall()
+   async with d.execute("SELECT id,entry_spread,opened_at FROM (SELECT id,entry_spread,opened_at FROM paper_positions WHERE status='CLOSED' ORDER BY opened_at DESC LIMIT ?) ORDER BY opened_at ASC",(limit,)) as c:ps=await c.fetchall()
    out=[]
    for p in ps:
     async with d.execute("SELECT ts,net_usd,spread FROM paper_marks WHERE position_id=? ORDER BY ts",(p["id"],)) as c:marks=await c.fetchall()
