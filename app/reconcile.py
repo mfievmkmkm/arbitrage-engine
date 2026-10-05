@@ -1,5 +1,10 @@
 from dataclasses import dataclass
 @dataclass(frozen=True)
+class Position:
+    symbol:str
+    side:str
+    qty:float
+@dataclass(frozen=True)
 class ReconcileResult:
     trusted:bool
     reason:str
