@@ -5,6 +5,7 @@ import ccxt.async_support as ccxt
 from .discovery import RotatingUniverse
 from .health import VenueHealth
 from .instruments import from_market,min_notional_ok
+from .net_edge import calculate as net_edge
 FEE_BPS={"binance":5.0,"bybit":5.5,"okx":5.0,"bitget":6.0,"gateio":7.5,"mexc":6.0,"bingx":6.0};ALLOWED=set(FEE_BPS)
 @dataclass
 class Quote: exchange:str;symbol:str;bids:list;asks:list;fetched:float
@@ -22,7 +23,8 @@ def evaluate(buy,sell,notional,max_age,now=None):
  qty=notional/buy.asks[0][0];eb=vwap(buy.asks,qty);es=vwap(sell.bids,qty);xb=vwap(buy.bids,qty);xs=vwap(sell.asks,qty)
  if None in (eb,es,xb,xs):return None
  raw=(sell.bids[0][0]-buy.asks[0][0])/buy.asks[0][0]*100;exe=(es-eb)/eb*100;exit_spread=(xs-xb)/xb*100;fee=2*(FEE_BPS[buy.exchange]+FEE_BPS[sell.exchange])/100
- return dict(symbol=buy.symbol,buy=buy.exchange,sell=sell.exchange,raw=raw,executable=exe,fee_pct=fee,hypothetical_edge=exe-fee,notional=notional,ts=now,entry_buy=eb,entry_sell=es,exit_buy=xb,exit_sell=xs,exit_spread=exit_spread,age_buy=now-buy.fetched,age_sell=now-sell.fetched)
+ edge=net_edge(exe,fee)
+ return dict(symbol=buy.symbol,buy=buy.exchange,sell=sell.exchange,raw=raw,executable=exe,fee_pct=fee,funding_pct=0.0,safety_pct=0.0,hypothetical_edge=edge.net_pct,notional=notional,ts=now,entry_buy=eb,entry_sell=es,exit_buy=xb,exit_sell=xs,exit_spread=exit_spread,age_buy=now-buy.fetched,age_sell=now-sell.fetched)
 class Scanner:
  def __init__(self,exchanges,notional,max_age,universe_size=120,batch_size=30,concurrency=8):
   self.ids=[x for x in exchanges if x in ALLOWED];self.notional=notional;self.max_age=max_age;self.universe_size=universe_size;self.batch_size=batch_size;self.concurrency=concurrency
