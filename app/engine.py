@@ -27,8 +27,8 @@ def evaluate(buy,sell,notional,max_age,now=None):
  edge=net_edge(exe,fee)
  return dict(symbol=buy.symbol,buy=buy.exchange,sell=sell.exchange,raw=raw,executable=exe,fee_pct=fee,funding_pct=0.0,safety_pct=0.0,hypothetical_edge=edge.net_pct,notional=notional,ts=now,entry_buy=eb,entry_sell=es,exit_buy=xb,exit_sell=xs,exit_spread=exit_spread,age_buy=now-buy.fetched,age_sell=now-sell.fetched)
 class Scanner:
- def __init__(self,exchanges,notional,max_age,universe_size=120,batch_size=30,concurrency=8,safety_buffer_pct=0.10):
-  self.ids=[x for x in exchanges if x in ALLOWED];self.notional=notional;self.max_age=max_age;self.universe_size=universe_size;self.batch_size=batch_size;self.concurrency=concurrency;self.safety_buffer_pct=safety_buffer_pct
+ def __init__(self,exchanges,notional,max_age,universe_size=120,batch_size=30,concurrency=8,safety_buffer_pct=0.10,hold_seconds=1200):
+  self.ids=[x for x in exchanges if x in ALLOWED];self.notional=notional;self.max_age=max_age;self.universe_size=universe_size;self.batch_size=batch_size;self.concurrency=concurrency;self.safety_buffer_pct=safety_buffer_pct;self.hold_seconds=hold_seconds
   self.clients={};self.symbols={};self.specs={};self.funding=None;self.errors={};self.health=VenueHealth();self.paused=False;self.last_scan=None;self.universe=None
  async def start(self):
   async def init(name):
@@ -60,6 +60,6 @@ class Scanner:
   ops=sorted(ops,key=lambda x:x["hypothetical_edge"],reverse=True)[:50]
   if self.funding:
    for o in ops[:10]:
-    carry,known=await self.funding.pair_carry_pct(o["buy"],o["sell"],o["symbol"]);o["funding_pct"]=carry;o["funding_known"]=known;o["safety_pct"]=self.safety_buffer_pct;o["hypothetical_edge"]=net_edge(o["executable"],o["fee_pct"],carry,self.safety_buffer_pct).net_pct
+    carry,known,status=await self.funding.pair_carry_pct(o["buy"],o["sell"],o["symbol"],self.hold_seconds);o["funding_pct"]=carry;o["funding_known"]=known;o["funding_status"]=status;o["safety_pct"]=self.safety_buffer_pct;o["hypothetical_edge"]=net_edge(o["executable"],o["fee_pct"],carry,self.safety_buffer_pct).net_pct
    ops.sort(key=lambda x:x["hypothetical_edge"],reverse=True)
   self.last_scan=now;return ops
