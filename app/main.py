@@ -23,7 +23,7 @@ def menu():
  return InlineKeyboardMarkup(inline_keyboard=[
   [InlineKeyboardButton(text="🔎 Возможности",callback_data="top"),InlineKeyboardButton(text="🧪 Paper",callback_data="paper")],
   [InlineKeyboardButton(text="📔 Дневник",callback_data="diary"),InlineKeyboardButton(text="🧠 Replay",callback_data="replay")],
-  [InlineKeyboardButton(text="📡 Статус",callback_data="status")],
+  [InlineKeyboardButton(text="📡 Статус",callback_data="status"),InlineKeyboardButton(text="🛡 Риски",callback_data="risk")],
   [InlineKeyboardButton(text="🏦 Биржи",callback_data="exchanges")],
   [InlineKeyboardButton(text="⏸ Пауза",callback_data="pause"),InlineKeyboardButton(text="▶️ Продолжить",callback_data="resume")]])
 
@@ -63,6 +63,9 @@ async def text_for(s):
    h=health.get(x,{})
    lines.append(f"{x}: {'🟢' if x in scanner.clients else '🔴'} • success {h.get('success_pct',0):.0f}% • {h.get('latency_ms','—')} ms")
   return "🏦 ПЛОЩАДКИ\n"+"\n".join(lines)+"\n\nLIVE выключен."
+ if s=="risk":
+  rs=risk.state
+  return f"🛡 RISK CENTER\nСтатус: {'🛑 HALT' if rs.halted else '🟢 NORMAL'}\nПричина: {rs.reason or '—'}\nОшибок подряд: {rs.consecutive_errors}/{risk.max_errors}\nPaper PnL сегодня: {rs.paper_daily_pnl:+.4f} USD\nDaily stop: -{risk.bankroll*risk.daily_stop_pct/100:.2f} USD\nLIVE: заблокирован до private reconciliation"
  if s=="status":
   stamp=datetime.fromtimestamp(scanner.last_scan,timezone.utc).strftime("%H:%M:%S UTC") if scanner.last_scan else "—"
   coverage=scanner.universe.coverage if scanner.universe else 0
@@ -74,14 +77,14 @@ async def text_for(s):
 async def start(m:Message):
  if allowed(m.from_user.id):await m.answer("⚡ ARBITRAGE ENGINE\nРежим: DISCOVERY + PAPER",reply_markup=menu())
 
-@dp.message(Command("top","paper","diary","replay","exchanges","status","pause","resume"))
+@dp.message(Command("top","paper","diary","replay","exchanges","status","risk","pause","resume"))
 async def commands(m:Message):
  if not allowed(m.from_user.id):return
  s=m.text.split()[0].lstrip("/").split("@")[0]
  if s in ("pause","resume"):scanner.paused=s=="pause";s="status"
  await m.answer(await text_for(s),reply_markup=menu())
 
-@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","pause","resume"}))
+@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","pause","resume"}))
 async def callbacks(q:CallbackQuery):
  if not allowed(q.from_user.id):await q.answer("Нет доступа",show_alert=True);return
  s=q.data
