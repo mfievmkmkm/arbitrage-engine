@@ -8,6 +8,7 @@ from .db import Diary
 from .engine import Scanner
 from .paper import PaperEngine
 from .reports import build_replay_report
+from .risk import RiskGuard
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -15,6 +16,7 @@ diary=Diary(config.db_path)
 scanner=Scanner(config.exchanges,config.notional,config.max_age,config.universe_size,config.scan_batch_size,config.scan_concurrency)
 paper=PaperEngine(diary,config.paper_capital,config.max_paper_positions,
  config.paper_target_convergence,config.paper_trailing_drawdown,config.paper_max_seconds)
+risk=RiskGuard(config.paper_capital,2.0,3)
 latest=[]; dp=Dispatcher()
 
 def menu():
@@ -64,7 +66,8 @@ async def text_for(s):
  if s=="status":
   stamp=datetime.fromtimestamp(scanner.last_scan,timezone.utc).strftime("%H:%M:%S UTC") if scanner.last_scan else "—"
   coverage=scanner.universe.coverage if scanner.universe else 0
-  return f"📡 СТАТУС\nUniverse: {coverage} рынков\nСканер: {'⏸' if scanner.paused else '🟢'}\nБирж: {len(scanner.clients)}\nПоследний цикл: {stamp}\nPaper: {len(paper.positions)}/{paper.max_positions}\nLIVE: ОТКЛЮЧЕН"
+  rs=risk.state
+  return f"📡 СТАТУС\nUniverse: {coverage} рынков\nСканер: {'⏸' if scanner.paused else '🟢'}\nБирж: {len(scanner.clients)}\nПоследний цикл: {stamp}\nPaper: {len(paper.positions)}/{paper.max_positions}\nRisk: {'🛑 '+rs.reason if rs.halted else '🟢 OK'} • day {rs.paper_daily_pnl:+.4f}$\nLIVE: ОТКЛЮЧЕН"
  return "Неизвестный раздел"
 
 @dp.message(CommandStart())
@@ -90,16 +93,16 @@ async def scanning():
  while True:
   try:
    if not scanner.paused:
-    latest=await scanner.scan()
+    latest=await scanner.scan();risk.on_success()
     await diary.record([x for x in latest if x["hypothetical_edge"]>=config.min_edge])
     closed=await paper.mark_and_exit(latest)
-    for p in closed:log.info("Paper close %s net=%s",p.symbol,p.current_net_usd)
+    for p in closed:risk.on_paper_close(p.current_net_usd);log.info("Paper close %s net=%s",p.symbol,p.current_net_usd)
     for o in latest:
-     if o["hypothetical_edge"]>=config.paper_entry_edge and paper.can_open(o):
+     if risk.can_open_paper() and o["hypothetical_edge"]>=config.paper_entry_edge and paper.can_open(o):
       p=await paper.open(o)
       if p:log.info("Paper open %s %s/%s",p.symbol,p.buy,p.sell)
     log.info("Cycle opportunities=%s paper=%s",len(latest),len(paper.positions))
-  except Exception:log.exception("Scan failed")
+  except Exception:risk.on_error();log.exception("Scan failed")
   await asyncio.sleep(config.interval)
 
 async def main():
