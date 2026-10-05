@@ -11,7 +11,7 @@ class AccountHealth:
 async def probe(reader):
  started=time.perf_counter()
  try:
-  positions,orders=await asyncio.gather(reader.positions(),reader.orders())
-  return AccountHealth(reader.venue,True,len(positions),len(orders),(time.perf_counter()-started)*1000),positions,orders
+  positions,orders,balance=await asyncio.gather(reader.positions(),reader.orders(),reader.balance())
+  return AccountHealth(reader.venue,True,len(positions),len(orders),(time.perf_counter()-started)*1000),positions,orders,balance
  except Exception as e:
-  return AccountHealth(reader.venue,False,latency_ms=(time.perf_counter()-started)*1000,error=type(e).__name__),[],[]
+  return AccountHealth(reader.venue,False,latency_ms=(time.perf_counter()-started)*1000,error=type(e).__name__),[],[],None
