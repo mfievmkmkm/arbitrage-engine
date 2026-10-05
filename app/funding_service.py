@@ -1,6 +1,7 @@
 import asyncio,time
 from .funding import FundingSnapshot
 from .funding_cache import FundingCache
+from .funding_timing import window,carry_pct
 class FundingService:
  def __init__(self,clients,ttl=120,timeout=6):
   self.clients=clients;self.cache=FundingCache(ttl);self.timeout=timeout;self.errors={}
@@ -17,7 +18,9 @@ class FundingService:
   except Exception as e:
    self.errors[(exchange,symbol)]=type(e).__name__
    return FundingSnapshot(exchange,symbol,None,None,None)
- async def pair_carry_pct(self,long_exchange,short_exchange,symbol):
+ async def pair_carry_pct(self,long_exchange,short_exchange,symbol,hold_seconds=1200):
   a,b=await asyncio.gather(self.get(long_exchange,symbol),self.get(short_exchange,symbol))
-  if a.rate is None or b.rate is None:return 0.0,False
-  return ((b.rate-a.rate)*100),True
+  if a.rate is None or b.rate is None:return 0.0,False,"UNKNOWN"
+  next_ts=min(x for x in (a.next_ts,b.next_ts) if x is not None) if a.next_ts is not None or b.next_ts is not None else None
+  w=window(next_ts,hold_seconds,a.interval_hours or b.interval_hours)
+  return carry_pct(a.rate,b.rate,w),True,w.reason
