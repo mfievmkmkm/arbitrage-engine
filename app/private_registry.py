@@ -5,8 +5,8 @@ class PrivateRegistry:
  async def snapshot(self):
   out={}
   for name,reader in self.readers.items():
-   health,positions,orders=await probe(reader)
-   out[name]={"health":health,"positions":positions,"orders":orders}
+   health,positions,orders,balance=await probe(reader)
+   out[name]={"health":health,"positions":positions,"orders":orders,"balance":balance}
   return out
  @property
  def configured(self):return bool(self.readers)
