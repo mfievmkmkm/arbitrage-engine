@@ -13,7 +13,7 @@ from .risk import RiskGuard
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
 diary=Diary(config.db_path)
-scanner=Scanner(config.exchanges,config.notional,config.max_age,config.universe_size,config.scan_batch_size,config.scan_concurrency,config.safety_buffer_pct)
+scanner=Scanner(config.exchanges,config.notional,config.max_age,config.universe_size,config.scan_batch_size,config.scan_concurrency,config.safety_buffer_pct,config.paper_max_seconds)
 paper=PaperEngine(diary,config.paper_capital,config.max_paper_positions,
  config.paper_target_convergence,config.paper_trailing_drawdown,config.paper_max_seconds)
 risk=RiskGuard(config.paper_capital,config.daily_stop_pct,config.max_engine_errors)
