@@ -21,3 +21,9 @@
 
 ## Безопасность
 При банке $40–50 реальные сделки могут быть экономически невыгодны из-за минимальных ордеров, комиссий и риска одной незахеджированной ноги. Начинаем с наблюдения. `ADMIN_ID` обязателен, чтобы данные не рассылались посторонним. Никогда не коммитить `.env` и приватные ключи.
+
+
+## Phase 2
+Ветка `phase-2-discovery` расширяет Discovery: ротация до 120 общих perpetual-рынков вместо фиксированных первых 30, настраиваемые batch/concurrency, health-метрики площадок, deterministic Paper Risk Guard, route analytics, Docker/Railway и GitHub Actions tests.
+
+Это всё ещё research/paper система. Наличие спреда не означает возможность получить указанную прибыль в live-исполнении. До реальных ордеров нужны WebSocket market data, проверка instrument identity, funding/min-notional/precision, private order state и hedge-failure controller.
