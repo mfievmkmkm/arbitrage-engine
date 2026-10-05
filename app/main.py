@@ -13,10 +13,10 @@ from .risk import RiskGuard
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
 diary=Diary(config.db_path)
-scanner=Scanner(config.exchanges,config.notional,config.max_age,config.universe_size,config.scan_batch_size,config.scan_concurrency)
+scanner=Scanner(config.exchanges,config.notional,config.max_age,config.universe_size,config.scan_batch_size,config.scan_concurrency,config.safety_buffer_pct)
 paper=PaperEngine(diary,config.paper_capital,config.max_paper_positions,
  config.paper_target_convergence,config.paper_trailing_drawdown,config.paper_max_seconds)
-risk=RiskGuard(config.paper_capital,2.0,3)
+risk=RiskGuard(config.paper_capital,config.daily_stop_pct,config.max_engine_errors)
 latest=[]; dp=Dispatcher()
 
 def menu():
@@ -33,7 +33,7 @@ def fmt_top():
  if not latest:return "Пока нет подходящих наблюдений."
  lines=["🔎 ВОЗМОЖНОСТИ — PAPER DATA","Оценка, не гарантированная прибыль.\n"]
  for x in latest[:8]:
-  lines.append(f"{x['symbol']} | {x['buy']} LONG / {x['sell']} SHORT\nИсполнимый вход: {x['executable']:.2f}% | после модели комиссий: {x['hypothetical_edge']:.2f}%\n")
+  lines.append(f"{x['symbol']} | {x['buy']} LONG / {x['sell']} SHORT\nИсполнимый вход: {x['executable']:.2f}% | NET: {x['hypothetical_edge']:.2f}% | funding: {x.get('funding_pct',0):+.3f}%\n")
  return "\n".join(lines)
 
 def fmt_paper():
