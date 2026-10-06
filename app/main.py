@@ -37,6 +37,9 @@ from .tg_pages import strategies as render_strategy_console,dex as render_dex_co
 from .tg_safe_edit import edit as safe_edit
 from .tg_export_center import render as render_export_center
 from .tg_incident_banner import render as render_incident_banner
+from .market_console import render as render_market_console
+from .tg_risk_center import render as render_risk_center
+from .tg_system_center import render as render_system_center
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -69,11 +72,13 @@ async def text_for(s):
  if s=="home":
   banner=render_incident_banner(live_supervisor,live_stop);body=render_home(scanner,paper,risk,strategy_runtime,live_stop);return (banner+"\n\n"+body) if banner else body
  if s=="export":return render_export_center()
+ if s=="risk":return render_risk_center(risk,live_supervisor,live_stop)
+ if s=="status":return render_system_center(scanner,strategy_runtime)
  if s=="strategies":return render_strategy_console(strategy_runtime)
  if s=="strategy_stats":return render_strategy_stats(await strategy_diary_summary(config.db_path))
  if s=="capital":return render_capital(bankroll)
  if s=="dex":return render_dex_console()
- if s=="top":return render_market(latest)
+ if s=="top":return render_market_console(strategy_runtime)
  if s=="paper":return fmt_paper()
  if s=="replay":
   rows,report=await build_replay_report(diary)
