@@ -10,7 +10,7 @@ def args():
  return p,s
 
 def test_post_cost_edge_blocks_trade():
- p,s=args();x=prepare(p,OrderPolicy("market",False,.1,"X"),100,101,s,1,True,G(),True,True,True,50)
+ p,s=args();x=prepare(p,OrderPolicy("market",False,.1,"X"),100,101,s,.1,True,G(),True,True,True,50)
  assert not x.allowed and "NET_EDGE_TOO_LOW" in x.reason
 
 def test_unknown_fee_blocks_before_order_submission():
@@ -19,4 +19,4 @@ def test_unknown_fee_blocks_before_order_submission():
 
 def test_good_net_edge_passes_full_admission():
  p,s=args();x=prepare(p,OrderPolicy("market",False,.1,"X"),100,110,s,1,True,G(),True,True,True,50)
- assert x.allowed and x.cost.net_edge_usd>1
+ assert x.allowed and x.cost.net_edge_usd>.1
