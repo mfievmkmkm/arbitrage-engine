@@ -6,7 +6,8 @@ def test_mark_net_includes_estimated_exit_fees_and_funding():
  m=PositionManager(long_exit_fee_rate=.01,short_exit_fee_rate=.01,safety_buffer=.25)
  x=m.mark(t,104,106,now=1)
  assert abs(x.gross-8)<1e-12
- assert abs(x.fees-3.35)<1e-12
+ assert abs(x.fees-3.10)<1e-12
+ assert abs(x.safety_buffer-.25)<1e-12
  assert abs(x.net-4.15)<1e-12
 
 def test_expensive_exit_does_not_trigger_false_profit_target():
