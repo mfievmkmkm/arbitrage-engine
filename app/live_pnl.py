@@ -6,10 +6,12 @@ class LivePnl:
  gross:float
  fees:float
  funding:float
+ safety_buffer:float
  net:float
-def calculate(base_qty,long_entry,short_entry,long_exit,short_exit,entry_fees=0,exit_fees=0,funding=0):
+def calculate(base_qty,long_entry,short_entry,long_exit,short_exit,entry_fees=0,exit_fees=0,funding=0,safety_buffer=0):
  lg=(long_exit-long_entry)*base_qty
  sg=(short_entry-short_exit)*base_qty
  gross=lg+sg
  fees=entry_fees+exit_fees
- return LivePnl(lg,sg,gross,fees,funding,gross-fees+funding)
+ buffer=max(0,float(safety_buffer))
+ return LivePnl(lg,sg,gross,fees,funding,buffer,gross-fees-buffer+funding)
