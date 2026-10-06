@@ -7,6 +7,8 @@ from .health import VenueHealth
 from .instruments import from_market,min_notional_ok
 from .net_edge import calculate as net_edge
 from .funding_service import FundingService
+from .instruments import compatible
+from .contract_book import to_base_levels
 FEE_BPS={"binance":5.0,"bybit":5.5,"okx":5.0,"bitget":6.0,"gateio":7.5,"mexc":6.0,"bingx":6.0};ALLOWED=set(FEE_BPS)
 @dataclass
 class Quote: exchange:str;symbol:str;bids:list;asks:list;fetched:float
@@ -45,7 +47,7 @@ class Scanner:
    async with sem:
     started=time.perf_counter()
     try:
-     b=await asyncio.wait_for(self.clients[name].fetch_order_book(symbol,limit=20),timeout=8);self.health.success(name,(time.perf_counter()-started)*1000);return Quote(name,symbol,b["bids"],b["asks"],time.time())
+     b=await asyncio.wait_for(self.clients[name].fetch_order_book(symbol,limit=20),timeout=8);self.health.success(name,(time.perf_counter()-started)*1000);spec=self.specs[name][symbol];return Quote(name,symbol,to_base_levels(b["bids"],spec.contract_size),to_base_levels(b["asks"],spec.contract_size),time.time())
     except Exception as e:self.errors[name]=type(e).__name__;self.health.failure(name,type(e).__name__);return None
   rs=await asyncio.gather(*(fetch(n,s) for s in symbols for n in self.clients if s in self.symbols[n]));grouped={}
   for q in rs:
@@ -54,10 +56,12 @@ class Scanner:
   for qs in grouped.values():
    for a in qs:
     for b in qs:
+     if not compatible(self.specs[a.exchange][a.symbol],self.specs[b.exchange][b.symbol]):continue
      if not min_notional_ok(self.specs[a.exchange][a.symbol],self.notional,a.asks[0][0]) or not min_notional_ok(self.specs[b.exchange][b.symbol],self.notional,b.bids[0][0]):continue
      r=evaluate(a,b,self.notional,self.max_age,now)
      if r and r["hypothetical_edge"]>0:ops.append(r)
   ops=sorted(ops,key=lambda x:x["hypothetical_edge"],reverse=True)[:50]
+  for o in ops:o["safety_pct"]=self.safety_buffer_pct;o["hypothetical_edge"]=net_edge(o["executable"],o["fee_pct"],0,self.safety_buffer_pct).net_pct
   if self.funding:
    for o in ops[:10]:
     carry,known,status=await self.funding.pair_carry_pct(o["buy"],o["sell"],o["symbol"],self.hold_seconds);o["funding_pct"]=carry;o["funding_known"]=known;o["funding_status"]=status;o["safety_pct"]=self.safety_buffer_pct;o["hypothetical_edge"]=net_edge(o["executable"],o["fee_pct"],carry,self.safety_buffer_pct).net_pct
