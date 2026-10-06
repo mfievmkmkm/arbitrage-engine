@@ -52,6 +52,12 @@ class Diary:
   async with aiosqlite.connect(self.path) as d:
    await d.execute("INSERT INTO order_intents(intent_id,trade_id,venue,symbol,side,qty,reduce_only,state,updated_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(intent_id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at,payload=excluded.payload",(row["intent_id"],row["trade_id"],row["venue"],row["symbol"],row["side"],row["qty"],int(row["reduce_only"]),row["state"],time.time(),json.dumps(row)))
    await d.commit()
+ async def save_order_intent_result(self,intent,state,result):
+  row=intent.row();row["state"]=state
+  row.update({"order_id":result.order_id,"exchange_status":result.status,"filled":result.filled,"avg_price":result.avg_price,"fee":result.fee})
+  async with aiosqlite.connect(self.path) as d:
+   await d.execute("INSERT INTO order_intents(intent_id,trade_id,venue,symbol,side,qty,reduce_only,state,updated_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(intent_id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at,payload=excluded.payload",(row["intent_id"],row["trade_id"],row["venue"],row["symbol"],row["side"],row["qty"],int(row["reduce_only"]),row["state"],time.time(),json.dumps(row)))
+   await d.commit()
  async def order_intent_states(self,trade_id=None):
   async with aiosqlite.connect(self.path) as d:
    q="SELECT intent_id,state FROM order_intents";args=()
