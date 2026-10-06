@@ -27,3 +27,12 @@
 Ветка `phase-2-discovery` расширяет Discovery: ротация до 120 общих perpetual-рынков вместо фиксированных первых 30, настраиваемые batch/concurrency, health-метрики площадок, deterministic Paper Risk Guard, route analytics, Docker/Railway и GitHub Actions tests.
 
 Это всё ещё research/paper система. Наличие спреда не означает возможность получить указанную прибыль в live-исполнении. До реальных ордеров нужны WebSocket market data, проверка instrument identity, funding/min-notional/precision, private order state и hedge-failure controller.
+
+
+## Current staged runtime
+
+Phase 2 now includes contract-aware books and sizing, settlement-aware funding, Paper/Replay, two-leg execution abstractions, recovery/flatten planning, reduce-only exits, crash-safe runtime persistence, startup reconciliation, Telegram Startup Check, safety regression tests and deterministic end-to-end simulation.
+
+For the first safe run keep `LIVE_ENABLED=false`. API credentials are optional and are used for read-only balance/position/order reconciliation. Withdrawals must remain disabled. Real write-capable exchange executors are intentionally not part of the production path yet.
+
+A trade is not considered hedged unless actual base exposure matches, and is not considered closed while residual exposure remains. A one-leg submission failure is preserved as an explicit recovery condition rather than hidden as a generic exception.
