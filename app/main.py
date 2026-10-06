@@ -23,6 +23,12 @@ from .live_commands import stop as command_stop,resume as command_resume
 from .resume_evidence import collect as collect_resume
 from .live_heartbeat import evaluate as heartbeat_eval
 from types import SimpleNamespace
+from .strategy_runtime import StrategyRuntime
+from .multi_strategy_view import render as render_strategies
+from .strategy_diary import init as strategy_diary_init,summary as strategy_diary_summary
+from .strategy_stats_view import render as render_strategy_stats
+from .bankroll_ledger import Ledger
+from .capital_view import render as render_capital
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -31,7 +37,7 @@ scanner=Scanner(config.exchanges,config.notional,config.max_age,config.universe_
 paper=PaperEngine(diary,config.paper_capital,config.max_paper_positions,
  config.paper_target_convergence,config.paper_trailing_drawdown,config.paper_max_seconds)
 risk=RiskGuard(config.paper_capital,config.daily_stop_pct,config.max_engine_errors)
-latest=[]; dp=Dispatcher(); startup_text='🚦 Startup ещё не выполнен'; private_clients={}; live_supervisor=LiveSupervisor(config.max_engine_errors); live_stop=StopController()
+latest=[]; dp=Dispatcher(); startup_text='🚦 Startup ещё не выполнен'; private_clients={}; live_supervisor=LiveSupervisor(config.max_engine_errors); live_stop=StopController(); strategy_runtime=StrategyRuntime(); bankroll=Ledger(config.paper_capital)
 
 def menu():
  return InlineKeyboardMarkup(inline_keyboard=[
@@ -41,6 +47,8 @@ def menu():
   [InlineKeyboardButton(text="🏦 Биржи",callback_data="exchanges"),InlineKeyboardButton(text="🚦 Startup",callback_data="startup")],
   [InlineKeyboardButton(text="🎯 Этап 5",callback_data="campaign"),InlineKeyboardButton(text="⚡ LIVE",callback_data="live")],
   [InlineKeyboardButton(text="🛑 LIVE STOP",callback_data="live_stop"),InlineKeyboardButton(text="🔐 LIVE RESUME",callback_data="live_resume")],
+  [InlineKeyboardButton(text="🧭 Стратегии",callback_data="strategies"),InlineKeyboardButton(text="📊 Статистика",callback_data="strategy_stats")],
+  [InlineKeyboardButton(text="💰 Капитал",callback_data="capital"),InlineKeyboardButton(text="⛓ DEX",callback_data="dex")],
   [InlineKeyboardButton(text="⏸ Пауза",callback_data="pause"),InlineKeyboardButton(text="▶️ Продолжить",callback_data="resume")]])
 
 def allowed(uid):return bool(config.admin_id and uid==config.admin_id)
@@ -61,6 +69,10 @@ def fmt_paper():
  return "\n".join(lines)
 
 async def text_for(s):
+ if s=="strategies":return render_strategies(strategy_runtime)
+ if s=="strategy_stats":return render_strategy_stats(await strategy_diary_summary(config.db_path))
+ if s=="capital":return render_capital(bankroll)
+ if s=="dex":return "⛓ DEX\nResearch/Paper foundations: ON\nWallet execution: OFF\nLIVE: LOCKED until dedicated acceptance"
  if s=="top":return fmt_top()
  if s=="paper":return fmt_paper()
  if s=="replay":
@@ -96,7 +108,7 @@ async def text_for(s):
 async def start(m:Message):
  if allowed(m.from_user.id):await m.answer("⚡ ARBITRAGE ENGINE\nРежим: DISCOVERY + PAPER",reply_markup=menu())
 
-@dp.message(Command("top","paper","diary","replay","exchanges","status","risk","startup","campaign","live","live_stop","live_resume","pause","resume"))
+@dp.message(Command("top","paper","diary","replay","exchanges","status","risk","startup","campaign","live","live_stop","live_resume","strategies","strategy_stats","capital","dex","pause","resume"))
 async def commands(m:Message):
  if not allowed(m.from_user.id):return
  s=m.text.split()[0].lstrip("/").split("@")[0]
@@ -107,7 +119,7 @@ async def commands(m:Message):
   command_resume(live_stop,ev,live_supervisor.kill);s="live"
  await m.answer(await text_for(s),reply_markup=menu())
 
-@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","startup","campaign","live","live_stop","live_resume","pause","resume"}))
+@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","startup","campaign","live","live_stop","live_resume","strategies","strategy_stats","capital","dex","pause","resume"}))
 async def callbacks(q:CallbackQuery):
  if not allowed(q.from_user.id):await q.answer("Нет доступа",show_alert=True);return
  s=q.data
@@ -123,7 +135,7 @@ async def scanning():
  while True:
   try:
    if not scanner.paused:
-    latest=await scanner.scan();risk.on_success()
+    latest=await scanner.scan();strategy_runtime.update("futures_futures",latest);risk.on_success()
     await diary.record([x for x in latest if x["hypothetical_edge"]>=config.min_edge])
     closed=await paper.mark_and_exit(latest)
     for p in closed:risk.on_paper_close(p.current_net_usd);log.info("Paper close %s net=%s",p.symbol,p.current_net_usd)
@@ -140,7 +152,7 @@ async def main():
  pf=preflight_check(config)
  if not pf.ok:raise RuntimeError(render_preflight(pf))
  if pf.warnings:log.warning("%s",render_preflight(pf).replace("\\n"," | "))
- await diary.init();await paper.restore();await scanner.start()
+ await diary.init();await strategy_diary_init(config.db_path);await paper.restore();await scanner.start()
  readers,private_clients=build_private_readers();boot=await bootstrap(readers);stored=RuntimeStore(config.runtime_state_path).load();intent_states=await diary.order_intent_states();startup=evaluate_runtime_startup(stored,boot.snapshot,config.live_enabled,intent_states);startup_text=render_startup(startup,boot.snapshot,stored);log.info("%s",startup_text.replace("\\n"," | "))
  bot=Bot(token=config.token);task=asyncio.create_task(scanning())
  try:await dp.start_polling(bot)
