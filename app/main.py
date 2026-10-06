@@ -19,6 +19,10 @@ from .paper_campaign import status as campaign_status,render as render_campaign
 from .live_supervisor import LiveSupervisor
 from .operator_stop import StopController
 from .live_control_view import render as render_live_control
+from .live_commands import stop as command_stop,resume as command_resume
+from .resume_evidence import collect as collect_resume
+from .live_heartbeat import evaluate as heartbeat_eval
+from types import SimpleNamespace
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -97,8 +101,10 @@ async def commands(m:Message):
  if not allowed(m.from_user.id):return
  s=m.text.split()[0].lstrip("/").split("@")[0]
  if s in ("pause","resume"):scanner.paused=s=="pause";s="status"
- if s=="live_stop":live_stop.stop();s="live"
- if s=="live_resume":live_stop.resume();s="live"
+ if s=="live_stop":command_stop(live_stop);s="live"
+ if s=="live_resume":
+  ev=collect_resume(SimpleNamespace(safe=live_supervisor.restart_clean,reason="RESTART_UNSAFE"),live_supervisor.private_verified,live_supervisor.unknown_orders,heartbeat_eval(0,0,True,True),False)
+  command_resume(live_stop,ev,live_supervisor.kill);s="live"
  await m.answer(await text_for(s),reply_markup=menu())
 
 @dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","startup","campaign","live","live_stop","live_resume","pause","resume"}))
@@ -106,6 +112,10 @@ async def callbacks(q:CallbackQuery):
  if not allowed(q.from_user.id):await q.answer("Нет доступа",show_alert=True);return
  s=q.data
  if s in ("pause","resume"):scanner.paused=s=="pause";s="status"
+ if s=="live_stop":command_stop(live_stop);s="live"
+ if s=="live_resume":
+  ev=collect_resume(SimpleNamespace(safe=live_supervisor.restart_clean,reason="RESTART_UNSAFE"),live_supervisor.private_verified,live_supervisor.unknown_orders,heartbeat_eval(0,0,True,True),False)
+  command_resume(live_stop,ev,live_supervisor.kill);s="live"
  await q.message.edit_text(await text_for(s),reply_markup=menu());await q.answer()
 
 async def scanning():
