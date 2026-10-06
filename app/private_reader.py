@@ -4,8 +4,13 @@ from .account_reader import read_usdt
 class PrivateReader:
  def __init__(self,venue,client,timeout=8):self.venue=venue;self.client=client;self.timeout=timeout
  def _size(self,symbol):
-  try:return float((self.client.market(symbol) or {}).get("contractSize") or 1.0)
-  except Exception:return 1.0
+  try:
+   market=self.client.market(symbol) or {};raw=market.get("contractSize")
+  except Exception as e:raise RuntimeError("CONTRACT_SIZE_LOOKUP_FAILED") from e
+  if raw is None:raise RuntimeError("CONTRACT_SIZE_UNKNOWN")
+  size=float(raw)
+  if size<=0:raise RuntimeError("CONTRACT_SIZE_INVALID")
+  return size
  async def positions(self):
   rows=await asyncio.wait_for(self.client.fetch_positions(),timeout=self.timeout);out=[]
   for row in rows:
