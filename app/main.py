@@ -40,6 +40,10 @@ from .tg_incident_banner import render as render_incident_banner
 from .market_console import render as render_market_console
 from .tg_risk_center import render as render_risk_center
 from .tg_system_center import render as render_system_center
+from .tg_position_console import paper as render_positions
+from .market_console import merged as merged_market
+from .tg_market_keyboard import build as market_keyboard
+from .tg_market_detail import render as render_market_detail
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -79,7 +83,7 @@ async def text_for(s):
  if s=="capital":return render_capital(bankroll)
  if s=="dex":return render_dex_console()
  if s=="top":return render_market_console(strategy_runtime)
- if s=="paper":return fmt_paper()
+ if s=="paper":return render_positions(paper)
  if s=="replay":
   rows,report=await build_replay_report(diary)
   if not rows:return "🧠 REPLAY\nПока недостаточно закрытых paper-сделок."
@@ -133,7 +137,7 @@ async def callbacks(q:CallbackQuery):
  if s=="live_resume":
   ev=collect_resume(SimpleNamespace(safe=live_supervisor.restart_clean,reason="RESTART_UNSAFE"),live_supervisor.private_verified,live_supervisor.unknown_orders,heartbeat_eval(0,0,True,True),False)
   command_resume(live_stop,ev,live_supervisor.kill);s="live"
- await safe_edit(q.message,await text_for(s),live_menu(live_stop.stopped) if s=="live" else (menu() if s=="home" else back_menu()));await q.answer()
+ await safe_edit(q.message,await text_for(s),live_menu(live_stop.stopped) if s=="live" else (menu() if s=="home" else (market_keyboard(merged_market(strategy_runtime)) if s=="top" else back_menu())));await q.answer()
 
 async def scanning():
  global latest
