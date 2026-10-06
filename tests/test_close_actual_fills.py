@@ -6,5 +6,5 @@ def test_actual_exit_prices():
  async def go():
   t=RuntimeTrade("t","X","a","b",1,1,1,1,1,100,110,0)
   r,x,s=await close_trade(t,MockExecutor(price=104),MockExecutor(price=106),999,999)
-  assert s=="CLOSED" and r.gross==0
+  assert s=="CLOSED" and r.gross==8
  asyncio.run(go())
