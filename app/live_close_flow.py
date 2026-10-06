@@ -4,6 +4,7 @@ from .close_flow import close_trade
 from .live_close_gate import confirm
 from .close_recovery_executor import recover_close
 from .trade_result import finalize
+from .private_close_recovery import recover_from_private
 
 @dataclass(frozen=True)
 class VerifiedClose:
@@ -29,7 +30,20 @@ async def close_verified(t,long_executor,short_executor,private_snapshot,long_ex
  if status=="EXIT_PARTIAL_REQUIRES_RECOVERY":
   recovery=await recover_close(t,x,long_executor,short_executor,recovery_timeout)
   x=recovery.execution
-  if not recovery.recovered:return VerifiedClose(None,x,"CLOSE_RECOVERY_FAILED_"+recovery.reason)
+  if not recovery.recovered:
+   if recovery.reason!="BOTH_LEGS_RESIDUAL_RECONCILE":return VerifiedClose(None,x,"CLOSE_RECOVERY_FAILED_"+recovery.reason)
+   snapshot=await _snapshot(private_snapshot)
+   pr=await recover_from_private(t,snapshot,long_executor,short_executor,recovery_timeout)
+   if not pr.recovered:return VerifiedClose(None,x,"CLOSE_RECOVERY_FAILED_"+pr.reason)
+   last_reason="PRIVATE_STATE_UNTRUSTED"
+   for attempt in range(max(1,private_attempts)):
+    fresh=await _snapshot(private_snapshot)
+    from .private_residual import verify
+    residual=verify(fresh,t.symbol,t.long_venue,t.short_venue)
+    if residual.flat:return VerifiedClose(None,x,"CLOSED_RECOVERED_PRIVATE")
+    last_reason=residual.reason
+    if attempt+1<private_attempts and private_delay>0:await asyncio.sleep(private_delay)
+   return VerifiedClose(None,x,"CLOSE_UNVERIFIED_"+last_reason)
   result=_finalize_recovered(t,x,long_exit_price,short_exit_price,kwargs.get("exit_fees",0),kwargs.get("funding"),kwargs.get("reason","EXIT"))
   status="CLOSED"
  if status!="CLOSED":return VerifiedClose(result,x,status)
