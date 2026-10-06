@@ -14,6 +14,7 @@ class CCXTExecutor(ExchangeExecutor):
   params={}
   if r.reduce_only:params["reduceOnly"]=True
   if r.ioc:params["timeInForce"]="IOC"
+  if r.client_order_id:params["clientOrderId"]=r.client_order_id
   row=await asyncio.wait_for(self.client.create_order(r.symbol,r.order_type,r.side,r.qty,r.price,params),self.timeout)
   return self._result(row)
  async def cancel(self,order_id,symbol):
