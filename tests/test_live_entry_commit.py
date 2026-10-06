@@ -10,6 +10,6 @@ def test_runtime_commit_only_after_verified_entry(tmp_path):
  bad=SimpleNamespace(opened=False,actual=actual,trade_id="bad")
  assert not commit(store,[],bad,p,"X","a","b",1).committed
  assert store.load()==[]
- good=SimpleNamespace(opened=True,actual=actual,trade_id="good")
+ good=SimpleNamespace(opened=True,actual=actual,trade_id="good",entry=SimpleNamespace(long_result=SimpleNamespace(filled=4),short_result=SimpleNamespace(filled=4)))
  r=commit(store,[],good,p,"X","a","b",1)
  assert r.committed and store.load()[0].trade_id=="good"
