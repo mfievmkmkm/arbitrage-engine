@@ -9,7 +9,9 @@ def evaluate(trades,snapshot,live_enabled=False,order_intents=None):
   from .order_reconcile import plan
   ir=plan(order_intents)
   if not ir.safe:return StartupRuntime(False,"OBSERVATION","UNRESOLVED_ORDER_INTENTS",{"intents":ir.actions})
- if not snapshot:\n  if trades:return StartupRuntime(False,"OBSERVATION","RUNTIME_TRADES_WITHOUT_PRIVATE_STATE",{"trades":len(trades)})\n  return StartupRuntime(True,"PAPER","NO_PRIVATE_VENUES",{})
+ if not snapshot:
+  if trades:return StartupRuntime(False,"OBSERVATION","RUNTIME_TRADES_WITHOUT_PRIVATE_STATE",{"trades":len(trades)})
+  return StartupRuntime(True,"PAPER","NO_PRIVATE_VENUES",{})
  c=crash_decide(snapshot,[t.symbol for t in trades])
  if not c.safe:return StartupRuntime(False,"OBSERVATION",c.action,c.details)
  r=reconcile_runtime(trades,snapshot)
