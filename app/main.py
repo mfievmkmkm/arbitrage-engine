@@ -14,6 +14,7 @@ from .live_bootstrap import bootstrap
 from .startup_runtime import evaluate as evaluate_runtime_startup
 from .runtime_store import RuntimeStore
 from .startup_report import render as render_startup
+from .preflight import check as preflight_check,render as render_preflight
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -116,7 +117,9 @@ async def scanning():
 
 async def main():
  global startup_text,private_clients
- if not config.token or not config.admin_id:raise RuntimeError("BOT_TOKEN and ADMIN_ID required")
+ pf=preflight_check(config)
+ if not pf.ok:raise RuntimeError(render_preflight(pf))
+ if pf.warnings:log.warning("%s",render_preflight(pf).replace("\\n"," | "))
  await diary.init();await paper.restore();await scanner.start()
  readers,private_clients=build_private_readers();boot=await bootstrap(readers);stored=RuntimeStore(config.runtime_state_path).load();startup=evaluate_runtime_startup(stored,boot.snapshot,config.live_enabled);startup_text=render_startup(startup,boot.snapshot,stored);log.info("%s",startup_text.replace("\\n"," | "))
  bot=Bot(token=config.token);task=asyncio.create_task(scanning())
