@@ -14,7 +14,8 @@ class SafeExecutor(ExchangeExecutor):
    await self.diary.save_order_intent(intent,"UNKNOWN")
    return None,"SUBMIT_UNKNOWN_RECONCILE"
   state="FILLED" if result.filled>=request.qty-1e-12 else ("PARTIAL" if result.filled>0 else "ACK")
-  await self.diary.save_order_intent(intent,state)
+  if hasattr(self.diary,"save_order_intent_result"):await self.diary.save_order_intent_result(intent,state,result)
+  else:await self.diary.save_order_intent(intent,state)
   return result,state
  async def submit(self,request):raise RuntimeError("USE_SUBMIT_INTENT")
  async def cancel(self,order_id,symbol):return await self.inner.cancel(order_id,symbol)
