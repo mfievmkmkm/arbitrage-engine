@@ -24,7 +24,9 @@ class PaperEngine:
    if not o:continue
    qty=p.notional/p.entry_buy
    gross=((o["exit_buy"]-p.entry_buy)+(p.entry_sell-o["exit_sell"]))*qty
-   p.current_net_usd=gross-p.notional*o["fee_pct"]/100
+   fees=p.notional*o["fee_pct"]/100
+   funding=p.notional*float(o.get("funding_pct",0))/100
+   p.current_net_usd=gross-fees+funding
    p.best_net_usd=max(p.best_net_usd,p.current_net_usd);p.current_spread=o["exit_spread"]
    await self.diary.update_paper_position(asdict(p))
    conv=1-p.current_spread/p.entry_spread if p.entry_spread>0 else 0;reason=None
