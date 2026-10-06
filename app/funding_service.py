@@ -2,6 +2,7 @@ import asyncio,time
 from .funding import FundingSnapshot
 from .funding_cache import FundingCache
 from .funding_timing import window,carry_pct
+from .funding_interval import infer as infer_interval
 class FundingService:
  def __init__(self,clients,ttl=120,timeout=6):
   self.clients=clients;self.cache=FundingCache(ttl);self.timeout=timeout;self.errors={}
@@ -13,8 +14,9 @@ class FundingService:
   try:
    row=await asyncio.wait_for(client.fetch_funding_rate(symbol),self.timeout)
    rate=row.get("fundingRate");next_ts=row.get("fundingTimestamp") or row.get("nextFundingTimestamp")
+   interval=infer_interval(row)
    self.cache.put(exchange,symbol,rate,next_ts)
-   return FundingSnapshot(exchange,symbol,rate,next_ts,None)
+   return FundingSnapshot(exchange,symbol,rate,next_ts,interval.hours if interval.known else None)
   except Exception as e:
    self.errors[(exchange,symbol)]=type(e).__name__
    return FundingSnapshot(exchange,symbol,None,None,None)
