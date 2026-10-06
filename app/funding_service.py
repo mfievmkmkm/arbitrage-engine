@@ -8,14 +8,14 @@ class FundingService:
   self.clients=clients;self.cache=FundingCache(ttl);self.timeout=timeout;self.errors={}
  async def get(self,exchange,symbol):
   cached=self.cache.get(exchange,symbol)
-  if cached:return FundingSnapshot(exchange,symbol,cached["rate"],cached["next_ts"],None)
+  if cached:return FundingSnapshot(exchange,symbol,cached["rate"],cached["next_ts"],cached.get("interval_hours"))
   client=self.clients.get(exchange)
   if not client or not client.has.get("fetchFundingRate"):return FundingSnapshot(exchange,symbol,None,None,None)
   try:
    row=await asyncio.wait_for(client.fetch_funding_rate(symbol),self.timeout)
    rate=row.get("fundingRate");next_ts=row.get("fundingTimestamp") or row.get("nextFundingTimestamp")
    interval=infer_interval(row)
-   self.cache.put(exchange,symbol,rate,next_ts)
+   self.cache.put(exchange,symbol,rate,next_ts,interval.hours if interval.known else None)
    return FundingSnapshot(exchange,symbol,rate,next_ts,interval.hours if interval.known else None)
   except Exception as e:
    self.errors[(exchange,symbol)]=type(e).__name__
