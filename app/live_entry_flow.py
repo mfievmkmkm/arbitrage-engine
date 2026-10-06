@@ -9,6 +9,7 @@ from .recovery_flow import recover
 from .two_leg_runner import TwoLegResult
 from .actual_entry import build as actual_entry
 from .live_entry_admission import prepare
+from .private_entry_verify import verify as verify_private
 
 @dataclass(frozen=True)
 class LiveEntryResult:
@@ -20,7 +21,7 @@ class LiveEntryResult:
  recovery:object=None
  admission:object=None
 
-async def execute(symbol,plan,long_executor,short_executor,long_price,short_price,edge_pct,book_spread_pct,fee_schedule,min_net_edge_usd,admission_kwargs,timeout=8,long_round=None,short_round=None):
+async def execute(symbol,plan,long_executor,short_executor,long_price,short_price,edge_pct,book_spread_pct,fee_schedule,min_net_edge_usd,admission_kwargs,timeout=8,long_round=None,short_round=None,private_snapshot=None,private_attempts=3,private_delay=.25):
  policy=choose(edge_pct,book_spread_pct,True)
  adm=prepare(plan,policy,long_price,short_price,fee_schedule,min_net_edge_usd,**admission_kwargs)
  if not adm.allowed:return LiveEntryResult(False,adm.reason,"",admission=adm)
@@ -46,4 +47,7 @@ async def execute(symbol,plan,long_executor,short_executor,long_price,short_pric
   effective=merged.result
  try:a=actual_entry(effective,plan)
  except RuntimeError as e:return LiveEntryResult(False,"ENTRY_ACTUAL_INVALID:"+str(e),trade_id,effective,None,recovery,adm)
+ if private_snapshot is not None:
+  pv=await verify_private(private_snapshot,symbol,plan.long.venue,plan.short.venue,a.base_qty,private_attempts,private_delay)
+  if not pv.verified:return LiveEntryResult(False,"ENTRY_PRIVATE_UNVERIFIED:"+pv.reason,trade_id,effective,a,recovery,adm)
  return LiveEntryResult(True,"OPENED",trade_id,effective,a,recovery,adm)
