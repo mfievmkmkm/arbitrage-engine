@@ -5,7 +5,7 @@ from app.fee_schedule import FeeSchedule,FeeRate
 class G:micro_live=True
 
 def args():
- p=build("X","a","b",1,1,1,lambda x:x,lambda x:x)
+ p=build("X","a","b",.0476,.0001,.0001,lambda x:x,lambda x:x)
  s=FeeSchedule({"a":FeeRate(.001,.002),"b":FeeRate(.001,.002)})
  return p,s
 
