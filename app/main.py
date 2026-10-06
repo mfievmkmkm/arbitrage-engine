@@ -124,7 +124,7 @@ async def main():
  if not pf.ok:raise RuntimeError(render_preflight(pf))
  if pf.warnings:log.warning("%s",render_preflight(pf).replace("\\n"," | "))
  await diary.init();await paper.restore();await scanner.start()
- readers,private_clients=build_private_readers();boot=await bootstrap(readers);stored=RuntimeStore(config.runtime_state_path).load();startup=evaluate_runtime_startup(stored,boot.snapshot,config.live_enabled);startup_text=render_startup(startup,boot.snapshot,stored);log.info("%s",startup_text.replace("\\n"," | "))
+ readers,private_clients=build_private_readers();boot=await bootstrap(readers);stored=RuntimeStore(config.runtime_state_path).load();intent_states=await diary.order_intent_states();startup=evaluate_runtime_startup(stored,boot.snapshot,config.live_enabled,intent_states);startup_text=render_startup(startup,boot.snapshot,stored);log.info("%s",startup_text.replace("\\n"," | "))
  bot=Bot(token=config.token);task=asyncio.create_task(scanning())
  try:await dp.start_polling(bot)
  finally:
