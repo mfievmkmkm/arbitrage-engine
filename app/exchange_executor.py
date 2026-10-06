@@ -2,7 +2,7 @@ from abc import ABC,abstractmethod
 from dataclasses import dataclass
 @dataclass(frozen=True)
 class SubmitRequest:
- symbol:str;side:str;qty:float;order_type:str="limit";price:float|None=None;reduce_only:bool=False;ioc:bool=False
+ symbol:str;side:str;qty:float;order_type:str="limit";price:float|None=None;reduce_only:bool=False;ioc:bool=False;client_order_id:str|None=None
 @dataclass(frozen=True)
 class SubmitResult:
  order_id:str;status:str;filled:float=0.0;avg_price:float|None=None;fee:float=0.0
