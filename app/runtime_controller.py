@@ -6,7 +6,9 @@ class RuntimeController:
   self.runtime=runtime;self.long_executors=long_executors or {};self.short_executors=short_executors or {};self.pm=position_manager or PositionManager();self.journal=journal
  async def mark(self,trade,current_long,current_short,exit_fees=0,funding=None,now=None):
   m=self.pm.mark(trade,current_long,current_short,exit_fees,funding,now)
-  if self.journal:await self.journal.event(trade.trade_id,"MARK",symbol=trade.symbol,price=current_long,reason=m.decision.reason)
+  if self.journal:
+   spread=(current_short-current_long)/current_long*100 if current_long else 0
+   await self.journal.mark(trade.trade_id,trade.symbol,m.net,spread,current_long,m.decision.reason)
   return m
  async def maybe_close(self,trade,current_long,current_short,exit_fees=0,funding=None,now=None):
   m=await self.mark(trade,current_long,current_short,exit_fees,funding,now)
