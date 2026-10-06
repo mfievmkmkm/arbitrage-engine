@@ -1,0 +1,1 @@
+def render():return "<b>EXPORT CENTER</b>\n<code>RESEARCH & AUDIT</code>\n\n📄 Observations CSV\n📄 Trades CSV\n📄 Ledger CSV\n📊 Replay workbook XLSX\n\nExports contain evidence and results; secrets are never included."
