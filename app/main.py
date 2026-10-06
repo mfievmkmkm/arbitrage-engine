@@ -35,6 +35,8 @@ from .tg_ui import main_menu,back_menu,live_menu
 from .tg_dashboard import home as render_home,opportunities as render_market,venues as render_venues
 from .tg_pages import strategies as render_strategy_console,dex as render_dex_console
 from .tg_safe_edit import edit as safe_edit
+from .tg_export_center import render as render_export_center
+from .tg_incident_banner import render as render_incident_banner
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -64,7 +66,9 @@ def fmt_paper():
  return "\n".join(lines)
 
 async def text_for(s):
- if s=="home":return render_home(scanner,paper,risk,strategy_runtime,live_stop)
+ if s=="home":
+  banner=render_incident_banner(live_supervisor,live_stop);body=render_home(scanner,paper,risk,strategy_runtime,live_stop);return (banner+"\n\n"+body) if banner else body
+ if s=="export":return render_export_center()
  if s=="strategies":return render_strategy_console(strategy_runtime)
  if s=="strategy_stats":return render_strategy_stats(await strategy_diary_summary(config.db_path))
  if s=="capital":return render_capital(bankroll)
@@ -115,7 +119,7 @@ async def commands(m:Message):
   command_resume(live_stop,ev,live_supervisor.kill);s="live"
  await m.answer(await text_for(s),reply_markup=live_menu(live_stop.stopped) if s=="live" else (menu() if s=="home" else back_menu()),parse_mode="HTML")
 
-@dp.callback_query(F.data.in_({"home","top","paper","diary","replay","exchanges","status","risk","startup","campaign","live","live_stop","live_resume","strategies","strategy_stats","capital","dex","pause","resume"}))
+@dp.callback_query(F.data.in_({"home","top","paper","diary","replay","exchanges","status","risk","startup","campaign","live","live_stop","live_resume","strategies","strategy_stats","capital","dex","export","pause","resume"}))
 async def callbacks(q:CallbackQuery):
  if not allowed(q.from_user.id):await q.answer("Нет доступа",show_alert=True);return
  s=q.data
