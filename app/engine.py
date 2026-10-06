@@ -61,9 +61,9 @@ class Scanner:
      r=evaluate(a,b,self.notional,self.max_age,now)
      if r and r["hypothetical_edge"]>0:ops.append(r)
   ops=sorted(ops,key=lambda x:x["hypothetical_edge"],reverse=True)[:50]
-  for o in ops:o["safety_pct"]=self.safety_buffer_pct;o["hypothetical_edge"]=net_edge(o["executable"],o["fee_pct"],0,self.safety_buffer_pct).net_pct
+  for o in ops:o["safety_pct"]=self.safety_buffer_pct;o["funding_known"]=False;o["funding_status"]="UNKNOWN";o["hypothetical_edge"]=net_edge(o["executable"],o["fee_pct"],0,self.safety_buffer_pct).net_pct
   if self.funding:
-   for o in ops[:10]:
+   for o in ops:
     carry,known,status=await self.funding.pair_carry_pct(o["buy"],o["sell"],o["symbol"],self.hold_seconds);o["funding_pct"]=carry;o["funding_known"]=known;o["funding_status"]=status;o["safety_pct"]=self.safety_buffer_pct;o["hypothetical_edge"]=net_edge(o["executable"],o["fee_pct"],carry,self.safety_buffer_pct).net_pct
    ops.sort(key=lambda x:x["hypothetical_edge"],reverse=True)
   self.last_scan=now;return ops
