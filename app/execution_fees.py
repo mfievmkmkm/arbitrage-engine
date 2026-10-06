@@ -11,7 +11,8 @@ class ExecutionFees:
 def liquidity(order_type,ioc=False):
  t=str(order_type or "").lower()
  if t=="market" or ioc:return "taker"
- if t in {"limit","post_only"}:return "maker"
+ if t=="post_only":return "maker"
+ if t=="limit":return "taker"
  return "taker"
 
 def resolve(long_venue,short_venue,long_request,short_request,schedule=DEFAULT_FUTURES_FEES):
