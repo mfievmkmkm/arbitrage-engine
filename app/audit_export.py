@@ -18,6 +18,11 @@ TABLES = {
     "Execution events": "execution_events",
     "Order intents": "order_intents",
     "Live trades": "live_trades",
+    "Live marks": "live_marks",
+    "Live results": "live_results",
+    "Live incidents": "live_incidents",
+    "Monitor state": "live_monitor_state",
+    "Funding settlements": "funding_settlements",
     "Ledger": "ledger",
     "Decisions": "signal_decisions",
 }
@@ -51,7 +56,7 @@ async def build(path, directory):
     archive = directory / "arbitrage_csv.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
         report = {
-            "mode": "RESEARCH_ONLY",
+            "mode": "AUDIT_READ_ONLY",
             "execution_authority": False,
             "table_rows": {name: len(rows) for name, rows in sheets.items()},
             "limitations": [

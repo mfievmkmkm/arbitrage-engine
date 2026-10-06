@@ -1,4 +1,4 @@
-import ccxt.async_support as ccxt
+from .exchange_names import exchange_class
 import asyncio
 
 
@@ -10,7 +10,7 @@ async def build(ids, default_type=None):
             opts = {"enableRateLimit": True}
             if default_type:
                 opts["options"] = {"defaultType": default_type}
-            c = getattr(ccxt, name)(opts)
+            c = exchange_class(name)(opts)
             await asyncio.wait_for(c.load_markets(), 20)
             out[name] = c
         except Exception:

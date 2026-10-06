@@ -1,4 +1,4 @@
-import asyncio, uuid
+import asyncio, uuid, time
 from dataclasses import dataclass
 from .exchange_executor import SubmitRequest
 from .order_policy import choose
@@ -68,6 +68,7 @@ async def execute(
                 False, "DUPLICATE_DURABLE_TRADE", trade_id, admission=adm
             )
         meta = dict(
+            opened_at=time.time(),
             symbol=symbol,
             long_venue=plan.long.venue,
             short_venue=plan.short.venue,

@@ -17,6 +17,20 @@ from .engine import Scanner
 from .paper import PaperEngine
 from .reports import build_replay_report
 from .risk import RiskGuard
+from .private_registry import PrivateRegistry
+from .private_order_reader import Reader as PrivateOrderReader
+from .private_funding_reader import (
+    Reader as PrivateFundingReader,
+    PairReader as PairFundingReader,
+)
+from .live_market_reader import Reader as LiveMarketReader
+from .live_monitor import Monitor as LiveMonitor
+from .live_monitor_view import (
+    status as monitor_status,
+    positions as monitor_positions,
+    incidents as monitor_incidents,
+)
+from .runtime_state import RuntimeTrade
 from .private_factory import build_private_readers, close_clients
 from .live_bootstrap import bootstrap
 from .startup_runtime import evaluate as evaluate_runtime_startup
@@ -104,6 +118,7 @@ strategy_runtime = StrategyRuntime()
 bankroll = Ledger(config.paper_capital)
 notification_bot = None
 secondary = None
+live_monitor = None
 live_trades = []
 durable = LiveTradeStore(config.db_path)
 strategy_toggles = StrategyToggleStore(config.runtime_state_path + ".strategies.json")
@@ -226,7 +241,17 @@ async def text_for(s):
     if s == "campaign":
         return render_campaign(await campaign_status(diary))
     if s == "live":
-        return render_live_control(live_supervisor, live_trades, 0, live_stop)
+        summary = live_monitor.latest if live_monitor else None
+        realized = (summary or {}).get("realized", {}).get("net", 0)
+        return (
+            render_live_control(live_supervisor, live_trades, realized, live_stop)
+            + "\n\n"
+            + monitor_status(summary)
+        )
+    if s == "live_positions":
+        return monitor_positions(live_monitor.latest if live_monitor else None)
+    if s == "incidents":
+        return monitor_incidents(live_monitor.latest if live_monitor else None)
     if s == "status":
         stamp = (
             datetime.fromtimestamp(scanner.last_scan, timezone.utc).strftime(
@@ -265,6 +290,8 @@ async def start(m: Message):
         "live",
         "live_stop",
         "live_resume",
+        "live_positions",
+        "incidents",
         "strategies",
         "strategy_stats",
         "capital",
@@ -318,6 +345,8 @@ async def commands(m: Message):
             "live",
             "live_stop",
             "live_resume",
+            "live_positions",
+            "incidents",
             "strategies",
             "strategy_stats",
             "capital",
@@ -555,7 +584,7 @@ async def scanning():
 
 
 async def main():
-    global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot
+    global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor
     live_stop = Stop(config.runtime_state_path + ".stop.json")
     pf = preflight_check(config)
     if not pf.ok:
@@ -563,6 +592,7 @@ async def main():
     if pf.warnings:
         log.warning("%s", render_preflight(pf).replace("\\n", " | "))
     secondary = None
+    live_monitor = None
     private_clients = {}
     bot = None
     task = None
@@ -604,6 +634,65 @@ async def main():
         )
         log.info("%s", startup_text.replace("\n", " | "))
         await scanner.start()
+        registry = PrivateRegistry()
+        for name, reader in readers.items():
+            registry.add(name, reader)
+        order_readers = {
+            name: PrivateOrderReader(name, client)
+            for name, client in private_clients.items()
+        }
+        funding_readers = {
+            name: PrivateFundingReader(name, client)
+            for name, client in private_clients.items()
+        }
+
+        async def monitor_update(summary, new_incidents):
+            global live_trades
+            live_trades = [RuntimeTrade(**row) for row in summary["runtime_trades"]]
+            if notification_bot:
+                for item in new_incidents:
+                    if item["severity"] in ("CRITICAL", "HIGH"):
+                        try:
+                            await notification_bot.send_message(
+                                config.admin_id,
+                                "🛑 Инцидент исполнения\n"
+                                + escape(item["code"])
+                                + "\nСделка: "
+                                + escape(item["trade_id"] or "система")
+                                + "\nНовые входы заблокированы. Подробности: /incidents",
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            log.exception("Incident notification failed")
+                for result in summary["closed"]:
+                    try:
+                        await notification_bot.send_message(
+                            config.admin_id,
+                            f"✅ Закрытие подтверждено private API\n{escape(result['trade_id'])}\nФактический NET: {result['net']:+.4f} USD",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        log.exception("Verified close notification failed")
+
+        live_monitor = LiveMonitor(
+            durable,
+            runtime_store,
+            diary,
+            registry.snapshot,
+            order_readers,
+            live_supervisor,
+            live_stop,
+            market_reader=LiveMarketReader(
+                scanner.clients, private_clients, config.live_max_book_age_ms / 1000
+            ),
+            funding_reader=PairFundingReader(funding_readers),
+            interval=config.live_reconcile_interval,
+            max_seconds=config.paper_max_seconds,
+            target_capture=config.paper_target_convergence,
+            trailing=config.paper_trailing_drawdown,
+            on_update=monitor_update,
+        )
+        await live_monitor.init()
         secondary = await build_bundle(
             config.exchanges,
             config.notional,
@@ -654,12 +743,15 @@ async def main():
         await secondary.runtime.start()
         bot = Bot(token=config.token)
         notification_bot = bot
+        await live_monitor.start()
         task = asyncio.create_task(scanning())
         await dp.start_polling(bot)
     finally:
         if task:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        if live_monitor:
+            await live_monitor.stop_task()
         if secondary:
             await secondary.close()
         await scanner.close()

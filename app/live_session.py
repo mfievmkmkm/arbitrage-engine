@@ -56,6 +56,7 @@ async def open_trade(store, journal, existing, entry_args, commit_args, durable=
             r.trade_id,
             "HEDGED_PRIVATE_VERIFIED",
             runtime_trade=t.row(),
+            entry_net_edge_usd=r.admission.cost.net_edge_usd,
             actual_long=t.long_contracts,
             actual_short=t.short_contracts,
             long_price=t.long_entry,

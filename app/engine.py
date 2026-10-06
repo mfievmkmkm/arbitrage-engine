@@ -2,7 +2,7 @@
 
 import asyncio, time
 from dataclasses import dataclass
-import ccxt.async_support as ccxt
+from .exchange_names import exchange_class
 from .discovery import RotatingUniverse
 from .health import VenueHealth
 from .instruments import from_market, min_notional_ok
@@ -118,7 +118,7 @@ class Scanner:
 
     async def start(self):
         async def init(name):
-            c = getattr(ccxt, name)(
+            c = exchange_class(name)(
                 {"enableRateLimit": True, "options": {"defaultType": "swap"}}
             )
             try:

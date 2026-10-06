@@ -238,6 +238,7 @@ def test_main_wires_secondary_runtime_and_cleans_up_without_network(
         diary = Diary(config.db_path)
 
         class FakeScanner:
+            clients = {}
             funding = None
             universe = SimpleNamespace(symbols=[])
 
