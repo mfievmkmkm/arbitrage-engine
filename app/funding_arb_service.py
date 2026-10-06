@@ -1,4 +1,4 @@
-from .funding_arb_scanner import evaluate
+from .funding_arb_economics import calculate\nfrom .funding_units import to_pct
 class Service:
  def __init__(self,funding_service,venues,fee_pct=.2):self.fs=funding_service;self.venues=venues;self.fee_pct=fee_pct
  async def scan(self,symbol):
