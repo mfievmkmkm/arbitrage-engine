@@ -5,7 +5,7 @@ class SubmitRequest:
  symbol:str;side:str;qty:float;order_type:str="limit";price:float|None=None;reduce_only:bool=False;ioc:bool=False
 @dataclass(frozen=True)
 class SubmitResult:
- order_id:str;status:str;filled:float=0.0;avg_price:float|None=None
+ order_id:str;status:str;filled:float=0.0;avg_price:float|None=None;fee:float=0.0
 class ExchangeExecutor(ABC):
  @abstractmethod
  async def submit(self,request):...
