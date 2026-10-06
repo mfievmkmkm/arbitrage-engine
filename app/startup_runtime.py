@@ -4,7 +4,11 @@ from .crash_recovery import decide as crash_decide
 @dataclass(frozen=True)
 class StartupRuntime:
  safe:bool;mode:str;reason:str;details:dict
-def evaluate(trades,snapshot,live_enabled=False):
+def evaluate(trades,snapshot,live_enabled=False,order_intents=None):
+ if order_intents:
+  from .order_reconcile import plan
+  ir=plan(order_intents)
+  if not ir.safe:return StartupRuntime(False,"OBSERVATION","UNRESOLVED_ORDER_INTENTS",{"intents":ir.actions})
  if not snapshot:return StartupRuntime(True,"PAPER","NO_PRIVATE_VENUES",{})
  c=crash_decide(snapshot,[t.symbol for t in trades])
  if not c.safe:return StartupRuntime(False,"OBSERVATION",c.action,c.details)
