@@ -57,6 +57,18 @@ class Diary:
    q="SELECT intent_id,state FROM order_intents";args=()
    if trade_id is not None:q+=" WHERE trade_id=?";args=(trade_id,)
    async with d.execute(q,args) as c:return {x[0]:x[1] for x in await c.fetchall()}
+ async def order_intents(self,trade_id=None):
+  async with aiosqlite.connect(self.path) as d:
+   d.row_factory=aiosqlite.Row;q="SELECT * FROM order_intents";args=()
+   if trade_id is not None:q+=" WHERE trade_id=?";args=(trade_id,)
+   async with d.execute(q,args) as c:
+    rows=[dict(x) for x in await c.fetchall()]
+  out={}
+  for x in rows:
+   try:p=json.loads(x.get("payload") or "{}")
+   except Exception:p={}
+   x.update(p);out[x["intent_id"]]=x
+  return out
  async def replay_trades(self,limit=500):
   async with aiosqlite.connect(self.path) as d:
    d.row_factory=aiosqlite.Row
