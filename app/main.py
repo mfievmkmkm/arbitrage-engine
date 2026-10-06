@@ -9,6 +9,11 @@ from .engine import Scanner
 from .paper import PaperEngine
 from .reports import build_replay_report
 from .risk import RiskGuard
+from .private_factory import build_private_readers,close_clients
+from .live_bootstrap import bootstrap
+from .startup_runtime import evaluate as evaluate_runtime_startup
+from .runtime_store import RuntimeStore
+from .startup_report import render as render_startup
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -17,14 +22,14 @@ scanner=Scanner(config.exchanges,config.notional,config.max_age,config.universe_
 paper=PaperEngine(diary,config.paper_capital,config.max_paper_positions,
  config.paper_target_convergence,config.paper_trailing_drawdown,config.paper_max_seconds)
 risk=RiskGuard(config.paper_capital,config.daily_stop_pct,config.max_engine_errors)
-latest=[]; dp=Dispatcher()
+latest=[]; dp=Dispatcher(); startup_text='🚦 Startup ещё не выполнен'; private_clients={}
 
 def menu():
  return InlineKeyboardMarkup(inline_keyboard=[
   [InlineKeyboardButton(text="🔎 Возможности",callback_data="top"),InlineKeyboardButton(text="🧪 Paper",callback_data="paper")],
   [InlineKeyboardButton(text="📔 Дневник",callback_data="diary"),InlineKeyboardButton(text="🧠 Replay",callback_data="replay")],
   [InlineKeyboardButton(text="📡 Статус",callback_data="status"),InlineKeyboardButton(text="🛡 Риски",callback_data="risk")],
-  [InlineKeyboardButton(text="🏦 Биржи",callback_data="exchanges")],
+  [InlineKeyboardButton(text="🏦 Биржи",callback_data="exchanges"),InlineKeyboardButton(text="🚦 Startup",callback_data="startup")],
   [InlineKeyboardButton(text="⏸ Пауза",callback_data="pause"),InlineKeyboardButton(text="▶️ Продолжить",callback_data="resume")]])
 
 def allowed(uid):return bool(config.admin_id and uid==config.admin_id)
@@ -66,6 +71,7 @@ async def text_for(s):
  if s=="risk":
   rs=risk.state
   return f"🛡 RISK CENTER\nСтатус: {'🛑 HALT' if rs.halted else '🟢 NORMAL'}\nПричина: {rs.reason or '—'}\nОшибок подряд: {rs.consecutive_errors}/{risk.max_errors}\nPaper PnL сегодня: {rs.paper_daily_pnl:+.4f} USD\nDaily stop: -{risk.bankroll*risk.daily_stop_pct/100:.2f} USD\nLIVE: заблокирован до private reconciliation"
+ if s=="startup":return startup_text
  if s=="status":
   stamp=datetime.fromtimestamp(scanner.last_scan,timezone.utc).strftime("%H:%M:%S UTC") if scanner.last_scan else "—"
   coverage=scanner.universe.coverage if scanner.universe else 0
@@ -77,14 +83,14 @@ async def text_for(s):
 async def start(m:Message):
  if allowed(m.from_user.id):await m.answer("⚡ ARBITRAGE ENGINE\nРежим: DISCOVERY + PAPER",reply_markup=menu())
 
-@dp.message(Command("top","paper","diary","replay","exchanges","status","risk","pause","resume"))
+@dp.message(Command("top","paper","diary","replay","exchanges","status","risk","startup","pause","resume"))
 async def commands(m:Message):
  if not allowed(m.from_user.id):return
  s=m.text.split()[0].lstrip("/").split("@")[0]
  if s in ("pause","resume"):scanner.paused=s=="pause";s="status"
  await m.answer(await text_for(s),reply_markup=menu())
 
-@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","pause","resume"}))
+@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","startup","pause","resume"}))
 async def callbacks(q:CallbackQuery):
  if not allowed(q.from_user.id):await q.answer("Нет доступа",show_alert=True);return
  s=q.data
@@ -109,10 +115,12 @@ async def scanning():
   await asyncio.sleep(config.interval)
 
 async def main():
+ global startup_text,private_clients
  if not config.token or not config.admin_id:raise RuntimeError("BOT_TOKEN and ADMIN_ID required")
  await diary.init();await paper.restore();await scanner.start()
+ readers,private_clients=build_private_readers();boot=await bootstrap(readers);stored=RuntimeStore(config.runtime_state_path).load();startup=evaluate_runtime_startup(stored,boot.snapshot,config.live_enabled);startup_text=render_startup(startup,boot.snapshot,stored);log.info("%s",startup_text.replace("\\n"," | "))
  bot=Bot(token=config.token);task=asyncio.create_task(scanning())
  try:await dp.start_polling(bot)
  finally:
-  task.cancel();await asyncio.gather(task,return_exceptions=True);await scanner.close();await bot.session.close()
+  task.cancel();await asyncio.gather(task,return_exceptions=True);await scanner.close();await close_clients(private_clients);await bot.session.close()
 if __name__=="__main__":asyncio.run(main())
