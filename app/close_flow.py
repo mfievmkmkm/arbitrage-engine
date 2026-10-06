@@ -5,5 +5,5 @@ async def close_trade(t,long_executor,short_executor,long_exit_price,short_exit_
  if not x.flat:return None,x,"EXIT_PARTIAL_REQUIRES_RECOVERY"
  f=t.funding if funding is None else funding
  capital=t.base_qty*((t.long_entry+t.short_entry)/2)
- result=finalize(t.trade_id,t.base_qty,t.long_entry,t.short_entry,long_exit_price,short_exit_price,t.entry_fees,exit_fees,f,capital,reason)
+ result=finalize(t.trade_id,t.base_qty,t.long_entry,t.short_entry,long_px,short_px,t.entry_fees,actual_exit_fees,f,capital,reason)
  return result,x,"CLOSED"
