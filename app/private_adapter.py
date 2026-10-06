@@ -2,10 +2,10 @@ from abc import ABC,abstractmethod
 from dataclasses import dataclass
 @dataclass(frozen=True)
 class PrivatePosition:
- venue:str;symbol:str;side:str;qty:float;entry_price:float|None=None
+ venue:str;symbol:str;side:str;qty:float;entry_price:float|None=None;contracts:float|None=None;contract_size:float=1.0
 @dataclass(frozen=True)
 class PrivateOrder:
- venue:str;symbol:str;order_id:str;side:str;qty:float;filled:float;status:str
+ venue:str;symbol:str;order_id:str;side:str;qty:float;filled:float;status:str;contracts:float|None=None;filled_contracts:float|None=None;contract_size:float=1.0
 class PrivateAdapter(ABC):
  @abstractmethod
  async def positions(self):...
