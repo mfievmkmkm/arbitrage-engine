@@ -18,5 +18,5 @@ def test_unknown_fee_blocks_before_order_submission():
  assert not x.allowed and x.reason.startswith("UNKNOWN_FEE_RATE")
 
 def test_good_net_edge_passes_full_admission():
- p,s=args();x=prepare(p,OrderPolicy("market",False,.1,"X"),100,110,s,1,True,G(),True,True,True,50)
+ p,s=args();x=prepare(p,OrderPolicy("market",False,.1,"X"),100,110,s,.1,True,G(),True,True,True,50)
  assert x.allowed and x.cost.net_edge_usd>.1
