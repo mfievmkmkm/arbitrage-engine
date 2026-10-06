@@ -1,4 +1,4 @@
-import time
+import time\nfrom .actual_entry import build as actual_entry
 from .runtime_state import RuntimeTrade
 from .opportunity_gate import check as gate
 class RuntimeEngine:
@@ -11,7 +11,7 @@ class RuntimeEngine:
   if not d.allowed:return None,d.reason
   base=op["notional"]/long_price
   t=await self.orchestrator.enter(op["symbol"],op["buy"],op["sell"],base,spec_long.contract_size,spec_short.contract_size,long_round,short_round,op["hypothetical_edge"],abs(op.get("raw",0)-op.get("executable",0)),long_price,short_price)
-  r=RuntimeTrade(t.id,op["symbol"],op["buy"],op["sell"],t.plan.base_amount,t.plan.long.contracts,t.plan.short.contracts,spec_long.contract_size,spec_short.contract_size,long_price,short_price,time.time())
+  a=actual_entry(t.entry,t.plan)\n  r=RuntimeTrade(t.id,op["symbol"],op["buy"],op["sell"],a.base_qty,t.plan.long.contracts,t.plan.short.contracts,spec_long.contract_size,spec_short.contract_size,a.long_price,a.short_price,time.time())
   self.trades.append(r);self.store.save(self.trades);return r,"OPENED"
  def remove(self,trade_id):
   self.trades=[x for x in self.trades if x.trade_id!=trade_id];self.store.save(self.trades)
