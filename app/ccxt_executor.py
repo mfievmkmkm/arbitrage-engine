@@ -8,7 +8,8 @@ class CCXTExecutor(ExchangeExecutor):
   fee=row.get("fee") or {};fees=row.get("fees") or []
   fee_cost=float(fee.get("cost") or 0)
   if not fee_cost:fee_cost=sum(float(x.get("cost") or 0) for x in fees)
-  filled=float(row.get("filled") or 0);amount=row.get("amount");status=normalize(row.get("status"),filled,float(amount) if amount is not None else None)\n  return SubmitResult(str(row.get("id") or ""),status,filled,row.get("average") or row.get("price"),fee_cost)
+  filled=float(row.get("filled") or 0);amount=row.get("amount");status=normalize(row.get("status"),filled,float(amount) if amount is not None else None)
+  return SubmitResult(str(row.get("id") or ""),status,filled,row.get("average") or row.get("price"),fee_cost)
  async def submit(self,r):
   params={}
   if r.reduce_only:params["reduceOnly"]=True
