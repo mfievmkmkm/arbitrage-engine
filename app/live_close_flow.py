@@ -2,6 +2,8 @@ import asyncio
 from dataclasses import dataclass
 from .close_flow import close_trade
 from .live_close_gate import confirm
+from .close_recovery_executor import recover_close
+from .trade_result import finalize
 
 @dataclass(frozen=True)
 class VerifiedClose:
@@ -14,8 +16,22 @@ async def _snapshot(source):
  if hasattr(value,"__await__"):value=await value
  return value
 
-async def close_verified(t,long_executor,short_executor,private_snapshot,long_exit_price,short_exit_price,private_attempts=3,private_delay=.1,**kwargs):
+def _finalize_recovered(t,x,long_exit_price,short_exit_price,exit_fees,funding,reason):
+ long_px=x.long_result.avg_price if x.long_result.avg_price is not None else long_exit_price
+ short_px=x.short_result.avg_price if x.short_result.avg_price is not None else short_exit_price
+ fees=x.long_result.fee+x.short_result.fee if exit_fees==0 else exit_fees
+ f=t.funding if funding is None else funding
+ capital=t.base_qty*((t.long_entry+t.short_entry)/2)
+ return finalize(t.trade_id,t.base_qty,t.long_entry,t.short_entry,long_px,short_px,t.entry_fees,fees,f,capital,reason)
+
+async def close_verified(t,long_executor,short_executor,private_snapshot,long_exit_price,short_exit_price,private_attempts=3,private_delay=.1,recovery_timeout=8,**kwargs):
  result,x,status=await close_trade(t,long_executor,short_executor,long_exit_price,short_exit_price,**kwargs)
+ if status=="EXIT_PARTIAL_REQUIRES_RECOVERY":
+  recovery=await recover_close(t,x,long_executor,short_executor,recovery_timeout)
+  x=recovery.execution
+  if not recovery.recovered:return VerifiedClose(None,x,"CLOSE_RECOVERY_FAILED_"+recovery.reason)
+  result=_finalize_recovered(t,x,long_exit_price,short_exit_price,kwargs.get("exit_fees",0),kwargs.get("funding"),kwargs.get("reason","EXIT"))
+  status="CLOSED"
  if status!="CLOSED":return VerifiedClose(result,x,status)
  last_reason="PRIVATE_STATE_UNTRUSTED"
  for attempt in range(max(1,private_attempts)):
