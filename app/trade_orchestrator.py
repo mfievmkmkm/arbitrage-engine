@@ -28,7 +28,7 @@ class TradeOrchestrator:
    life.move(Phase.RECOVERY)
    if self.journal:await self.journal.transition(trade_id,Phase.RECOVERY,"PARTIAL_ENTRY")
    lb=result.long_result.filled*long_contract_size;sb=result.short_result.filled*short_contract_size
-   recovery=await recover(symbol,long_venue,short_venue,lb,sb,long_contract_size,short_contract_size,self.long_executor,self.short_executor,edge_pct,0.0,max(edge_pct,0.0),long_round if lb<sb else short_round)
+   recovery=await recover(symbol,long_venue,short_venue,lb,sb,long_contract_size,short_contract_size,self.long_executor,self.short_executor,edge_pct,0.0,max(edge_pct,0.0)+1e-12,long_round if lb<sb else short_round)
    if not recovery.completed:
     life.move(Phase.FAILED)
     if self.journal:await self.journal.transition(trade_id,Phase.FAILED,recovery.error or "RECOVERY_FAILED")
