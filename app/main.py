@@ -15,6 +15,7 @@ from .startup_runtime import evaluate as evaluate_runtime_startup
 from .runtime_store import RuntimeStore
 from .startup_report import render as render_startup
 from .preflight import check as preflight_check,render as render_preflight
+from .paper_campaign import status as campaign_status,render as render_campaign
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -31,6 +32,7 @@ def menu():
   [InlineKeyboardButton(text="📔 Дневник",callback_data="diary"),InlineKeyboardButton(text="🧠 Replay",callback_data="replay")],
   [InlineKeyboardButton(text="📡 Статус",callback_data="status"),InlineKeyboardButton(text="🛡 Риски",callback_data="risk")],
   [InlineKeyboardButton(text="🏦 Биржи",callback_data="exchanges"),InlineKeyboardButton(text="🚦 Startup",callback_data="startup")],
+  [InlineKeyboardButton(text="🎯 Этап 5",callback_data="campaign")],
   [InlineKeyboardButton(text="⏸ Пауза",callback_data="pause"),InlineKeyboardButton(text="▶️ Продолжить",callback_data="resume")]])
 
 def allowed(uid):return bool(config.admin_id and uid==config.admin_id)
@@ -73,6 +75,7 @@ async def text_for(s):
   rs=risk.state
   return f"🛡 RISK CENTER\nСтатус: {'🛑 HALT' if rs.halted else '🟢 NORMAL'}\nПричина: {rs.reason or '—'}\nОшибок подряд: {rs.consecutive_errors}/{risk.max_errors}\nPaper PnL сегодня: {rs.paper_daily_pnl:+.4f} USD\nDaily stop: -{risk.bankroll*risk.daily_stop_pct/100:.2f} USD\nLIVE: заблокирован до private reconciliation"
  if s=="startup":return startup_text
+ if s=="campaign":return render_campaign(await campaign_status(diary))
  if s=="status":
   stamp=datetime.fromtimestamp(scanner.last_scan,timezone.utc).strftime("%H:%M:%S UTC") if scanner.last_scan else "—"
   coverage=scanner.universe.coverage if scanner.universe else 0
@@ -84,14 +87,14 @@ async def text_for(s):
 async def start(m:Message):
  if allowed(m.from_user.id):await m.answer("⚡ ARBITRAGE ENGINE\nРежим: DISCOVERY + PAPER",reply_markup=menu())
 
-@dp.message(Command("top","paper","diary","replay","exchanges","status","risk","startup","pause","resume"))
+@dp.message(Command("top","paper","diary","replay","exchanges","status","risk","startup","campaign","pause","resume"))
 async def commands(m:Message):
  if not allowed(m.from_user.id):return
  s=m.text.split()[0].lstrip("/").split("@")[0]
  if s in ("pause","resume"):scanner.paused=s=="pause";s="status"
  await m.answer(await text_for(s),reply_markup=menu())
 
-@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","startup","pause","resume"}))
+@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","startup","campaign","pause","resume"}))
 async def callbacks(q:CallbackQuery):
  if not allowed(q.from_user.id):await q.answer("Нет доступа",show_alert=True);return
  s=q.data
