@@ -7,6 +7,7 @@ from .dynamic_exit import ExitState,decide
 from .recovery_flow import recover
 from .trade_lifecycle import Lifecycle,Phase
 from .fill_journal import entry as journal_entry
+from .effective_entry import merge as effective_entry
 @dataclass
 class ActiveTrade:
  id:str;symbol:str;plan:object;entry:object;exit_state:ExitState;lifecycle:object=None;recovery:object=None
@@ -32,6 +33,12 @@ class TradeOrchestrator:
     life.move(Phase.FAILED)
     if self.journal:await self.journal.transition(trade_id,Phase.FAILED,recovery.error or "RECOVERY_FAILED")
     raise RuntimeError("RECOVERY_FAILED")
+  effective=effective_entry(plan,result,recovery)
+  if not effective.hedged:
+   life.move(Phase.FAILED)
+   if self.journal:await self.journal.transition(trade_id,Phase.FAILED,effective.reason)
+   raise RuntimeError(effective.reason)
+  result=effective.result
   life.move(Phase.HEDGED)
   if self.journal:await self.journal.transition(trade_id,Phase.HEDGED)
   entry_edge_usd=abs(short_price-long_price)*plan.base_amount
