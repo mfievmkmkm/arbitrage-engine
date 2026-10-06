@@ -1,38 +1,34 @@
-# Arbitrage Engine — Discovery MVP
+# Arbitrage Engine
 
-Русскоязычный Telegram-бот для наблюдения за межбиржевыми фьючерсными спредами. **Только публичные котировки и бумажное наблюдение. Реальные ордера не отправляются.**
+Русскоязычный Telegram-интерфейс исследования межбиржевого арбитража.
+Рабочая версия находится в **`phase-2-discovery`**; `main` содержит старый Discovery MVP.
 
-## Быстрый запуск
+Текущий этап: интегрированный Discovery/Paper/Replay. **Автоматическая реальная торговля и AUTO ещё не выпущены.** Фактические возможности и незавершённые пункты описаны в [RELEASE_STATUS_RU.md](RELEASE_STATUS_RU.md).
 
-1. Python 3.11+; `pip install -r requirements.txt`.
-2. Скопировать `.env.example` в `.env`, заполнить `BOT_TOKEN` и `ADMIN_ID`.
-3. `python -m app.main`.
+## Работающий запуск
 
-Сканер опрашивает публичные фьючерсные стаканы через CCXT на выбранных биржах. Пары сопоставляются по unified symbol; ограничение: одинаковый тикер не гарантирует идентичность базового актива, поэтому торговля автоматически отключена. Сигналы — **наблюдаемые оценки**, а не подтверждённые арбитражные сделки.
+`app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, исследовательские Spot/Spot и Funding loops. Для DEX доступен опциональный 0x price-research; кошелёк не подписывает и не отправляет транзакции.
 
-## Команды
-`/start` — меню; `/status` — состояние; `/top` — лучшие наблюдения; `/diary` — дневник; `/exchanges` — биржи; `/pause`, `/resume` — сканер (только администратор).
+Telegram: `/start`, `/top`, `/paper`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
 
-## Границы MVP
-- Публичные REST-данные, не low-latency WebSocket; стаканы разных площадок получены не атомарно. Проверка возраста данных обязательна.
-- `net_edge` — консервативная оценка **при гипотетическом полном схождении**, не текущая или гарантированная прибыль. Funding не включён, пока не известны точные ставки и сроки.
-- Не симулируем гарантированные fills и не выдаём историческую прибыль без replay tick/order-book данных.
-- Нет API-ключей бирж, DEX, реальных сделок, автоматического входа или AI-торговли. Эти этапы добавляются после проверки корректности сканера и накопления дневника.
+В `/export` формируются XLSX и ZIP с CSV-таблицами и JSON-входом для анализа. Replay выбирает параметры на train и отдельно показывает отложенную выборку; параметры автоматически не меняются.
 
-## Безопасность
-При банке $40–50 реальные сделки могут быть экономически невыгодны из-за минимальных ордеров, комиссий и риска одной незахеджированной ноги. Начинаем с наблюдения. `ADMIN_ID` обязателен, чтобы данные не рассылались посторонним. Никогда не коммитить `.env` и приватные ключи.
+## Разработка и проверка
 
+Python 3.11+. `pip install -r requirements.txt pytest`.
 
-## Phase 2
-Ветка `phase-2-discovery` расширяет Discovery: ротация до 120 общих perpetual-рынков вместо фиксированных первых 30, настраиваемые batch/concurrency, health-метрики площадок, deterministic Paper Risk Guard, route analytics, Docker/Railway и GitHub Actions tests.
+```bash
+python -m compileall -q app
+python -m pytest -q
+```
 
-Это всё ещё research/paper система. Наличие спреда не означает возможность получить указанную прибыль в live-исполнении. До реальных ордеров нужны WebSocket market data, проверка instrument identity, funding/min-notional/precision, private order state и hedge-failure controller.
+Для будущего Paper-запуска конфигурация находится в `.env.example`; `LIVE_ENABLED=false`.
+Все обращения к биржам в основном процессе остаются публичными или read-only private reconciliation. Наличие API-ключей не разрешает отправку ордеров.
 
+SQLite хранит дневник, Paper и durable LIVE-фазы. JSON RuntimeStore служит кешем. UNKNOWN и работающие ордера блокируют новый LIVE-допуск; закрытие считается подтверждённым только после private exposure=0.
 
-## Current staged runtime
+Funding-прогноз не считается полученной прибылью. Статистика Paper и Replay — модельные результаты на REST-наблюдениях; реальные fills, latency и комиссии должны подтверждаться отдельно.
 
-Phase 2 now includes contract-aware books and sizing, settlement-aware funding, Paper/Replay, two-leg execution abstractions, recovery/flatten planning, reduce-only exits, crash-safe runtime persistence, startup reconciliation, Telegram Startup Check, safety regression tests and deterministic end-to-end simulation.
+## История этапов
 
-For the first safe run keep `LIVE_ENABLED=false`. API credentials are optional and are used for read-only balance/position/order reconciliation. Withdrawals must remain disabled. Real write-capable exchange executors are intentionally not part of the production path yet.
-
-A trade is not considered hedged unless actual base exposure matches, and is not considered closed while residual exposure remains. A one-leg submission failure is preserved as an explicit recovery condition rather than hidden as a generic exception.
+Предыдущие документы сохраняются как история реализации. Их формулировки «complete/ready» не являются текущим допуском к LIVE. Текущее состояние — в `RELEASE_STATUS_RU.md`.

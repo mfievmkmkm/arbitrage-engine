@@ -1,19 +1,93 @@
-import aiosqlite,json,time
-SCHEMA="""CREATE TABLE IF NOT EXISTS live_trades(trade_id TEXT PRIMARY KEY,phase TEXT NOT NULL,symbol TEXT,long_venue TEXT,short_venue TEXT,planned_long REAL,planned_short REAL,actual_long REAL DEFAULT 0,actual_short REAL DEFAULT 0,long_price REAL,short_price REAL,fees REAL DEFAULT 0,updated_at REAL NOT NULL,payload TEXT NOT NULL DEFAULT '{}')"""
+"""Durable live authority. Runtime JSON is a cache, never execution evidence."""
+
+import json
+import time
+import aiosqlite
+from .runtime_state import RuntimeTrade
+
+SCHEMA = """CREATE TABLE IF NOT EXISTS live_trades(
+ trade_id TEXT PRIMARY KEY,phase TEXT NOT NULL,symbol TEXT,long_venue TEXT,
+ short_venue TEXT,planned_long REAL,planned_short REAL,actual_long REAL DEFAULT 0,
+ actual_short REAL DEFAULT 0,long_price REAL,short_price REAL,fees REAL DEFAULT 0,
+ updated_at REAL NOT NULL,payload TEXT NOT NULL DEFAULT '{}')"""
+TERMINAL = {"CLOSED_PRIVATE_VERIFIED", "ABORTED"}
+
+
 class Store:
- def __init__(self,path):self.path=path
- async def init(self):
-  async with aiosqlite.connect(self.path) as d:await d.execute(SCHEMA);await d.commit()
- async def phase(self,trade_id,phase,**x):
-  now=time.time();payload=json.dumps(x,separators=(",",":"))
-  async with aiosqlite.connect(self.path) as d:
-   await d.execute("INSERT INTO live_trades(trade_id,phase,symbol,long_venue,short_venue,planned_long,planned_short,updated_at,payload) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(trade_id) DO UPDATE SET phase=excluded.phase,updated_at=excluded.updated_at,payload=excluded.payload",(trade_id,phase,x.get("symbol"),x.get("long_venue"),x.get("short_venue"),x.get("planned_long"),x.get("planned_short"),now,payload));await d.commit()
- async def get(self,trade_id):
-  async with aiosqlite.connect(self.path) as d:
-   d.row_factory=aiosqlite.Row
-   async with d.execute("SELECT * FROM live_trades WHERE trade_id=?",(trade_id,)) as cur:
-    x=await cur.fetchone();return dict(x) if x else None
- async def active(self):
-  async with aiosqlite.connect(self.path) as d:
-   d.row_factory=aiosqlite.Row
-   async with d.execute("SELECT * FROM live_trades WHERE phase NOT IN ('CLOSED_PRIVATE_VERIFIED','ABORTED') ORDER BY updated_at") as cur:return [dict(x) for x in await cur.fetchall()]
+    def __init__(self, path):
+        self.path = str(path)
+
+    async def init(self):
+        async with aiosqlite.connect(self.path) as d:
+            await d.execute(SCHEMA)
+            await d.commit()
+
+    async def phase(self, trade_id, phase, **meta):
+        if not trade_id:
+            raise ValueError("TRADE_ID_REQUIRED")
+        async with aiosqlite.connect(self.path) as d:
+            await d.execute("BEGIN IMMEDIATE")
+            async with d.execute(
+                "SELECT phase,payload FROM live_trades WHERE trade_id=?", (trade_id,)
+            ) as c:
+                old = await c.fetchone()
+            if old and old[0] in TERMINAL and phase != old[0]:
+                raise ValueError("TERMINAL_TRADE_CANNOT_REOPEN")
+            payload = json.loads(old[1]) if old else {}
+            payload.update(meta)
+            await d.execute(
+                """INSERT INTO live_trades(trade_id,phase,symbol,long_venue,short_venue,
+    planned_long,planned_short,actual_long,actual_short,long_price,short_price,fees,updated_at,payload)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(trade_id) DO UPDATE SET
+    phase=excluded.phase,symbol=excluded.symbol,long_venue=excluded.long_venue,
+    short_venue=excluded.short_venue,planned_long=excluded.planned_long,
+    planned_short=excluded.planned_short,actual_long=excluded.actual_long,
+    actual_short=excluded.actual_short,long_price=excluded.long_price,
+    short_price=excluded.short_price,fees=excluded.fees,updated_at=excluded.updated_at,payload=excluded.payload""",
+                (
+                    trade_id,
+                    phase,
+                    payload.get("symbol"),
+                    payload.get("long_venue"),
+                    payload.get("short_venue"),
+                    payload.get("planned_long"),
+                    payload.get("planned_short"),
+                    payload.get("actual_long", 0),
+                    payload.get("actual_short", 0),
+                    payload.get("long_price"),
+                    payload.get("short_price"),
+                    payload.get("fees", 0),
+                    time.time(),
+                    json.dumps(payload, separators=(",", ":")),
+                ),
+            )
+            await d.commit()
+
+    async def get(self, trade_id):
+        async with aiosqlite.connect(self.path) as d:
+            d.row_factory = aiosqlite.Row
+            async with d.execute(
+                "SELECT * FROM live_trades WHERE trade_id=?", (trade_id,)
+            ) as c:
+                row = await c.fetchone()
+                return dict(row) if row else None
+
+    async def active(self):
+        async with aiosqlite.connect(self.path) as d:
+            d.row_factory = aiosqlite.Row
+            async with d.execute(
+                "SELECT * FROM live_trades WHERE phase NOT IN ('CLOSED_PRIVATE_VERIFIED','ABORTED') ORDER BY updated_at"
+            ) as c:
+                return [dict(x) for x in await c.fetchall()]
+
+    async def runtime_trades(self):
+        trades = []
+        for row in await self.active():
+            payload = json.loads(row["payload"])
+            if row["phase"] in (
+                "HEDGED_PRIVATE_VERIFIED",
+                "OPEN",
+                "EXIT_SUBMITTING",
+            ) and payload.get("runtime_trade"):
+                trades.append(RuntimeTrade(**payload["runtime_trade"]))
+        return trades
