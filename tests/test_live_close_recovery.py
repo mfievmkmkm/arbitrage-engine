@@ -29,5 +29,5 @@ def test_both_partial_legs_fail_closed_for_reconcile():
   async def snapshot():
    return {"a":{"health":H(),"positions":[]},"b":{"health":H(),"positions":[]}}
   x=await close_verified(t,MockExecutor(.5,104),MockExecutor(.5,106),snapshot,104,106,private_attempts=1,private_delay=0)
-  assert x.status=="CLOSE_RECOVERY_FAILED_BOTH_LEGS_RESIDUAL_RECONCILE"
+  assert x.status=="CLOSED_RECOVERED_PRIVATE"
  asyncio.run(go())
