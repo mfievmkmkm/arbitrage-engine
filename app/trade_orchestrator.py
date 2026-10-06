@@ -41,7 +41,13 @@ class TradeOrchestrator:
   result=effective.result
   life.move(Phase.HEDGED)
   if self.journal:await self.journal.transition(trade_id,Phase.HEDGED)
-  entry_edge_usd=abs(short_price-long_price)*plan.base_amount
+  actual_long=result.long_result.avg_price
+  actual_short=result.short_result.avg_price
+  if actual_long is None or actual_short is None:raise RuntimeError("MISSING_ACTUAL_FILL_PRICE")
+  actual_base=min(result.long_result.filled*long_contract_size,result.short_result.filled*short_contract_size)
+  gross_edge=max(0,(actual_short-actual_long)*actual_base)
+  entry_fees=result.long_result.fee+result.short_result.fee
+  entry_edge_usd=max(0,gross_edge-entry_fees)
   return ActiveTrade(trade_id,symbol,plan,result,ExitState(entry_edge_usd,time.time()),life,recovery)
  def should_exit(self,trade,current_net,now=None,**kwargs):
   return decide(trade.exit_state,time.time() if now is None else now,current_net,**kwargs)
