@@ -6,6 +6,7 @@ def main_menu():
   [InlineKeyboardButton(text="🧭 Стратегии",callback_data="strategies"),InlineKeyboardButton(text="🏦 Площадки",callback_data="exchanges")],
   [InlineKeyboardButton(text="📊 Аналитика",callback_data="strategy_stats"),InlineKeyboardButton(text="🧪 Replay",callback_data="replay")],
   [InlineKeyboardButton(text="📔 Дневник",callback_data="diary"),InlineKeyboardButton(text="💼 Капитал",callback_data="capital")],
+  [InlineKeyboardButton(text="📤 Export",callback_data="export"),InlineKeyboardButton(text="🚦 Startup",callback_data="startup")],
   [InlineKeyboardButton(text="🛡 Risk Center",callback_data="risk"),InlineKeyboardButton(text="⚙️ Система",callback_data="status")],
   [InlineKeyboardButton(text="⛓ DEX",callback_data="dex"),InlineKeyboardButton(text="⚡ LIVE",callback_data="live")],
   [InlineKeyboardButton(text="⏸ Сканер",callback_data="pause"),InlineKeyboardButton(text="▶ Возобновить",callback_data="resume")],
