@@ -24,6 +24,7 @@ class Config:
  live_max_slippage_pct:float=max(0,float(os.getenv("LIVE_MAX_SLIPPAGE_PCT","0.20")))
  live_min_net_edge_usd:float=max(0,float(os.getenv("LIVE_MIN_NET_EDGE_USD","0.05")))
  live_no_withdraw_attested:bool=os.getenv("LIVE_NO_WITHDRAW_ATTESTED","false").strip().lower() in ("1","true","yes","on")
+ live_metrics_path:str=os.getenv("LIVE_METRICS_PATH","live_metrics.json")
  paper_capital:float=max(10,float(os.getenv("PAPER_CAPITAL_USD","50")))
  max_paper_positions:int=max(1,int(os.getenv("MAX_PAPER_POSITIONS","2")))
  paper_entry_edge:float=float(os.getenv("PAPER_ENTRY_EDGE_PCT","2.0"))
