@@ -27,7 +27,7 @@ async def execute(symbol,plan,long_executor,short_executor,long_price,short_pric
  if not adm.allowed:return LiveEntryResult(False,adm.reason,"",admission=adm)
  trade_id=uuid.uuid4().hex
  async def leg(name,leg,ex,price):
-  req=SubmitRequest(symbol,leg.side,leg.contracts,policy.order_type,price,False,policy.ioc)
+  req=SubmitRequest(symbol,leg.side,leg.contracts,policy.order_type,price,False,policy.ioc,trade_id+":"+name)
   intent=OrderIntent(trade_id+":"+name,trade_id,leg.venue,symbol,leg.side,leg.contracts,False)
   try:return await asyncio.wait_for(ex.submit_intent(intent,req),timeout)
   except Exception as e:return (None,"SUBMIT_"+type(e).__name__)
