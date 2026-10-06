@@ -4,11 +4,11 @@ from app.mock_executor import MockExecutor
 from app.actual_entry import build
 
 class PartialLong(MockExecutor):
- def __init__(self):super().__init__(.5,100)
+ def __init__(self):super().__init__(.5,100);self.calls=0
  async def submit(self,r):
-  x=await super().submit(r)
-  self.fill_ratio=1
-  return x
+  self.calls+=1
+  if self.calls>1:self.fill_ratio=1
+  return await super().submit(r)
 
 def test_recovered_entry_uses_final_actual_fills():
  async def go():
