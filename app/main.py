@@ -16,6 +16,9 @@ from .runtime_store import RuntimeStore
 from .startup_report import render as render_startup
 from .preflight import check as preflight_check,render as render_preflight
 from .paper_campaign import status as campaign_status,render as render_campaign
+from .live_supervisor import LiveSupervisor
+from .operator_stop import StopController
+from .live_control_view import render as render_live_control
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -24,7 +27,7 @@ scanner=Scanner(config.exchanges,config.notional,config.max_age,config.universe_
 paper=PaperEngine(diary,config.paper_capital,config.max_paper_positions,
  config.paper_target_convergence,config.paper_trailing_drawdown,config.paper_max_seconds)
 risk=RiskGuard(config.paper_capital,config.daily_stop_pct,config.max_engine_errors)
-latest=[]; dp=Dispatcher(); startup_text='🚦 Startup ещё не выполнен'; private_clients={}
+latest=[]; dp=Dispatcher(); startup_text='🚦 Startup ещё не выполнен'; private_clients={}; live_supervisor=LiveSupervisor(config.max_engine_errors); live_stop=StopController()
 
 def menu():
  return InlineKeyboardMarkup(inline_keyboard=[
@@ -32,7 +35,8 @@ def menu():
   [InlineKeyboardButton(text="📔 Дневник",callback_data="diary"),InlineKeyboardButton(text="🧠 Replay",callback_data="replay")],
   [InlineKeyboardButton(text="📡 Статус",callback_data="status"),InlineKeyboardButton(text="🛡 Риски",callback_data="risk")],
   [InlineKeyboardButton(text="🏦 Биржи",callback_data="exchanges"),InlineKeyboardButton(text="🚦 Startup",callback_data="startup")],
-  [InlineKeyboardButton(text="🎯 Этап 5",callback_data="campaign")],
+  [InlineKeyboardButton(text="🎯 Этап 5",callback_data="campaign"),InlineKeyboardButton(text="⚡ LIVE",callback_data="live")],
+  [InlineKeyboardButton(text="🛑 LIVE STOP",callback_data="live_stop"),InlineKeyboardButton(text="🔐 LIVE RESUME",callback_data="live_resume")],
   [InlineKeyboardButton(text="⏸ Пауза",callback_data="pause"),InlineKeyboardButton(text="▶️ Продолжить",callback_data="resume")]])
 
 def allowed(uid):return bool(config.admin_id and uid==config.admin_id)
@@ -76,6 +80,7 @@ async def text_for(s):
   return f"🛡 RISK CENTER\nСтатус: {'🛑 HALT' if rs.halted else '🟢 NORMAL'}\nПричина: {rs.reason or '—'}\nОшибок подряд: {rs.consecutive_errors}/{risk.max_errors}\nPaper PnL сегодня: {rs.paper_daily_pnl:+.4f} USD\nDaily stop: -{risk.bankroll*risk.daily_stop_pct/100:.2f} USD\nLIVE: заблокирован до private reconciliation"
  if s=="startup":return startup_text
  if s=="campaign":return render_campaign(await campaign_status(diary))
+ if s=="live":return render_live_control(live_supervisor,[],0,live_stop)
  if s=="status":
   stamp=datetime.fromtimestamp(scanner.last_scan,timezone.utc).strftime("%H:%M:%S UTC") if scanner.last_scan else "—"
   coverage=scanner.universe.coverage if scanner.universe else 0
@@ -87,14 +92,16 @@ async def text_for(s):
 async def start(m:Message):
  if allowed(m.from_user.id):await m.answer("⚡ ARBITRAGE ENGINE\nРежим: DISCOVERY + PAPER",reply_markup=menu())
 
-@dp.message(Command("top","paper","diary","replay","exchanges","status","risk","startup","campaign","pause","resume"))
+@dp.message(Command("top","paper","diary","replay","exchanges","status","risk","startup","campaign","live","live_stop","live_resume","pause","resume"))
 async def commands(m:Message):
  if not allowed(m.from_user.id):return
  s=m.text.split()[0].lstrip("/").split("@")[0]
  if s in ("pause","resume"):scanner.paused=s=="pause";s="status"
+ if s=="live_stop":live_stop.stop();s="live"
+ if s=="live_resume":live_stop.resume();s="live"
  await m.answer(await text_for(s),reply_markup=menu())
 
-@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","startup","campaign","pause","resume"}))
+@dp.callback_query(F.data.in_({"top","paper","diary","replay","exchanges","status","risk","startup","campaign","live","live_stop","live_resume","pause","resume"}))
 async def callbacks(q:CallbackQuery):
  if not allowed(q.from_user.id):await q.answer("Нет доступа",show_alert=True);return
  s=q.data
