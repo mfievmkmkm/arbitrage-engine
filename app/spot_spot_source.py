@@ -1,5 +1,5 @@
 import asyncio
-from .spot_spot_scanner import evaluate
+from .spot_spot_directional import best
 class Source:
  def __init__(self,clients,notional,fees_pct=.2,safety_pct=.1):self.clients=clients;self.notional=notional;self.fees_pct=fees_pct;self.safety_pct=safety_pct
  async def scan_symbol(self,symbol):
