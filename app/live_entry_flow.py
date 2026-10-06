@@ -10,6 +10,8 @@ from .two_leg_runner import TwoLegResult
 from .actual_entry import build as actual_entry
 from .live_entry_admission import prepare
 from .private_entry_verify import verify as verify_private
+from .persisted_exit_runner import run as protective_exit
+from .runtime_state import RuntimeTrade
 
 @dataclass(frozen=True)
 class LiveEntryResult:
@@ -47,7 +49,11 @@ async def execute(symbol,plan,long_executor,short_executor,long_price,short_pric
   effective=merged.result
  try:a=actual_entry(effective,plan)
  except RuntimeError as e:return LiveEntryResult(False,"ENTRY_ACTUAL_INVALID:"+str(e),trade_id,effective,None,recovery,adm)
- if private_snapshot is not None:
-  pv=await verify_private(private_snapshot,symbol,plan.long.venue,plan.short.venue,a.base_qty,private_attempts,private_delay)
-  if not pv.verified:return LiveEntryResult(False,"ENTRY_PRIVATE_UNVERIFIED:"+pv.reason,trade_id,effective,a,recovery,adm)
+ if private_snapshot is None:return LiveEntryResult(False,"ENTRY_PRIVATE_UNVERIFIED:PRIVATE_STATE_REQUIRED",trade_id,effective,a,recovery,adm)
+ pv=await verify_private(private_snapshot,symbol,plan.long.venue,plan.short.venue,a.base_qty,private_attempts,private_delay)
+ if not pv.verified:
+  tmp=RuntimeTrade(trade_id,symbol,plan.long.venue,plan.short.venue,a.base_qty,effective.long_result.filled,effective.short_result.filled,plan.long.contract_size,plan.short.contract_size,a.long_price,a.short_price,0,entry_fees=a.long_fee+a.short_fee)
+  px=await protective_exit(tmp,long_executor,short_executor,timeout)
+  suffix="FLATTENED" if px.execution is not None and px.execution.flat else "FLATTEN_UNCERTAIN"
+  return LiveEntryResult(False,"ENTRY_PRIVATE_UNVERIFIED:"+pv.reason+":"+suffix,trade_id,effective,a,recovery,adm)
  return LiveEntryResult(True,"OPENED",trade_id,effective,a,recovery,adm)
