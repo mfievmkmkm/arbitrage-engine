@@ -36,6 +36,17 @@ class Diary:
   async with aiosqlite.connect(self.path) as d:
    d.row_factory=aiosqlite.Row
    async with d.execute("SELECT * FROM execution_events WHERE trade_id=? ORDER BY ts,id",(trade_id,)) as cur:return [dict(x) for x in await cur.fetchall()]
+ async def all_execution_events(self,limit=5000):
+  async with aiosqlite.connect(self.path) as d:
+   d.row_factory=aiosqlite.Row
+   async with d.execute("SELECT trade_id,ts,kind,venue,symbol,side,qty,price,fee,reason,payload FROM execution_events ORDER BY ts DESC LIMIT ?",(limit,)) as cur:
+    rows=[dict(x) for x in await cur.fetchall()]
+  out=[]
+  for x in reversed(rows):
+   try:p=json.loads(x.pop("payload") or "{}")
+   except Exception:p={}
+   x.update(p);out.append(x)
+  return out
  async def replay_trades(self,limit=500):
   async with aiosqlite.connect(self.path) as d:
    d.row_factory=aiosqlite.Row
