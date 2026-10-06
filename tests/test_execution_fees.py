@@ -5,7 +5,8 @@ from app.fee_schedule import FeeSchedule,FeeRate
 def test_market_and_ioc_are_taker_limit_is_maker():
  assert liquidity("market")=="taker"
  assert liquidity("limit",True)=="taker"
- assert liquidity("limit")=="maker"
+ assert liquidity("limit")=="taker"
+ assert liquidity("post_only")=="maker"
 
 def test_execution_requests_select_venue_fee_rates():
  s=FeeSchedule({"a":FeeRate(.001,.002),"b":FeeRate(.003,.004)})
