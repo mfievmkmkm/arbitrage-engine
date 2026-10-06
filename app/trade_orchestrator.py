@@ -5,7 +5,8 @@ from .order_policy import choose
 from .two_leg_runner import run
 from .dynamic_exit import ExitState,decide
 from .recovery_flow import recover
-from .trade_lifecycle import Lifecycle,Phase\nfrom .fill_journal import entry as journal_entry
+from .trade_lifecycle import Lifecycle,Phase
+from .fill_journal import entry as journal_entry
 @dataclass
 class ActiveTrade:
  id:str;symbol:str;plan:object;entry:object;exit_state:ExitState;lifecycle:object=None;recovery:object=None
@@ -19,7 +20,8 @@ class TradeOrchestrator:
   life.move(Phase.ENTERING)
   if self.journal:await self.journal.transition(trade_id,Phase.ENTERING)
   policy=choose(edge_pct,book_spread_pct,True)
-  result=await run(plan,self.long_executor,self.short_executor,policy,long_price,short_price)\n  if self.journal:await journal_entry(self.journal,trade_id,symbol,long_venue,short_venue,result)
+  result=await run(plan,self.long_executor,self.short_executor,policy,long_price,short_price)
+  if self.journal:await journal_entry(self.journal,trade_id,symbol,long_venue,short_venue,result)
   recovery=None
   if not result.hedged:
    life.move(Phase.RECOVERY)
