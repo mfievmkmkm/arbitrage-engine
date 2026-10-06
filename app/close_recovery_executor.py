@@ -3,6 +3,7 @@ from dataclasses import dataclass,replace
 from .close_recovery import plan
 from .exchange_executor import SubmitRequest
 from .fill_reconcile import reconcile
+from .fill_merge import merge_result
 
 @dataclass(frozen=True)
 class RecoveryOutcome:
@@ -21,11 +22,11 @@ async def recover_close(trade,exit_result,long_executor,short_executor,timeout=8
  except Exception as e:return RecoveryOutcome(exit_result,False,"RECOVERY_"+type(e).__name__)
  if r.filled<p.contracts-tolerance:return RecoveryOutcome(exit_result,False,"RECOVERY_PARTIAL",r)
  if p.venue==trade.long_venue:
-  lr=replace(exit_result.long_result,filled=exit_result.long_result.filled+r.filled,avg_price=r.avg_price if r.avg_price is not None else exit_result.long_result.avg_price,fee=exit_result.long_result.fee+r.fee)
+  lr=merge_result(exit_result.long_result,r)
   sr=exit_result.short_result
  else:
   lr=exit_result.long_result
-  sr=replace(exit_result.short_result,filled=exit_result.short_result.filled+r.filled,avg_price=r.avg_price if r.avg_price is not None else exit_result.short_result.avg_price,fee=exit_result.short_result.fee+r.fee)
+  sr=merge_result(exit_result.short_result,r)
  rec=reconcile(lr.filled,trade.long_contract_size,sr.filled,trade.short_contract_size)
  flat=lr.filled>=trade.long_contracts-tolerance and sr.filled>=trade.short_contracts-tolerance
  merged=replace(exit_result,long_result=lr,short_result=sr,flat=flat,mismatch_pct=rec.mismatch_pct)
