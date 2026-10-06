@@ -29,6 +29,8 @@ from .strategy_diary import init as strategy_diary_init,summary as strategy_diar
 from .strategy_stats_view import render as render_strategy_stats
 from .bankroll_ledger import Ledger
 from .capital_view import render as render_capital
+from .strategy_observation import row as strategy_row
+from .strategy_diary import record as strategy_diary_record
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("arbitrage")
@@ -135,7 +137,7 @@ async def scanning():
  while True:
   try:
    if not scanner.paused:
-    latest=await scanner.scan();strategy_runtime.update("futures_futures",latest);risk.on_success()
+    latest=await scanner.scan();strategy_runtime.update("futures_futures",latest);await strategy_diary_record(config.db_path,[strategy_row({**x,"strategy":"futures_futures"}) for x in latest]);risk.on_success()
     await diary.record([x for x in latest if x["hypothetical_edge"]>=config.min_edge])
     closed=await paper.mark_and_exit(latest)
     for p in closed:risk.on_paper_close(p.current_net_usd);log.info("Paper close %s net=%s",p.symbol,p.current_net_usd)
