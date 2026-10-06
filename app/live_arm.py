@@ -16,7 +16,9 @@ def arm_from_snapshot(guard:LiveGuard,snapshot):
  guard.enabled=False
  guard.kill_reason="PRIVATE_STREAMS_NOT_READY"
  return ArmDecision(False,"PRIVATE_STREAMS_NOT_READY")
-def arm_after_streams(guard:LiveGuard):
+def arm_after_streams(guard:LiveGuard,live_enabled=False):
  guard.private_streams_ready=True
+ if not live_enabled:
+  guard.kill("LIVE_DISABLED");return ArmDecision(False,"LIVE_DISABLED")
  if not guard.position_state_trusted:return ArmDecision(False,"POSITION_STATE_UNTRUSTED")
  return ArmDecision(guard.arm(),"ARMED" if guard.enabled else "ARM_FAILED")
