@@ -75,6 +75,16 @@ class Diary:
    except Exception:p={}
    x.update(p);out[x["intent_id"]]=x
   return out
+ async def update_order_intent_reconciled(self,intent_id,state,result=None):
+  async with aiosqlite.connect(self.path) as d:
+   d.row_factory=aiosqlite.Row
+   async with d.execute("SELECT payload FROM order_intents WHERE intent_id=?",(intent_id,)) as cur:r=await cur.fetchone()
+   if not r:return False
+   try:p=json.loads(r["payload"] or "{}")
+   except Exception:p={}
+   p["state"]=state
+   if result is not None:p.update({"order_id":result.order_id,"exchange_status":result.status,"filled":result.filled,"avg_price":result.avg_price,"fee":result.fee})
+   await d.execute("UPDATE order_intents SET state=?,updated_at=?,payload=? WHERE intent_id=?",(state,time.time(),json.dumps(p),intent_id));await d.commit();return True
  async def replay_trades(self,limit=500):
   async with aiosqlite.connect(self.path) as d:
    d.row_factory=aiosqlite.Row
