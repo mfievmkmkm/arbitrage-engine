@@ -2,7 +2,7 @@ import asyncio,uuid
 from dataclasses import dataclass
 from .exchange_executor import SubmitRequest
 from .order_policy import choose
-from .order_intent import make as make_intent
+from .live_order_intent import OrderIntent
 from .fill_reconcile import reconcile
 from .effective_entry import merge as merge_entry
 from .recovery_flow import recover
@@ -27,7 +27,7 @@ async def execute(symbol,plan,long_executor,short_executor,long_price,short_pric
  trade_id=uuid.uuid4().hex
  async def leg(name,leg,ex,price):
   req=SubmitRequest(symbol,leg.side,leg.contracts,policy.order_type,price,False,policy.ioc)
-  intent=make_intent(trade_id,leg.venue,symbol,leg.side,leg.contracts,False,name)
+  intent=OrderIntent(trade_id+":"+name,trade_id,leg.venue,symbol,leg.side,leg.contracts,False)
   try:return await asyncio.wait_for(ex.submit_intent(intent,req),timeout)
   except Exception as e:return (None,"SUBMIT_"+type(e).__name__)
  l,s=await asyncio.gather(leg("entry-long",plan.long,long_executor,long_price),leg("entry-short",plan.short,short_executor,short_price))
