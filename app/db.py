@@ -2,7 +2,7 @@ import json,aiosqlite,time
 SCHEMA="""CREATE TABLE IF NOT EXISTS observations(id INTEGER PRIMARY KEY,ts REAL,symbol TEXT,buy TEXT,sell TEXT,raw REAL,executable REAL,fee_pct REAL,hypothetical_edge REAL,notional REAL,payload TEXT);
 CREATE INDEX IF NOT EXISTS idx_observations_ts ON observations(ts);
 CREATE TABLE IF NOT EXISTS paper_positions(id INTEGER PRIMARY KEY AUTOINCREMENT,symbol TEXT,buy TEXT,sell TEXT,notional REAL,entry_buy REAL,entry_sell REAL,entry_spread REAL,opened_at REAL,best_net_usd REAL,current_net_usd REAL,current_spread REAL,status TEXT,closed_at REAL,close_reason TEXT);
-CREATE TABLE IF NOT EXISTS paper_marks(id INTEGER PRIMARY KEY AUTOINCREMENT,position_id INTEGER,ts REAL,net_usd REAL,spread REAL);\nCREATE TABLE IF NOT EXISTS execution_events(id INTEGER PRIMARY KEY AUTOINCREMENT,trade_id TEXT,ts REAL,kind TEXT,venue TEXT,symbol TEXT,side TEXT,qty REAL,price REAL,fee REAL,reason TEXT,payload TEXT);\nCREATE INDEX IF NOT EXISTS idx_execution_trade ON execution_events(trade_id,ts);"""
+CREATE TABLE IF NOT EXISTS paper_marks(id INTEGER PRIMARY KEY AUTOINCREMENT,position_id INTEGER,ts REAL,net_usd REAL,spread REAL);\nCREATE TABLE IF NOT EXISTS execution_events(id INTEGER PRIMARY KEY AUTOINCREMENT,trade_id TEXT,ts REAL,kind TEXT,venue TEXT,symbol TEXT,side TEXT,qty REAL,price REAL,fee REAL,reason TEXT,payload TEXT);\nCREATE INDEX IF NOT EXISTS idx_execution_trade ON execution_events(trade_id,ts);\nCREATE TABLE IF NOT EXISTS order_intents(intent_id TEXT PRIMARY KEY,trade_id TEXT,venue TEXT,symbol TEXT,side TEXT,qty REAL,reduce_only INTEGER,state TEXT,updated_at REAL,payload TEXT);"""
 class Diary:
  def __init__(self,path):self.path=path
  async def init(self):
@@ -47,6 +47,16 @@ class Diary:
    except Exception:p={}
    x.update(p);out.append(x)
   return out
+ async def save_order_intent(self,intent,state=None):
+  row=intent.row();row["state"]=state or row["state"]
+  async with aiosqlite.connect(self.path) as d:
+   await d.execute("INSERT INTO order_intents(intent_id,trade_id,venue,symbol,side,qty,reduce_only,state,updated_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(intent_id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at,payload=excluded.payload",(row["intent_id"],row["trade_id"],row["venue"],row["symbol"],row["side"],row["qty"],int(row["reduce_only"]),row["state"],time.time(),json.dumps(row)))
+   await d.commit()
+ async def order_intent_states(self,trade_id=None):
+  async with aiosqlite.connect(self.path) as d:
+   q="SELECT intent_id,state FROM order_intents";args=()
+   if trade_id is not None:q+=" WHERE trade_id=?";args=(trade_id,)
+   async with d.execute(q,args) as c:return {x[0]:x[1] for x in await c.fetchall()}
  async def replay_trades(self,limit=500):
   async with aiosqlite.connect(self.path) as d:
    d.row_factory=aiosqlite.Row
