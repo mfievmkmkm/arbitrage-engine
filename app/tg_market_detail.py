@@ -36,6 +36,20 @@ def render(strategy, x):
         )
     if x.get("base_qty") is not None:
         out.append(f"Объём: {x['base_qty']:.8g}")
+    if x.get("native_plan"):
+        p = x["native_plan"]
+        if p.get("valid") is True:
+            out.append(
+                "Параметры контракта и округление: проверены по публичным метаданным."
+            )
+            out.append(
+                f"Контракты LONG / SHORT: {p['long']['qty']:.8g} / {p['short']['qty']:.8g}"
+            )
+        else:
+            out.append(
+                "План заявок заблокирован: " + escape(p.get("reason", "UNKNOWN"))
+            )
+        out.append("Публичный план не подтверждает права аккаунта или допуск к LIVE.")
     out.append(
         "\n<blockquote>Исследовательская оценка. Реальные заявки с этого экрана не отправляются.</blockquote>"
     )

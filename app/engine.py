@@ -11,6 +11,7 @@ from .funding_service import FundingService
 from .instruments import compatible
 from .contract_book import to_base_levels
 from .spot_future_vwap import vwap
+from .native_order_plan import prepare_pair
 
 FEE_BPS = {
     "binance": 5.0,
@@ -118,7 +119,6 @@ class Scanner:
             )
             try:
                 ms = await c.load_markets()
-                self.clients[name] = c
                 valid = [
                     m
                     for m in ms.values()
@@ -127,8 +127,21 @@ class Scanner:
                     and m.get("settle") == "USDT"
                     and m.get("active") is not False
                 ]
+                checked = []
+                for m in valid:
+                    try:
+                        if (
+                            m.get("contractSize") is not None
+                            and math.isfinite(float(m["contractSize"]))
+                            and float(m["contractSize"]) > 0
+                        ):
+                            checked.append(m)
+                    except (ValueError, TypeError):
+                        continue
+                valid = checked
                 self.symbols[name] = {m["symbol"] for m in valid}
                 self.specs[name] = {m["symbol"]: from_market(name, m) for m in valid}
+                self.clients[name] = c
             except Exception as e:
                 self.errors[name] = type(e).__name__
                 await c.close()
@@ -260,6 +273,45 @@ class Scanner:
             + sorted(ranked, key=lambda x: x["hypothetical_edge"], reverse=True)[:50]
         )
         for o in ops:
+            native = prepare_pair(
+                o["symbol"],
+                o["buy"],
+                o["sell"],
+                self.clients[o["buy"]],
+                self.clients[o["sell"]],
+                o["base_qty"],
+                o["entry_buy"],
+                o["entry_sell"],
+            )
+            watched_position = self.watch_positions.get(
+                (o["symbol"], o["buy"], o["sell"])
+            )
+            if native.valid and not watched_position:
+                qs = grouped[o["symbol"]]
+                a = next(q for q in qs if q.exchange == o["buy"])
+                b = next(q for q in qs if q.exchange == o["sell"])
+                actual = evaluate(
+                    a, b, self.notional, self.max_age, now, base_qty=native.base_qty
+                )
+                if actual:
+                    o.update(actual)
+                    native = prepare_pair(
+                        o["symbol"],
+                        o["buy"],
+                        o["sell"],
+                        self.clients[o["buy"]],
+                        self.clients[o["sell"]],
+                        o["base_qty"],
+                        o["entry_buy"],
+                        o["entry_sell"],
+                    )
+            o["native_plan"] = native.row()
+            if (
+                watched_position
+                and native.valid
+                and not math.isclose(native.base_qty, o["base_qty"], rel_tol=1e-10)
+            ):
+                o["native_plan"].update(valid=False, reason="SAVED_QUANTITY_NOT_NATIVE")
             o["safety_pct"] = self.safety_buffer_pct
             o["funding_known"] = False
             o["funding_status"] = "UNKNOWN"

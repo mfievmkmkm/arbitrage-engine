@@ -564,6 +564,8 @@ async def notify_paper_close(symbol, net, reason):
 
 
 def paper_entry_reason(op):
+    if "native_plan" in op and op["native_plan"].get("valid") is not True:
+        return "NATIVE_PLAN_BLOCKED:" + op["native_plan"].get("reason", "UNKNOWN")
     if scanner.paused:
         return "SCANNER_PAUSED"
     if not strategy_runtime.enabled["futures_futures"]:

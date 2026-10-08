@@ -1,4 +1,4 @@
-import asyncio, hashlib
+import asyncio, hashlib, math
 from .exchange_executor import ExchangeExecutor, SubmitResult
 from .order_status import normalize
 
@@ -23,6 +23,8 @@ class CCXTExecutor(ExchangeExecutor):
 
     def _result(self, row):
         filled = float(row.get("filled") or 0)
+        if not math.isfinite(filled) or filled < 0:
+            raise RuntimeError("ACTUAL_FILL_INVALID")
         amount = row.get("amount")
         fee = row.get("fee")
         fees = [fee] if fee else (row.get("fees") or [])
@@ -35,15 +37,33 @@ class CCXTExecutor(ExchangeExecutor):
         ):
             raise RuntimeError("ACTUAL_FEE_USD_CONVERSION_REQUIRED")
         fee_cost = sum(float(x["cost"]) for x in fees)
+        if not math.isfinite(fee_cost):
+            raise RuntimeError("ACTUAL_FEE_INVALID")
+        if amount is not None and (
+            not math.isfinite(float(amount))
+            or float(amount) < 0
+            or filled > float(amount) + max(float(amount) * 1e-10, 1e-12)
+        ):
+            raise RuntimeError("ACTUAL_AMOUNT_INVALID")
         status = normalize(
             row.get("status"), filled, float(amount) if amount is not None else None
         )
         average = row.get("average")
-        if average is None and filled > 0 and row.get("cost") is not None:
-            average = float(row["cost"]) / filled
+        if average is not None:
+            average = float(average)
+            if not math.isfinite(average) or average <= 0:
+                raise RuntimeError("ACTUAL_PRICE_INVALID")
+        if filled > 0 and average is None:
+            raise RuntimeError("ACTUAL_FILL_PRICE_UNKNOWN")
         return SubmitResult(str(row.get("id") or ""), status, filled, average, fee_cost)
 
+    def validate(self, request):
+        from .native_order_plan import validate_request
+
+        return validate_request(self.client, request)
+
     async def submit(self, r):
+        self.validate(r)
         params = {}
         if r.reduce_only:
             params["reduceOnly"] = True
@@ -57,7 +77,17 @@ class CCXTExecutor(ExchangeExecutor):
             ),
             self.timeout,
         )
-        return self._result(row)
+        result = self._result(row)
+        if (
+            r.order_type == "limit"
+            and result.filled > 0
+            and (
+                (r.side == "buy" and result.avg_price > r.price * (1 + 1e-12))
+                or (r.side == "sell" and result.avg_price < r.price * (1 - 1e-12))
+            )
+        ):
+            raise RuntimeError("ACTUAL_FILL_OUTSIDE_LIMIT")
+        return result
 
     async def order_by_client_id(self, client_order_id, symbol):
         if not hasattr(self.client, "fetch_orders"):

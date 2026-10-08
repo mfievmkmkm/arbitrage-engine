@@ -59,6 +59,8 @@ class PaperEngine:
         )
 
     def can_open(self, o):
+        if "native_plan" in o and o["native_plan"].get("valid") is not True:
+            return False
         try:
             values = (
                 o["notional"],

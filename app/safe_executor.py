@@ -25,6 +25,11 @@ class SafeExecutor(ExchangeExecutor):
             return None, "DUPLICATE_OR_UNRESOLVED_INTENT"
         if not (self.exit_gate() if request.reduce_only else self.gate()):
             return None, "LIVE_GATE_LOCKED"
+        if hasattr(self.inner, "validate"):
+            try:
+                self.inner.validate(request)
+            except (ValueError, TypeError):
+                return None, "REQUEST_NATIVE_VALIDATION_FAILED"
         if hasattr(self.diary, "claim_order_intent"):
             if not await self.diary.claim_order_intent(intent):
                 return None, "DUPLICATE_OR_UNRESOLVED_INTENT"
@@ -37,10 +42,20 @@ class SafeExecutor(ExchangeExecutor):
             if isinstance(error, asyncio.CancelledError):
                 raise
             return None, "SUBMIT_UNKNOWN_RECONCILE"
+        from .order_settlement import valid, TERMINAL
+        from .order_status import normalize
+
+        if not valid(result, request.qty):
+            await self.diary.save_order_intent(intent, "UNKNOWN")
+            return None, "ORDER_EVIDENCE_INVALID"
         state = (
-            "FILLED"
-            if result.filled >= request.qty - 1e-12
-            else ("PARTIAL" if result.filled > 0 else "ACK")
+            normalize(result.status)
+            if str(result.status).lower() in TERMINAL
+            else (
+                "FILLED"
+                if result.filled >= request.qty - 1e-12
+                else ("PARTIAL" if result.filled > 0 else "ACK")
+            )
         )
         if hasattr(self.diary, "save_order_intent_result"):
             await self.diary.save_order_intent_result(intent, state, result)

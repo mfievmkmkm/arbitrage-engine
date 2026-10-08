@@ -46,6 +46,7 @@ async def execute(
     private_delay=0.25,
     trade_id_hint=None,
     durable_store=None,
+    hybrid_requote=None,
 ):
     if private_snapshot is None:
         return LiveEntryResult(False, "PRIVATE_STATE_REQUIRED", "")
@@ -80,16 +81,18 @@ async def execute(
         await durable_store.phase(trade_id, "PLANNED", **meta)
         await durable_store.phase(trade_id, "ENTRY_SUBMITTING")
 
-    async def leg(name, leg, ex, price):
+    async def leg(name, leg, ex, price, order_policy=None):
+        order_policy = order_policy or policy
         req = SubmitRequest(
             symbol,
             leg.side,
             leg.contracts,
-            policy.order_type,
-            price,
+            order_policy.order_type,
+            None if order_policy.order_type == "market" else price,
             False,
-            policy.ioc,
+            order_policy.ioc,
             trade_id + ":" + name,
+            price if order_policy.order_type == "market" else None,
         )
         intent = OrderIntent(
             trade_id + ":" + name,
@@ -126,6 +129,72 @@ async def execute(
             trade_id,
             admission=adm,
         )
+    fallback_used = False
+    if lr.filled == 0 and sr.filled == 0:
+        if hybrid_requote is None:
+            return LiveEntryResult(False, "ENTRY_NO_FILL", trade_id, admission=adm)
+        from .hybrid_entry import assess, policy as fallback_policy
+
+        try:
+            proof = await asyncio.wait_for(hybrid_requote(), timeout)
+            allowed, reason = assess(lr, sr, plan, proof, long_price, short_price)
+        except Exception:
+            allowed, reason = False, "FALLBACK_REQUOTE_UNAVAILABLE"
+        if not allowed:
+            return LiveEntryResult(
+                False, "FALLBACK_BLOCKED:" + reason, trade_id, admission=adm
+            )
+        fp = fallback_policy()
+        fallback_used = True
+        adm = prepare(
+            plan,
+            fp,
+            proof.long_price,
+            proof.short_price,
+            fee_schedule,
+            min_net_edge_usd,
+            **admission_kwargs
+        )
+        if not adm.allowed:
+            return LiveEntryResult(
+                False,
+                "FALLBACK_NET_OR_RISK_BLOCKED:" + adm.reason,
+                trade_id,
+                admission=adm,
+            )
+        if durable_store is not None:
+            await durable_store.phase(
+                trade_id,
+                "ENTRY_SUBMITTING",
+                entry_stage="MARKET_FALLBACK",
+                fallback_book_ts=proof.book_ts,
+                fallback_native_plan=proof.native.row(),
+                fallback_long_quote=proof.long_price,
+                fallback_short_quote=proof.short_price,
+            )
+        l, s = await asyncio.gather(
+            leg("entry-market-long", plan.long, long_executor, proof.long_price, fp),
+            leg(
+                "entry-market-short", plan.short, short_executor, proof.short_price, fp
+            ),
+        )
+        lr, ls = l
+        sr, ss = s
+        if lr is None or sr is None:
+            return LiveEntryResult(
+                False, "FALLBACK_UNCERTAIN:" + ls + ":" + ss, trade_id, admission=adm
+            )
+        (lr, lc), (sr, sc) = await asyncio.gather(
+            settle(long_executor, lr, symbol, plan.long.contracts, timeout),
+            settle(short_executor, sr, symbol, plan.short.contracts, timeout),
+        )
+        if lr is None or sr is None:
+            return LiveEntryResult(
+                False,
+                "FALLBACK_WORKING_ORDER_UNCERTAIN:" + lc + ":" + sc,
+                trade_id,
+                admission=adm,
+            )
     rec = reconcile(
         lr.filled, plan.long.contract_size, sr.filled, plan.short.contract_size
     )
@@ -184,6 +253,23 @@ async def execute(
             trade_id,
             effective,
             None,
+            recovery,
+            adm,
+        )
+    if fallback_used and (
+        a.long_price > proof.long_price * (1 + 0.002)
+        or a.short_price < proof.short_price * (1 - 0.002)
+    ):
+        if durable_store is not None:
+            await durable_store.phase(
+                trade_id, "UNKNOWN", entry_hold_reason="FALLBACK_ACTUAL_SLIPPAGE_STOP"
+            )
+        return LiveEntryResult(
+            False,
+            "FALLBACK_ACTUAL_SLIPPAGE_STOP",
+            trade_id,
+            effective,
+            a,
             recovery,
             adm,
         )

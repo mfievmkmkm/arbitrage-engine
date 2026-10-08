@@ -134,6 +134,23 @@ def test_restart_rebuilds_from_actual_fills_and_private_contract_exposure(tmp_pa
     asyncio.run(go())
 
 
+def test_preserved_entry_hold_latches_stop_without_hiding_exposure(tmp_path):
+    async def go():
+        m, _ = await setup(tmp_path)
+        await entries(m)
+        await m.durable.phase(
+            "t", "UNKNOWN", entry_hold_reason="FALLBACK_ACTUAL_SLIPPAGE_STOP"
+        )
+        summary = await m.cycle()
+        assert m.stop.stopped and not summary["release_authorized"]
+        assert len(m.runtime.load()) == 1
+        assert any(
+            x["code"] == "FALLBACK_ACTUAL_SLIPPAGE_STOP" for x in summary["incidents"]
+        )
+
+    asyncio.run(go())
+
+
 @pytest.mark.parametrize(
     "case",
     [

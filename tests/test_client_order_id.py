@@ -4,6 +4,27 @@ from app.exchange_executor import SubmitRequest
 
 
 class C:
+    precisionMode = 4
+
+    def market(self, symbol):
+        return dict(
+            symbol=symbol,
+            contract=True,
+            linear=True,
+            base="X",
+            quote="USDT",
+            settle="USDT",
+            contractSize=1,
+            precision=dict(amount=1, price=0.01),
+            limits={"amount": {"min": 1}},
+        )
+
+    def amount_to_precision(self, symbol, amount):
+        return str(int(float(amount)))
+
+    def price_to_precision(self, symbol, price):
+        return str(round(float(price), 2))
+
     async def create_order(self, *args):
         self.args = args
         return {
@@ -34,7 +55,7 @@ def test_ccxt_client_order_id_sent_and_lookup_supported():
         c = C()
         e = CCXTExecutor("x", c)
         await e.submit(
-            SubmitRequest("X", "buy", 1, "market", None, False, False, "cid")
+            SubmitRequest("X", "buy", 1, "market", None, False, False, "cid", 100)
         )
         assert c.args[-1]["clientOrderId"] == "cid"
         r = await e.order_by_client_id("cid", "X")
