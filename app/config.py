@@ -50,6 +50,16 @@ class Config:
     )
     paper_trailing_drawdown: float = float(os.getenv("PAPER_TRAILING_DRAWDOWN", "0.20"))
     paper_max_seconds: int = max(60, int(os.getenv("PAPER_MAX_SECONDS", "1200")))
+    record_books: bool = os.getenv("RECORD_PUBLIC_BOOKS", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    book_history_max_rows: int = max(
+        1000, int(os.getenv("BOOK_HISTORY_MAX_ROWS", "200000"))
+    )
+    book_history_hours: int = max(1, int(os.getenv("BOOK_HISTORY_HOURS", "72")))
     exchanges: tuple[str, ...] = tuple(
         x.strip()
         for x in os.getenv(

@@ -31,6 +31,7 @@ class Quote:
     bids: list
     asks: list
     fetched: float
+    received_at: float | None = None
 
 
 def evaluate(buy, sell, notional, max_age, now=None, base_qty=None):
@@ -65,6 +66,7 @@ def evaluate(buy, sell, notional, max_age, now=None, base_qty=None):
         hypothetical_edge=edge.net_pct,
         notional=notional,
         ts=min(buy.fetched, sell.fetched),
+        decision_at=now,
         base_qty=qty,
         entry_buy=eb,
         entry_sell=es,
@@ -90,6 +92,7 @@ class Scanner:
     ):
         self.watch_routes = set()
         self.watch_positions = {}
+        self.on_books = None
         self.ids = [x for x in exchanges if x in ALLOWED]
         self.notional = notional
         self.max_age = max_age
@@ -182,6 +185,7 @@ class Scanner:
                         to_base_levels(b["bids"], spec.contract_size),
                         to_base_levels(b["asks"], spec.contract_size),
                         stamp,
+                        time.time(),
                     )
                 except Exception as e:
                     self.errors[name] = type(e).__name__
@@ -209,6 +213,8 @@ class Scanner:
         for q in rs:
             if q:
                 grouped.setdefault(q.symbol, []).append(q)
+        if self.on_books:
+            await self.on_books([q for q in rs if q], self.specs)
         now = time.time()
         ops = []
         for qs in grouped.values():

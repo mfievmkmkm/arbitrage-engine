@@ -9,6 +9,9 @@ from .export_service import write_csv
 from .secret_redaction import redact
 
 TABLES = {
+    "Market books": "market_books",
+    "Execution replay runs": "execution_replay_runs",
+    "Execution replay results": "execution_replay_results",
     "Observations": "observations",
     "Strategy observations": "strategy_observations",
     "Paper trades": "paper_positions",

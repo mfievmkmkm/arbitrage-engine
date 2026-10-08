@@ -15,7 +15,6 @@ from .config import config
 from .db import Diary
 from .engine import Scanner
 from .paper import PaperEngine
-from .reports import build_replay_report
 from .risk import RiskGuard
 from .private_registry import PrivateRegistry
 from .private_order_reader import Reader as PrivateOrderReader
@@ -46,7 +45,6 @@ from .ledger_store import init as ledger_init, add as ledger_add
 from .paper_ledger import restore as restore_ledger
 from .secondary_bootstrap import build_bundle
 from .audit_export import build as build_audit_export
-from .replay import walk_forward
 from .strategy_toggle_store import Store as StrategyToggleStore
 from .venue_mode_store import Store as VenueModeStore
 from .venue_controller import Controller as VenueController
@@ -88,6 +86,11 @@ from .tg_system_center import render as render_system_center
 from .tg_position_console import paper as render_positions
 from .spot_spot_view import render as render_spot_inventory
 from .funding_paper_view import render as render_funding_paper
+from .book_history import Store as BookHistory
+from .execution_book_replay import (
+    build as build_execution_replay,
+    render as render_execution_replay,
+)
 from .market_console import merged as merged_market
 from .tg_market_keyboard import build as market_keyboard, selection_key
 from .tg_market_detail import render as render_market_detail
@@ -232,18 +235,16 @@ async def text_for(s):
         return render_sf_replay(
             await build_sf_replay(config.db_path, max_gap=max(120, config.interval * 3))
         )
+    if s == "execution_replay":
+        return render_execution_replay(await build_execution_replay(config.db_path))
     if s == "replay":
-        data = await diary.replay_trades()
-        validation = walk_forward(data)
-        if validation["status"] == "validated_split":
-            tr = validation["train"]
-            te = validation["test"]
-            return f"🧪 REPLAY • хронологическая проверка\nTrain: {validation['train_size']} • NET {tr['net']:+.4f}$\nПараметры: target {tr['target']:.0%}, trailing {tr['trailing']:.0%}, {tr['seconds']} сек\nОтложенная выборка: {validation['test_size']}\nOOS NET: {te['net']:+.4f}$ • PF {te['profit_factor']:.2f}\nMax DD: {te['max_drawdown']:.4f}$\nПараметры автоматически не меняются."
-        rows, report = await build_replay_report(diary)
-        if not rows:
-            return "🧠 REPLAY\nПока недостаточно закрытых paper-сделок."
-        b = rows[0]
-        return f"🧠 REPLAY • исследовательский\nСделок: {b['trades']}\nЛучший кандидат: target {b['target']*100:.0f}% / trailing {b['trailing']*100:.0f}% / {b['seconds']//60} мин\nNET: {b['net']:+.4f} USD\nWin rate: {b['win_rate']:.1f}%\nMax DD: {b['max_drawdown']:.4f} USD\n\n⚠️ In-sample: параметры автоматически не меняются."
+        return render_sf_replay(
+            await build_sf_replay(
+                config.db_path,
+                max_gap=max(120, config.interval * 3),
+                strategy="futures_futures",
+            )
+        )
     if s == "diary":
         count, last, best = await diary.summary()
         trades, pnl, wins = await diary.paper_stats()
@@ -314,6 +315,7 @@ async def start(m: Message):
         "sf_replay",
         "ss_replay",
         "fund_replay",
+        "execution_replay",
         "funding_paper",
         "ss_inventory",
         "exchanges",
@@ -374,6 +376,7 @@ async def commands(m: Message):
             "sf_replay",
             "ss_replay",
             "fund_replay",
+            "execution_replay",
             "funding_paper",
             "ss_inventory",
             "exchanges",
@@ -450,7 +453,13 @@ def keyboard_for(screen):
         return venue_keyboard(scanner.ids)
     if screen == "strategies":
         return strategy_menu(strategy_runtime.enabled)
-    if screen in ("replay", "sf_replay", "ss_replay", "fund_replay"):
+    if screen in (
+        "replay",
+        "sf_replay",
+        "ss_replay",
+        "fund_replay",
+        "execution_replay",
+    ):
         return replay_menu(screen)
     if screen == "paper":
         return InlineKeyboardMarkup(
@@ -623,7 +632,11 @@ async def scanning():
                 )
             decisions = []
             for o in latest:
-                reason = paper_entry_reason(o)
+                reason = (
+                    "CLOSED_THIS_CYCLE"
+                    if o["symbol"] in {p.symbol for p in closed}
+                    else paper_entry_reason(o)
+                )
                 p = await paper.open(o) if reason == "ENTRY_ALLOWED" else None
                 decisions.append(
                     {
@@ -661,6 +674,15 @@ async def main():
     try:
         Path(config.db_path).parent.mkdir(parents=True, exist_ok=True)
         await diary.init()
+        scanner.on_books = None
+        if config.record_books:
+            book_history = BookHistory(
+                config.db_path,
+                max_rows=config.book_history_max_rows,
+                retention_seconds=config.book_history_hours * 3600,
+            )
+            await book_history.init()
+            scanner.on_books = book_history.record
         await strategy_diary_init(config.db_path)
         await ledger_init(config.db_path)
         await durable.init()

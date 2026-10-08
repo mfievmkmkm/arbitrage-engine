@@ -9,7 +9,11 @@
 
 `app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, Spot/Spot scanner с сохраняемыми виртуальными запасами и Funding scanner с сохраняемым Paper. Для DEX доступен опциональный 0x price-research; кошелёк не подписывает и не отправляет транзакции.
 
-Telegram: `/start`, `/top`, `/paper`, `/funding_paper`, `/fund_replay`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
+Telegram: `/start`, `/top`, `/paper`, `/funding_paper`, `/fund_replay`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/execution_replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
+
+Основной `/replay` использует проверенные Paper marks и purged train/test. `/execution_replay` проверяет задержки, partial fills и закрытие остатка по записанным публичным REST-стаканам. Незавершённое исполнение не получает итоговый NET. Это offline-модель IOC/taker, а не реальные fills; funding из этой проверки исключён, результат не меняет капитал.
+
+Стаканы записываются в основном сканере с временами котировки и получения. По умолчанию хранятся до 200 000 строк / 72 часов; настройка `RECORD_PUBLIC_BOOKS`, `BOOK_HISTORY_MAX_ROWS`, `BOOK_HISTORY_HOURS` в `.env.example`. Использованные доказательства сохраняются внутри результатов исполнения.
 
 В `/export` формируются XLSX и ZIP с CSV-таблицами и JSON-входом для анализа. Replay выбирает параметры на train и отдельно показывает отложенную выборку; параметры автоматически не меняются.
 

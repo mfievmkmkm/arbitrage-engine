@@ -106,6 +106,13 @@ def replay_menu(screen="replay"):
                     "primary" if screen == "fund_replay" else None,
                 )
             ],
+            [
+                button(
+                    "⏱ Исполнение и задержки",
+                    "execution_replay",
+                    "primary" if screen == "execution_replay" else None,
+                )
+            ],
             [button("↻ Обновить", screen), button("‹ Главное меню", "home")],
         ]
     )

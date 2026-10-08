@@ -88,6 +88,17 @@ class Diary:
                     c.lastrowid,
                 ),
             )
+            if p.get("last_mark"):
+                await d.execute(
+                    "INSERT INTO paper_marks(position_id,ts,net_usd,spread,payload) VALUES(?,?,?,?,?)",
+                    (
+                        c.lastrowid,
+                        p["last_mark"]["ts"],
+                        p["current_net_usd"],
+                        p["current_spread"],
+                        json.dumps(p["last_mark"]),
+                    ),
+                )
             await d.commit()
             return c.lastrowid
 
@@ -122,7 +133,7 @@ class Diary:
             await d.execute(
                 "UPDATE paper_positions SET status='CLOSED',closed_at=?,close_reason=?,best_net_usd=?,current_net_usd=?,current_spread=? WHERE id=?",
                 (
-                    time.time(),
+                    (p.get("last_mark") or {}).get("ts", time.time()),
                     reason,
                     p["best_net_usd"],
                     p["current_net_usd"],
@@ -136,9 +147,14 @@ class Diary:
         async with aiosqlite.connect(self.path) as d:
             d.row_factory = aiosqlite.Row
             async with d.execute(
-                "SELECT id,symbol,buy,sell,notional,entry_buy,entry_sell,entry_spread,opened_at,best_net_usd,current_net_usd,current_spread,status,base_qty,entry_fees_usd,COALESCE(safety_usd,0) AS safety_usd FROM paper_positions WHERE status='OPEN'"
+                "SELECT id,symbol,buy,sell,notional,entry_buy,entry_sell,entry_spread,opened_at,best_net_usd,current_net_usd,current_spread,status,base_qty,entry_fees_usd,COALESCE(safety_usd,0) AS safety_usd,(SELECT payload FROM paper_marks m WHERE m.position_id=paper_positions.id ORDER BY ts DESC,id DESC LIMIT 1) AS last_mark FROM paper_positions WHERE status='OPEN'"
             ) as c:
-                return [dict(x) for x in await c.fetchall()]
+                rows = [dict(x) for x in await c.fetchall()]
+                for row in rows:
+                    row["last_mark"] = (
+                        json.loads(row["last_mark"]) if row["last_mark"] else None
+                    )
+                return rows
 
     async def paper_stats(self):
         async with aiosqlite.connect(self.path) as d:

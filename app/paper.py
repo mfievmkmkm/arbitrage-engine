@@ -78,6 +78,18 @@ class PaperEngine:
                 if k in o
             ):
                 return False
+            if any(
+                not math.isfinite(float(o[k])) or float(o[k]) <= 0
+                for k in ("exit_buy", "exit_sell")
+                if k in o
+            ):
+                return False
+            if any(
+                not math.isfinite(float(o[k]))
+                for k in ("exit_spread", "executable", "ts", "decision_at")
+                if k in o
+            ):
+                return False
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return False
         return (
@@ -108,7 +120,7 @@ class PaperEngine:
             o["entry_buy"],
             o["entry_sell"],
             o["executable"],
-            o.get("ts", time.time()),
+            o.get("decision_at", o.get("ts", time.time())),
             current_spread=o["executable"],
             base_qty=(
                 o["base_qty"]
@@ -126,6 +138,30 @@ class PaperEngine:
             + (p.entry_fees_usd or 0)
             + p.safety_usd
         )
+        if p.entry_fees_usd is not None and all(
+            k in o for k in ("exit_buy", "exit_sell", "exit_spread")
+        ):
+            gross = p.base_qty * (
+                (o["exit_buy"] - p.entry_buy) + (p.entry_sell - o["exit_sell"])
+            )
+            exit_fees = (
+                p.base_qty * (o["exit_buy"] + o["exit_sell"]) * o["fee_pct"] / 400
+            )
+            p.current_net_usd = gross - p.entry_fees_usd - exit_fees - p.safety_usd
+            p.current_spread = o["exit_spread"]
+            p.best_net_usd = max(0, p.current_net_usd)
+            p.last_mark = dict(
+                ts=p.opened_at,
+                base_qty=p.base_qty,
+                gross=gross,
+                entry_fees=p.entry_fees_usd,
+                exit_fees=exit_fees,
+                safety=p.safety_usd,
+                funding=0,
+                net=p.current_net_usd,
+                exit_spread=p.current_spread,
+                mode="PAPER_MODEL",
+            )
         self.pending_capital += reserved
         try:
             p.id = await self.diary.create_paper_position(asdict(p))
@@ -140,6 +176,10 @@ class PaperEngine:
         for p in list(self.positions.values()):
             o = lookup.get((p.symbol, p.buy, p.sell))
             if not o:
+                continue
+            if o.get("decision_at", o.get("ts", time.time())) < (p.last_mark or {}).get(
+                "ts", p.opened_at
+            ):
                 continue
             if o.get("ts") is not None and (
                 not math.isfinite(o["ts"]) or not 0 <= time.time() - o["ts"] <= 12
@@ -173,13 +213,15 @@ class PaperEngine:
             funding = p.notional * float(o.get("settled_funding_pct", 0)) / 100
             p.current_net_usd = gross - fees - p.safety_usd + funding
             p.last_mark = dict(
-                ts=o.get("ts", time.time()),
+                ts=o.get("decision_at", o.get("ts", time.time())),
+                quote_ts=o.get("ts"),
                 base_qty=qty,
                 gross=gross,
                 entry_fees=p.entry_fees_usd,
                 exit_fees=exit_fees,
                 safety=p.safety_usd,
                 funding=funding,
+                exit_spread=o["exit_spread"],
                 net=p.current_net_usd,
                 mode="PAPER_MODEL",
             )
