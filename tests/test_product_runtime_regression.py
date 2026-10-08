@@ -264,7 +264,11 @@ def test_main_wires_secondary_runtime_and_cleans_up_without_network(
             async def start(self):
                 events.append("secondary-start")
 
-        bundle = SimpleNamespace(runtime=Runtime(), sf_paper=Engine())
+        bundle = SimpleNamespace(
+            runtime=Runtime(),
+            sf_paper=Engine(),
+            ss_paper=SimpleNamespace(used_capital=0),
+        )
 
         async def close():
             events.append("secondary-close")

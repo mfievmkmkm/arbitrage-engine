@@ -35,6 +35,20 @@ async def restore(path, ledger, risk=None):
                     (midnight,),
                 ) as c:
                     today += float((await c.fetchone())[0])
+        async with d.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='spot_spot_paper'"
+        ) as c:
+            exists = await c.fetchone()
+        if exists:
+            async with d.execute(
+                "SELECT COALESCE(SUM(net),0) FROM spot_spot_paper WHERE status!='OPEN'"
+            ) as c:
+                ledger.realized += float((await c.fetchone())[0])
+            async with d.execute(
+                "SELECT COALESCE(SUM(net),0) FROM spot_spot_paper WHERE status!='OPEN' AND closed_at>=?",
+                (midnight,),
+            ) as c:
+                today += float((await c.fetchone())[0])
     if risk is not None:
         risk.on_paper_close(today)
     return ledger

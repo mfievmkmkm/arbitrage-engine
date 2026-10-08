@@ -92,6 +92,13 @@ def replay_menu(screen="replay"):
                     "primary" if screen == "sf_replay" else None,
                 )
             ],
+            [
+                button(
+                    "Спот ↔ Спот",
+                    "ss_replay",
+                    "primary" if screen == "ss_replay" else None,
+                )
+            ],
             [button("↻ Обновить", screen), button("‹ Главное меню", "home")],
         ]
     )

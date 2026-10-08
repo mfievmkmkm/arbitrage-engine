@@ -9,7 +9,15 @@ from .spot_future_exit import decide
 from .spot_future_replay import metrics
 
 
-async def dataset(path, max_gap=120):
+async def dataset(path, max_gap=120, strategy="spot_futures"):
+    if strategy not in ("spot_futures", "spot_spot"):
+        raise ValueError("REPLAY_STRATEGY_INVALID")
+    trade_table = (
+        "spot_future_paper" if strategy == "spot_futures" else "spot_spot_paper"
+    )
+    mark_table = (
+        "spot_future_marks" if strategy == "spot_futures" else "spot_spot_marks"
+    )
     trades = []
     excluded = {}
 
@@ -20,20 +28,23 @@ async def dataset(path, max_gap=120):
         d.row_factory = aiosqlite.Row
         await d.execute("BEGIN")
         async with d.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='spot_future_marks'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (mark_table,),
         ) as c:
             if not await c.fetchone():
                 return [], {"HISTORY_NOT_COLLECTED": 1}
-        async with d.execute("PRAGMA table_info(spot_future_marks)") as c:
+        async with d.execute("PRAGMA table_info(" + mark_table + ")") as c:
             if "payload" not in {x["name"] for x in await c.fetchall()}:
                 return [], {"LEGACY_MARKS": 1}
         async with d.execute(
-            "SELECT * FROM spot_future_paper WHERE status!='OPEN' ORDER BY opened_at,id"
+            "SELECT * FROM "
+            + trade_table
+            + " WHERE status!='OPEN' ORDER BY opened_at,id"
         ) as c:
             rows = await c.fetchall()
         for row in rows:
             async with d.execute(
-                "SELECT * FROM spot_future_marks WHERE position_id=? ORDER BY ts,id",
+                "SELECT * FROM " + mark_table + " WHERE position_id=? ORDER BY ts,id",
                 (row["id"],),
             ) as c:
                 marks = await c.fetchall()
@@ -44,7 +55,7 @@ async def dataset(path, max_gap=120):
                 position = json.loads(row["payload"])
                 opened = float(row["opened_at"])
                 closed = float(row["closed_at"])
-                qty = float(row["base_qty"])
+                qty = float(position["base_qty"])
                 if (
                     not all(math.isfinite(x) for x in (opened, closed, qty))
                     or qty <= 0
@@ -195,14 +206,22 @@ def evaluate(trades, excluded=None, min_train=3, min_test=3):
     return report
 
 
-async def build(path, max_gap=120):
-    trades, excluded = await dataset(path, max_gap)
-    return evaluate(trades, excluded)
+async def build(path, max_gap=120, strategy="spot_futures"):
+    trades, excluded = await dataset(path, max_gap, strategy)
+    report = evaluate(trades, excluded)
+    report["strategy"] = strategy
+    return report
 
 
 def render(report):
     out = [
-        "🧪 <b>Проверка истории · Спот ↔ Фьючерсы</b>",
+        "🧪 <b>Проверка истории · "
+        + (
+            "Спот ↔ Спот"
+            if report.get("strategy") == "spot_spot"
+            else "Спот ↔ Фьючерсы"
+        )
+        + "</b>",
         "<i>Модель по записанным ценам и затратам Paper.</i>",
         f"\nПодходящих сделок: <b>{report['eligible']}</b>",
         f"Исключено: <b>{sum(report['excluded'].values())}</b> · пересечение окон: <b>{report['purged']}</b>",

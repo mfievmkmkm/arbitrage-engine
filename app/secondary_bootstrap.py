@@ -6,6 +6,7 @@ from .spot_future_cycle_service import CycleService as SpotFutureCycle
 from .spot_future_paper_engine import Engine as SpotFuturePaper
 from .strategy_paper_coordinator import Coordinator
 from .spot_spot_service import Service as SpotSpotService
+from .spot_spot_paper import Engine as SpotSpotPaper
 from .strategy_universe import common_spot_symbols
 from .secondary_strategy_runtime import SecondaryRuntime
 from .funding_arb_service import Service as FundingService
@@ -18,6 +19,7 @@ class Bundle:
         self.runtime = runtime
         self.sf_paper = sf_paper
         self.dex_provider = None
+        self.ss_paper = None
 
     async def close(self):
         await self.runtime.stop()
@@ -47,9 +49,21 @@ async def build_bundle(
         await cycle.restore()
         sr = SecondaryRuntime(runtime, record, db_path, interval)
         sr.add("spot_futures", cycle)
+        inventory = json.loads(os.getenv("PAPER_SPOT_INVENTORY_JSON", "{}"))
+        if not isinstance(inventory, dict):
+            raise ValueError("PAPER_SPOT_INVENTORY_INVALID")
+        ss_paper = SpotSpotPaper(
+            db_path,
+            inventory,
+            capital=float(os.getenv("PAPER_CAPITAL_USD", "50")),
+            entry_edge=min_edge,
+        )
+        await ss_paper.init()
         sr.add(
             "spot_spot",
-            SpotSpotService(clients, common_spot_symbols(clients), notional, batch=5),
+            SpotSpotService(
+                clients, common_spot_symbols(clients), notional, batch=5, paper=ss_paper
+            ),
         )
         if funding_service:
             sr.add(
@@ -60,6 +74,7 @@ async def build_bundle(
                 ),
             )
         bundle = Bundle(clients, sr, paper)
+        bundle.ss_paper = ss_paper
         routes = json.loads(os.getenv("DEX_RESEARCH_ROUTES_JSON", "[]"))
         if routes and os.getenv("ZEROX_API_KEY"):
             required = {"chain_id", "sell_token", "buy_token", "sell_amount_raw"}

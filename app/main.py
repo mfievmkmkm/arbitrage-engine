@@ -86,6 +86,7 @@ from .market_console import render as render_market_console
 from .tg_risk_center import render as render_risk_center
 from .tg_system_center import render as render_system_center
 from .tg_position_console import paper as render_positions
+from .spot_spot_view import render as render_spot_inventory
 from .market_console import merged as merged_market
 from .tg_market_keyboard import build as market_keyboard, selection_key
 from .tg_market_detail import render as render_market_detail
@@ -201,7 +202,20 @@ async def text_for(s):
     if s == "top":
         return render_market_console(strategy_runtime)
     if s == "paper":
-        return render_positions(paper, secondary.sf_paper if secondary else None)
+        text = render_positions(paper, secondary.sf_paper if secondary else None)
+        if secondary:
+            text += render_spot_inventory(secondary.ss_paper, positions_only=True)
+        return text
+    if s == "ss_inventory":
+        return render_spot_inventory(secondary.ss_paper if secondary else None)
+    if s == "ss_replay":
+        return render_sf_replay(
+            await build_sf_replay(
+                config.db_path,
+                max_gap=max(120, config.interval * 3),
+                strategy="spot_spot",
+            )
+        )
     if s == "sf_replay":
         return render_sf_replay(
             await build_sf_replay(config.db_path, max_gap=max(120, config.interval * 3))
@@ -286,6 +300,8 @@ async def start(m: Message):
         "diary",
         "replay",
         "sf_replay",
+        "ss_replay",
+        "ss_inventory",
         "exchanges",
         "status",
         "risk",
@@ -342,6 +358,8 @@ async def commands(m: Message):
             "diary",
             "replay",
             "sf_replay",
+            "ss_replay",
+            "ss_inventory",
             "exchanges",
             "status",
             "risk",
@@ -416,8 +434,24 @@ def keyboard_for(screen):
         return venue_keyboard(scanner.ids)
     if screen == "strategies":
         return strategy_menu(strategy_runtime.enabled)
-    if screen in ("replay", "sf_replay"):
+    if screen in ("replay", "sf_replay", "ss_replay"):
         return replay_menu(screen)
+    if screen == "paper":
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🏦 Запасы Spot/Spot", callback_data="ss_inventory"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(text="↻ Обновить", callback_data="paper"),
+                    InlineKeyboardButton(text="‹ Главное меню", callback_data="home"),
+                ],
+            ]
+        )
+    if screen == "ss_inventory":
+        return back_menu(screen, "paper")
     if screen in ("live_positions", "incidents"):
         return back_menu(screen, "live")
     return back_menu(screen)
@@ -720,8 +754,30 @@ async def main():
             and strategy_runtime.enabled["spot_futures"]
         )
         secondary.sf_paper.capital = config.paper_capital
-        secondary.sf_paper.reserved = lambda: paper.used_capital
-        paper.external_reserved = lambda: secondary.sf_paper.used_capital
+        ss = secondary.ss_paper
+        ss.capital = config.paper_capital
+        ss.max_age = config.paper_max_seconds
+        ss.trailing = config.paper_trailing_drawdown
+        ss.external_reserved = (
+            lambda: paper.used_capital + secondary.sf_paper.used_capital
+        )
+        if (
+            getattr(ss, "allocated_capital", ss.used_capital) + ss.external_reserved()
+            > config.paper_capital
+        ):
+            raise ValueError("SHARED_PAPER_INVENTORY_BUDGET_EXCEEDED")
+        ss.allow_open = (
+            lambda x: not scanner.paused
+            and risk.can_open_paper()
+            and all(
+                venue_controller.get(v)["paper"] and venue_controller.get(v)["scan"]
+                for v in (x["buy"], x["sell"])
+            )
+        )
+        secondary.sf_paper.reserved = lambda: paper.used_capital + ss.used_capital
+        paper.external_reserved = (
+            lambda: secondary.sf_paper.used_capital + ss.used_capital
+        )
         secondary.runtime.services["spot_spot"].source.allowed_venue = (
             lambda v: not scanner.paused and venue_controller.get(v)["scan"]
         )
@@ -744,6 +800,22 @@ async def main():
             )
             await notify_paper_close(position.base, position.net, position.status)
 
+        async def ss_closed(position):
+            risk.on_paper_close(position["net"])
+            bankroll.apply(position["net"])
+            await ledger_add(
+                config.db_path,
+                position["closed_at"],
+                "SPOT_SPOT_PAPER_NET",
+                position["net"],
+                "ss:" + str(position["id"]),
+                note=position["symbol"],
+            )
+            await notify_paper_close(
+                position["symbol"], position["net"], position["status"]
+            )
+
+        ss.on_closed = ss_closed
         sf_cycle.on_closed = sf_closed
         await secondary.runtime.start()
         bot = Bot(token=config.token)

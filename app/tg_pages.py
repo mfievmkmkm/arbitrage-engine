@@ -10,7 +10,9 @@ def strategies(runtime):
     for name, label in labels.items():
         enabled = getattr(runtime, "enabled", {}).get(name, False)
         mode = (
-            "Paper" if name in ("futures_futures", "spot_futures") else "Исследование"
+            "Paper"
+            if name in ("futures_futures", "spot_futures", "spot_spot")
+            else "Исследование"
         )
         out.append(
             f"<b>{label}</b>\n{'🟢 Включена' if enabled else '⚫ Выключена'} • {mode} • REAL 🔒\nНаблюдений сейчас: {runtime.counts().get(name,0)}"
