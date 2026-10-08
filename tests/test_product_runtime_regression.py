@@ -268,6 +268,7 @@ def test_main_wires_secondary_runtime_and_cleans_up_without_network(
             runtime=Runtime(),
             sf_paper=Engine(),
             ss_paper=SimpleNamespace(used_capital=0),
+            funding_paper=None,
         )
 
         async def close():

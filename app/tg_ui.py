@@ -99,6 +99,13 @@ def replay_menu(screen="replay"):
                     "primary" if screen == "ss_replay" else None,
                 )
             ],
+            [
+                button(
+                    "Funding · история ставок",
+                    "fund_replay",
+                    "primary" if screen == "fund_replay" else None,
+                )
+            ],
             [button("↻ Обновить", screen), button("‹ Главное меню", "home")],
         ]
     )

@@ -7,9 +7,9 @@
 
 ## Работающий запуск
 
-`app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, исследовательские Spot/Spot и Funding loops. Для DEX доступен опциональный 0x price-research; кошелёк не подписывает и не отправляет транзакции.
+`app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, Spot/Spot scanner с сохраняемыми виртуальными запасами и Funding scanner с сохраняемым Paper. Для DEX доступен опциональный 0x price-research; кошелёк не подписывает и не отправляет транзакции.
 
-Telegram: `/start`, `/top`, `/paper`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
+Telegram: `/start`, `/top`, `/paper`, `/funding_paper`, `/fund_replay`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
 
 В `/export` формируются XLSX и ZIP с CSV-таблицами и JSON-входом для анализа. Replay выбирает параметры на train и отдельно показывает отложенную выборку; параметры автоматически не меняются.
 
@@ -26,6 +26,8 @@ python -m pytest -q
 Все обращения к биржам в основном процессе остаются публичными или read-only private reconciliation. Наличие API-ключей не разрешает отправку ордеров.
 
 SQLite хранит дневник, Paper и durable LIVE-фазы. JSON RuntimeStore служит кешем. UNKNOWN и работающие ордера блокируют новый LIVE-допуск; закрытие считается подтверждённым только после private exposure=0.
+
+Funding Paper рассчитывает направление на общем горизонте и фиксирует выход по свежим стаканам. Итог ожидает полную историческую проверку ставок; резерв остаётся занят до неё. Историческая ставка умножается на reference notional входа — это модель, а не фактическая выплата биржи.
 
 Funding-прогноз не считается полученной прибылью. Статистика Paper и Replay — модельные результаты на REST-наблюдениях; реальные fills, latency и комиссии должны подтверждаться отдельно.
 

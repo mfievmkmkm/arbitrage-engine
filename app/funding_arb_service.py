@@ -29,14 +29,18 @@ class Service:
                 ):
                     continue
                 ra, rb = to_pct(x.rate), to_pct(y.rate)
-                long, short = (a, b) if ra <= rb else (b, a)
-                lr, sr = (ra, rb) if ra <= rb else (rb, ra)
+                # Direction follows normalized carry over the same horizon, not raw rate.
+                ca, cb = ra / x.interval_hours, rb / y.interval_hours
+                long, short = (a, b) if ca <= cb else (b, a)
+                lr, sr = (ra, rb) if ca <= cb else (rb, ra)
                 li, si = (
                     (x.interval_hours, y.interval_hours)
-                    if ra <= rb
+                    if ca <= cb
                     else (y.interval_hours, x.interval_hours)
                 )
                 e = calculate(lr, sr, 8, li, si, self.fee_pct, 0.05, 0.02)
                 if e.allowed:
-                    out.append(FundingArb(True, long, short, e.net_pct, "OK"))
+                    out.append(
+                        FundingArb(True, long, short, e.net_pct, "OK", e.carry_pct)
+                    )
         return sorted(out, key=lambda z: z.carry_pct, reverse=True)

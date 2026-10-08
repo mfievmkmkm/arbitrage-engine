@@ -10,14 +10,18 @@ from .spot_future_replay import metrics
 
 
 async def dataset(path, max_gap=120, strategy="spot_futures"):
-    if strategy not in ("spot_futures", "spot_spot"):
+    if strategy not in ("spot_futures", "spot_spot", "funding_arb"):
         raise ValueError("REPLAY_STRATEGY_INVALID")
-    trade_table = (
-        "spot_future_paper" if strategy == "spot_futures" else "spot_spot_paper"
-    )
-    mark_table = (
-        "spot_future_marks" if strategy == "spot_futures" else "spot_spot_marks"
-    )
+    trade_table = {
+        "spot_futures": "spot_future_paper",
+        "spot_spot": "spot_spot_paper",
+        "funding_arb": "funding_paper",
+    }[strategy]
+    mark_table = {
+        "spot_futures": "spot_future_marks",
+        "spot_spot": "spot_spot_marks",
+        "funding_arb": "funding_paper_marks",
+    }[strategy]
     trades = []
     excluded = {}
 
@@ -39,7 +43,11 @@ async def dataset(path, max_gap=120, strategy="spot_futures"):
         async with d.execute(
             "SELECT * FROM "
             + trade_table
-            + " WHERE status!='OPEN' ORDER BY opened_at,id"
+            + (
+                " WHERE status='CLOSED' ORDER BY opened_at,id"
+                if strategy == "funding_arb"
+                else " WHERE status!='OPEN' ORDER BY opened_at,id"
+            )
         ) as c:
             rows = await c.fetchall()
         for row in rows:
@@ -72,7 +80,12 @@ async def dataset(path, max_gap=120, strategy="spot_futures"):
                     p = json.loads(mark["payload"])
                     ts = float(mark["ts"])
                     net = float(mark["net"])
-                    if p.get("mode") != "PAPER_MODEL":
+                    if strategy == "funding_arb" and not p.get("funding_known"):
+                        continue
+                    if p.get("mode") not in (
+                        "PAPER_MODEL",
+                        "FUNDING_PUBLIC_HISTORY_MODEL",
+                    ):
                         raise ValueError("MARK_MODE_INVALID")
                     if not all(
                         math.isfinite(float(p[k]))
@@ -118,6 +131,8 @@ async def dataset(path, max_gap=120, strategy="spot_futures"):
                         continue
                     path_marks.append((ts, net))
                     previous = ts
+                if not path_marks:
+                    raise ValueError("VERIFIED_MARKS_MISSING")
                 if closed - previous > max_gap:
                     raise ValueError("END_GAP")
                 trades.append(
@@ -217,9 +232,13 @@ def render(report):
     out = [
         "🧪 <b>Проверка истории · "
         + (
-            "Спот ↔ Спот"
-            if report.get("strategy") == "spot_spot"
-            else "Спот ↔ Фьючерсы"
+            "Funding · модель истории ставок"
+            if report.get("strategy") == "funding_arb"
+            else (
+                "Спот ↔ Спот"
+                if report.get("strategy") == "spot_spot"
+                else "Спот ↔ Фьючерсы"
+            )
         )
         + "</b>",
         "<i>Модель по записанным ценам и затратам Paper.</i>",

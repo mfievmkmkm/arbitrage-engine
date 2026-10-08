@@ -198,4 +198,4 @@ def test_capital_reserves_actual_values_of_both_legs():
     assert not engine.open(x)
     engine.capital = 215
     assert engine.open(x)
-    assert engine.used_capital == 210
+    assert engine.used_capital == pytest.approx(210.31)

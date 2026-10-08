@@ -1,6 +1,6 @@
 """Public market-data discovery. No order placement."""
 
-import asyncio, time
+import asyncio, time, math
 from dataclasses import dataclass
 from .exchange_names import exchange_class
 from .discovery import RotatingUniverse
@@ -10,6 +10,7 @@ from .net_edge import calculate as net_edge
 from .funding_service import FundingService
 from .instruments import compatible
 from .contract_book import to_base_levels
+from .spot_future_vwap import vwap
 
 FEE_BPS = {
     "binance": 5.0,
@@ -32,18 +33,7 @@ class Quote:
     fetched: float
 
 
-def vwap(levels, qty):
-    rem, total = qty, 0.0
-    for price, amount in levels:
-        take = min(rem, amount)
-        total += take * price
-        rem -= take
-        if rem <= 1e-10:
-            return total / qty
-    return None
-
-
-def evaluate(buy, sell, notional, max_age, now=None):
+def evaluate(buy, sell, notional, max_age, now=None, base_qty=None):
     now = time.time() if now is None else now
     if buy.symbol != sell.symbol or buy.exchange == sell.exchange:
         return None
@@ -51,7 +41,7 @@ def evaluate(buy, sell, notional, max_age, now=None):
         return None
     if not buy.asks or not buy.bids or not sell.bids or not sell.asks:
         return None
-    qty = notional / buy.asks[0][0]
+    qty = notional / buy.asks[0][0] if base_qty is None else base_qty
     eb = vwap(buy.asks, qty)
     es = vwap(sell.bids, qty)
     xb = vwap(buy.bids, qty)
@@ -74,7 +64,8 @@ def evaluate(buy, sell, notional, max_age, now=None):
         safety_pct=0.0,
         hypothetical_edge=edge.net_pct,
         notional=notional,
-        ts=now,
+        ts=min(buy.fetched, sell.fetched),
+        base_qty=qty,
         entry_buy=eb,
         entry_sell=es,
         exit_buy=xb,
@@ -98,6 +89,7 @@ class Scanner:
         hold_seconds=1200,
     ):
         self.watch_routes = set()
+        self.watch_positions = {}
         self.ids = [x for x in exchanges if x in ALLOWED]
         self.notional = notional
         self.max_age = max_age
@@ -165,10 +157,21 @@ class Scanner:
         async def fetch(name, symbol):
             async with sem:
                 started = time.perf_counter()
+                requested_at = time.time()
                 try:
                     b = await asyncio.wait_for(
                         self.clients[name].fetch_order_book(symbol, limit=20), timeout=8
                     )
+                    stamp = (
+                        float(b["timestamp"]) / 1000
+                        if b.get("timestamp") is not None
+                        else requested_at
+                    )
+                    if (
+                        not math.isfinite(stamp)
+                        or not 0 <= time.time() - stamp <= self.max_age
+                    ):
+                        return None
                     self.health.success(name, (time.perf_counter() - started) * 1000)
                     spec = self.specs[name][symbol]
                     if not b.get("asks") or not b.get("bids"):
@@ -178,7 +181,7 @@ class Scanner:
                         symbol,
                         to_base_levels(b["bids"], spec.contract_size),
                         to_base_levels(b["asks"], spec.contract_size),
-                        time.time(),
+                        stamp,
                     )
                 except Exception as e:
                     self.errors[name] = type(e).__name__
@@ -222,7 +225,15 @@ class Scanner:
                         self.specs[b.exchange][b.symbol], self.notional, b.bids[0][0]
                     ):
                         continue
-                    r = evaluate(a, b, self.notional, self.max_age, now)
+                    position = self.watch_positions.get(
+                        (a.symbol, a.exchange, b.exchange)
+                    )
+                    qty = (
+                        (position.base_qty or position.notional / position.entry_buy)
+                        if position
+                        else None
+                    )
+                    r = evaluate(a, b, self.notional, self.max_age, now, base_qty=qty)
                     if r and (
                         r["hypothetical_edge"] > 0
                         or (r["symbol"], r["buy"], r["sell"]) in self.watch_routes

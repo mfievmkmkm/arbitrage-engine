@@ -87,6 +87,7 @@ from .tg_risk_center import render as render_risk_center
 from .tg_system_center import render as render_system_center
 from .tg_position_console import paper as render_positions
 from .spot_spot_view import render as render_spot_inventory
+from .funding_paper_view import render as render_funding_paper
 from .market_console import merged as merged_market
 from .tg_market_keyboard import build as market_keyboard, selection_key
 from .tg_market_detail import render as render_market_detail
@@ -154,9 +155,9 @@ def fmt_top():
 
 def fmt_paper():
     if not paper.positions:
-        return f"🧪 PAPER\nКапитал: ${paper.capital:.2f}\nАктивных позиций нет."
+        return f"🧪 PAPER\nКапитал: ${paper.budget():.2f}\nАктивных позиций нет."
     lines = [
-        f"🧪 PAPER • капитал ${paper.capital:.2f} • занято ${paper.used_capital:.2f}"
+        f"🧪 PAPER • капитал ${paper.budget():.2f} • занято ${paper.used_capital:.2f}"
     ]
     for p in paper.positions.values():
         conv = (1 - p.current_spread / p.entry_spread) * 100 if p.entry_spread else 0
@@ -205,7 +206,18 @@ async def text_for(s):
         text = render_positions(paper, secondary.sf_paper if secondary else None)
         if secondary:
             text += render_spot_inventory(secondary.ss_paper, positions_only=True)
+            text += render_funding_paper(secondary.funding_paper)
         return text
+    if s == "funding_paper":
+        return render_funding_paper(secondary.funding_paper if secondary else None)
+    if s == "fund_replay":
+        return render_sf_replay(
+            await build_sf_replay(
+                config.db_path,
+                max_gap=max(120, config.interval * 3),
+                strategy="funding_arb",
+            )
+        )
     if s == "ss_inventory":
         return render_spot_inventory(secondary.ss_paper if secondary else None)
     if s == "ss_replay":
@@ -301,6 +313,8 @@ async def start(m: Message):
         "replay",
         "sf_replay",
         "ss_replay",
+        "fund_replay",
+        "funding_paper",
         "ss_inventory",
         "exchanges",
         "status",
@@ -359,6 +373,8 @@ async def commands(m: Message):
             "replay",
             "sf_replay",
             "ss_replay",
+            "fund_replay",
+            "funding_paper",
             "ss_inventory",
             "exchanges",
             "status",
@@ -434,11 +450,16 @@ def keyboard_for(screen):
         return venue_keyboard(scanner.ids)
     if screen == "strategies":
         return strategy_menu(strategy_runtime.enabled)
-    if screen in ("replay", "sf_replay", "ss_replay"):
+    if screen in ("replay", "sf_replay", "ss_replay", "fund_replay"):
         return replay_menu(screen)
     if screen == "paper":
         return InlineKeyboardMarkup(
             inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🕒 Funding Paper", callback_data="funding_paper"
+                    )
+                ],
                 [
                     InlineKeyboardButton(
                         text="🏦 Запасы Spot/Spot", callback_data="ss_inventory"
@@ -450,6 +471,8 @@ def keyboard_for(screen):
                 ],
             ]
         )
+    if screen == "funding_paper":
+        return back_menu(screen, "paper")
     if screen == "ss_inventory":
         return back_menu(screen, "paper")
     if screen in ("live_positions", "incidents"):
@@ -554,6 +577,9 @@ async def scanning():
     global latest
     while True:
         try:
+            scanner.watch_positions = {
+                (p.symbol, p.buy, p.sell): p for p in paper.positions.values()
+            }
             scanner.watch_routes = {
                 (p.symbol, p.buy, p.sell) for p in paper.positions.values()
             }
@@ -758,8 +784,15 @@ async def main():
         ss.capital = config.paper_capital
         ss.max_age = config.paper_max_seconds
         ss.trailing = config.paper_trailing_drawdown
+        fp = secondary.funding_paper
+        for module in (paper, secondary.sf_paper, ss, fp):
+            if module is not None:
+                module.budget = lambda: bankroll.equity
+        funding_reserved = lambda: fp.used_capital if fp else 0
         ss.external_reserved = (
-            lambda: paper.used_capital + secondary.sf_paper.used_capital
+            lambda: paper.used_capital
+            + secondary.sf_paper.used_capital
+            + funding_reserved()
         )
         if (
             getattr(ss, "allocated_capital", ss.used_capital) + ss.external_reserved()
@@ -774,9 +807,13 @@ async def main():
                 for v in (x["buy"], x["sell"])
             )
         )
-        secondary.sf_paper.reserved = lambda: paper.used_capital + ss.used_capital
+        secondary.sf_paper.reserved = (
+            lambda: paper.used_capital + ss.used_capital + funding_reserved()
+        )
         paper.external_reserved = (
-            lambda: secondary.sf_paper.used_capital + ss.used_capital
+            lambda: secondary.sf_paper.used_capital
+            + ss.used_capital
+            + funding_reserved()
         )
         secondary.runtime.services["spot_spot"].source.allowed_venue = (
             lambda v: not scanner.paused and venue_controller.get(v)["scan"]
@@ -816,6 +853,32 @@ async def main():
             )
 
         ss.on_closed = ss_closed
+        if fp:
+            fp.external_reserved = (
+                lambda: paper.used_capital
+                + secondary.sf_paper.used_capital
+                + ss.used_capital
+            )
+            fp.allow_open = ss.allow_open
+
+            async def funding_closed(position):
+                risk.on_paper_close(position["net"])
+                bankroll.apply(position["net"])
+                await ledger_add(
+                    config.db_path,
+                    position["closed_at"],
+                    "FUNDING_PAPER_NET",
+                    position["net"],
+                    "fund:" + str(position["id"]),
+                    note=position["symbol"],
+                )
+                await notify_paper_close(
+                    position["symbol"],
+                    position["net"],
+                    "Funding Paper: история ставок и модель reference notional",
+                )
+
+            fp.on_closed = funding_closed
         sf_cycle.on_closed = sf_closed
         await secondary.runtime.start()
         bot = Bot(token=config.token)

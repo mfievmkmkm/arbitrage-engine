@@ -1,11 +1,38 @@
+import math
 from dataclasses import dataclass
+
+
 @dataclass(frozen=True)
 class FundingArb:
- allowed:bool;long_venue:str;short_venue:str;carry_pct:float;reason:str
+    allowed: bool
+    long_venue: str
+    short_venue: str
+    carry_pct: float
+    reason: str
+    gross_carry_pct: float = 0
 
-def evaluate(a,b,rate_a,rate_b,interval_a,interval_b,fees_pct,holding_hours=8):
- if interval_a is None or interval_b is None:return FundingArb(False,a,b,0,"INTERVAL_UNKNOWN")
- ca=float(rate_a)*holding_hours/float(interval_a);cb=float(rate_b)*holding_hours/float(interval_b)
- carry=abs(cb-ca)-fees_pct
- long,short=(a,b) if rate_a<=rate_b else (b,a)
- return FundingArb(carry>0,long,short,carry,"OK" if carry>0 else "NET_CARRY_NONPOSITIVE")
+
+def evaluate(a, b, rate_a, rate_b, interval_a, interval_b, fees_pct, holding_hours=8):
+    try:
+        rates = (float(rate_a), float(rate_b))
+        intervals = (float(interval_a), float(interval_b))
+        fees = float(fees_pct)
+        hold = float(holding_hours)
+        if (
+            not all(math.isfinite(x) for x in (*rates, *intervals, fees, hold))
+            or min(intervals) <= 0
+            or fees < 0
+            or hold <= 0
+            or a == b
+        ):
+            raise ValueError()
+    except (ValueError, TypeError):
+        return FundingArb(False, a, b, 0, "INPUT_UNVERIFIED")
+    ca = rates[0] * hold / intervals[0]
+    cb = rates[1] * hold / intervals[1]
+    long, short = (a, b) if ca <= cb else (b, a)
+    gross = abs(cb - ca)
+    net = gross - fees
+    return FundingArb(
+        net > 0, long, short, net, "OK" if net > 0 else "NET_CARRY_NONPOSITIVE", gross
+    )

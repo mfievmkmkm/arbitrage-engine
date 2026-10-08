@@ -16,6 +16,17 @@ class Diary:
             await d.execute(
                 "CREATE TABLE IF NOT EXISTS signal_decisions(id INTEGER PRIMARY KEY,ts REAL,strategy TEXT,symbol TEXT,buy TEXT,sell TEXT,action TEXT,reason TEXT,payload TEXT)"
             )
+            async with d.execute("PRAGMA table_info(paper_positions)") as c:
+                columns = {x[1] for x in await c.fetchall()}
+            for name in ("base_qty", "entry_fees_usd", "safety_usd"):
+                if name not in columns:
+                    await d.execute(
+                        "ALTER TABLE paper_positions ADD COLUMN " + name + " REAL"
+                    )
+            async with d.execute("PRAGMA table_info(paper_marks)") as c:
+                mark_columns = {x[1] for x in await c.fetchall()}
+            if "payload" not in mark_columns:
+                await d.execute("ALTER TABLE paper_marks ADD COLUMN payload TEXT")
             await d.commit()
 
     async def record(self, ops):
@@ -68,18 +79,41 @@ class Diary:
                     p["status"],
                 ),
             )
+            await d.execute(
+                "UPDATE paper_positions SET base_qty=?,entry_fees_usd=?,safety_usd=? WHERE id=?",
+                (
+                    p.get("base_qty"),
+                    p.get("entry_fees_usd"),
+                    p.get("safety_usd", 0),
+                    c.lastrowid,
+                ),
+            )
             await d.commit()
             return c.lastrowid
 
     async def update_paper_position(self, p):
         async with aiosqlite.connect(self.path) as d:
             await d.execute(
-                "UPDATE paper_positions SET best_net_usd=?,current_net_usd=?,current_spread=? WHERE id=?",
-                (p["best_net_usd"], p["current_net_usd"], p["current_spread"], p["id"]),
+                "UPDATE paper_positions SET best_net_usd=?,current_net_usd=?,current_spread=?,base_qty=?,entry_fees_usd=?,safety_usd=? WHERE id=?",
+                (
+                    p["best_net_usd"],
+                    p["current_net_usd"],
+                    p["current_spread"],
+                    p.get("base_qty"),
+                    p.get("entry_fees_usd"),
+                    p.get("safety_usd", 0),
+                    p["id"],
+                ),
             )
             await d.execute(
-                "INSERT INTO paper_marks(position_id,ts,net_usd,spread) VALUES(?,?,?,?)",
-                (p["id"], time.time(), p["current_net_usd"], p["current_spread"]),
+                "INSERT INTO paper_marks(position_id,ts,net_usd,spread,payload) VALUES(?,?,?,?,?)",
+                (
+                    p["id"],
+                    (p.get("last_mark") or {}).get("ts", time.time()),
+                    p["current_net_usd"],
+                    p["current_spread"],
+                    json.dumps(p.get("last_mark")),
+                ),
             )
             await d.commit()
 
@@ -102,7 +136,7 @@ class Diary:
         async with aiosqlite.connect(self.path) as d:
             d.row_factory = aiosqlite.Row
             async with d.execute(
-                "SELECT id,symbol,buy,sell,notional,entry_buy,entry_sell,entry_spread,opened_at,best_net_usd,current_net_usd,current_spread,status FROM paper_positions WHERE status='OPEN'"
+                "SELECT id,symbol,buy,sell,notional,entry_buy,entry_sell,entry_spread,opened_at,best_net_usd,current_net_usd,current_spread,status,base_qty,entry_fees_usd,COALESCE(safety_usd,0) AS safety_usd FROM paper_positions WHERE status='OPEN'"
             ) as c:
                 return [dict(x) for x in await c.fetchall()]
 

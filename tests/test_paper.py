@@ -16,7 +16,7 @@ def test_target_exit():
  asyncio.run(run())
 def test_duplicate_symbol_and_capital():
  async def run():
-  e=PaperEngine(FakeDiary(),capital=10,max_positions=2)
+  e=PaperEngine(FakeDiary(),capital=11,max_positions=2)
   o=opportunity();assert await e.open(o)
   assert not e.can_open(dict(o,buy="okx",sell="mexc"))
   other=dict(o,symbol="XYZ/USDT:USDT")

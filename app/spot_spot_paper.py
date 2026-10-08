@@ -59,6 +59,7 @@ class Engine:
         self.path = str(path)
         self.seed = seed or {}
         self.capital = capital
+        self.budget = lambda: self.capital
         self.edge = entry_edge
         self.max_age = max_age
         self.trailing = trailing
@@ -251,7 +252,7 @@ class Engine:
                         state["initial_value"]
                         + max(0, state["realized"])
                         + self.external_reserved()
-                        > self.capital
+                        > self.budget()
                     ):
                         reason = "SHARED_CAPITAL_LOW"
                     elif not self.allow_open(x):

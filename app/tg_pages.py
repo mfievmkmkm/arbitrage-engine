@@ -11,7 +11,7 @@ def strategies(runtime):
         enabled = getattr(runtime, "enabled", {}).get(name, False)
         mode = (
             "Paper"
-            if name in ("futures_futures", "spot_futures", "spot_spot")
+            if name in ("futures_futures", "spot_futures", "spot_spot", "funding_arb")
             else "Исследование"
         )
         out.append(

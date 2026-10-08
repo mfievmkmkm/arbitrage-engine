@@ -11,6 +11,8 @@ from .strategy_universe import common_spot_symbols
 from .secondary_strategy_runtime import SecondaryRuntime
 from .funding_arb_service import Service as FundingService
 from .funding_cycle_service import CycleService as FundingCycle
+from .funding_paper import Engine as FundingPaper
+from .funding_paper_source import Source as FundingPaperSource
 
 
 class Bundle:
@@ -20,6 +22,7 @@ class Bundle:
         self.sf_paper = sf_paper
         self.dex_provider = None
         self.ss_paper = None
+        self.funding_paper = None
 
     async def close(self):
         await self.runtime.stop()
@@ -65,16 +68,29 @@ async def build_bundle(
                 clients, common_spot_symbols(clients), notional, batch=5, paper=ss_paper
             ),
         )
+        fp = None
         if funding_service:
+            fp = FundingPaper(
+                db_path,
+                FundingPaperSource(funding_service.clients, funding_service, notional),
+                capital=float(os.getenv("PAPER_CAPITAL_USD", "50")),
+                max_seconds=max(
+                    60, int(os.getenv("FUNDING_PAPER_HOLD_SECONDS", "28800"))
+                ),
+                min_carry=float(os.getenv("FUNDING_PAPER_MIN_CARRY_PCT", "0.03")),
+            )
+            await fp.init()
             sr.add(
                 "funding_arb",
                 FundingCycle(
                     FundingService(funding_service, list(funding_service.clients)),
                     future_symbols,
+                    paper=fp,
                 ),
             )
         bundle = Bundle(clients, sr, paper)
         bundle.ss_paper = ss_paper
+        bundle.funding_paper = fp
         routes = json.loads(os.getenv("DEX_RESEARCH_ROUTES_JSON", "[]"))
         if routes and os.getenv("ZEROX_API_KEY"):
             required = {"chain_id", "sell_token", "buy_token", "sell_amount_raw"}

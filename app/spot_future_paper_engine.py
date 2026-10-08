@@ -11,12 +11,16 @@ class Engine:
         self.max_age = max_age
         self.closed = []
         self.capital = capital
+        self.budget = lambda: self.capital
         self.reserved = reserved or (lambda: 0)
 
     @property
     def used_capital(self):
         return sum(
-            p.base_qty * (p.spot_entry + p.future_entry)
+            p.base_qty
+            * (p.spot_entry + p.future_entry)
+            * (1 + (p.entry_fee_pct or 0) / 400)
+            + p.notional * (p.safety_pct or 0) / 100
             for p in self.positions.values()
         )
 
@@ -32,11 +36,14 @@ class Engine:
             if op["direction"] == "LONG_SPOT_SHORT_FUTURE"
             else prices["future_buy"]
         )
-        required = op["base_qty"] * (spot + future)
+        required = (
+            op["base_qty"] * (spot + future) * (1 + op["fee_pct"] / 400)
+            + op["notional"] * op["safety_pct"] / 100
+        )
         return (
             len(self.positions) < self.max_positions
             and op["base"] not in {p.base for p in self.positions.values()}
-            and self.used_capital + self.reserved() + required <= self.capital
+            and self.used_capital + self.reserved() + required <= self.budget()
         )
 
     def open(self, op):
