@@ -31,6 +31,11 @@ class CycleService:
             if self.paper
             else set()
         )
+        self.service.source.watch_positions = (
+            {(p.exchange, p.base): p for p in self.paper.sf.positions.values()}
+            if self.paper
+            else {}
+        )
         rows, _ = await self.service.cycle()
         if self.paper:
             # Reverse direction requires borrowing evidence. Research quotes remain visible.

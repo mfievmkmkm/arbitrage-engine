@@ -1,2 +1,16 @@
-def render(ledger,allocations=None):
- return "💰 CAPITAL\nEquity: $%.2f\nRealized: %+.2f\nFees: -%.2f\nFunding: %+.2f\nSlippage: -%.2f\nAllocations: %s"%(ledger.equity,ledger.realized,ledger.fees,ledger.funding,ledger.slippage,allocations or {})
+from html import escape
+
+
+def render(ledger, allocations=None):
+    out = [
+        "💼 <b>Капитал · Paper</b>",
+        f"\nБаланс модели: <b>{ledger.equity:.2f} USD</b>",
+        f"Старт: {ledger.starting:.2f} USD",
+        f"Закрытый NET: {ledger.realized:+.4f} USD",
+    ]
+    if allocations:
+        out.append("Распределение: " + escape(str(allocations)))
+    out.append(
+        "\n<i>NET уже включает модельные затраты. Это учебный баланс, не баланс биржевого аккаунта.</i>"
+    )
+    return "\n".join(out)

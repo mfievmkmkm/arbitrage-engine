@@ -138,6 +138,11 @@ def test_scanner_keeps_a_watched_route_when_entry_edge_disappears():
         scanner.watch_routes = {(symbol, "binance", "bybit")}
         rows = await scanner.scan()
         assert len(rows) == 1 and rows[0]["hypothetical_edge"] < 0
+        scanner.paused = True
+        rows = await scanner.scan()
+        assert len(rows) == 1 and rows[0]["hypothetical_edge"] < 0
+        scanner.watch_routes = set()
+        assert await scanner.scan() == []
 
     asyncio.run(go())
 

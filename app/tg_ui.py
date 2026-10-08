@@ -1,70 +1,112 @@
+"""Shared Telegram visual hierarchy; style uses native Bot API button fills."""
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+STRATEGY_LABELS = {
+    "futures_futures": "Фьючерсы ↔ Фьючерсы",
+    "spot_futures": "Спот ↔ Фьючерсы",
+    "spot_spot": "Спот ↔ Спот",
+    "funding_arb": "Ставки funding",
+    "cex_dex": "Биржи ↔ DEX",
+}
 
-def main_menu():
+
+def button(text, callback, style=None):
+    return InlineKeyboardButton(
+        text=text, callback_data=callback, **({"style": style} if style else {})
+    )
+
+
+def main_menu(paused=False):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="⚡ Рынок", callback_data="top"),
-                InlineKeyboardButton(text="📈 Позиции", callback_data="paper"),
+                button("⚡ Рынок", "top", "primary"),
+                button("📈 Позиции", "paper", "primary"),
             ],
+            [button("🧭 Стратегии", "strategies"), button("🏦 Площадки", "exchanges")],
             [
-                InlineKeyboardButton(text="🧭 Стратегии", callback_data="strategies"),
-                InlineKeyboardButton(text="🏦 Площадки", callback_data="exchanges"),
+                button("📊 Аналитика", "strategy_stats"),
+                button("🧪 Проверка истории", "replay"),
             ],
+            [button("📔 Дневник", "diary"), button("💼 Капитал", "capital")],
             [
-                InlineKeyboardButton(
-                    text="📊 Аналитика", callback_data="strategy_stats"
-                ),
-                InlineKeyboardButton(text="🧪 Replay", callback_data="replay"),
+                button("📤 Выгрузить историю", "export"),
+                button("🚦 Проверка запуска", "startup"),
             ],
+            [button("🛡 Риски", "risk"), button("⚙️ Система", "status")],
+            [button("⛓ DEX", "dex"), button("🔐 LIVE-контроль", "live")],
             [
-                InlineKeyboardButton(text="📔 Дневник", callback_data="diary"),
-                InlineKeyboardButton(text="💼 Капитал", callback_data="capital"),
+                button(
+                    "▶ Возобновить сканер" if paused else "⏸ Приостановить сканер",
+                    "resume" if paused else "pause",
+                    "success" if paused else None,
+                )
             ],
-            [
-                InlineKeyboardButton(text="📤 Export", callback_data="export"),
-                InlineKeyboardButton(text="🚦 Startup", callback_data="startup"),
-            ],
-            [
-                InlineKeyboardButton(text="🛡 Risk Center", callback_data="risk"),
-                InlineKeyboardButton(text="⚙️ Система", callback_data="status"),
-            ],
-            [
-                InlineKeyboardButton(text="⛓ DEX", callback_data="dex"),
-                InlineKeyboardButton(text="⚡ LIVE", callback_data="live"),
-            ],
-            [
-                InlineKeyboardButton(text="⏸ Сканер", callback_data="pause"),
-                InlineKeyboardButton(text="▶ Возобновить", callback_data="resume"),
-            ],
-            [InlineKeyboardButton(text="🛑 EMERGENCY STOP", callback_data="live_stop")],
+            [button("🛑 Аварийный STOP", "live_stop", "danger")],
         ]
     )
 
 
-def back_menu():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="‹ Главное меню", callback_data="home")]
-        ]
-    )
+def back_menu(screen=None, parent="home"):
+    row = []
+    if screen:
+        row.append(button("↻ Обновить", screen, "primary"))
+    row.append(button("‹ Главное меню" if parent == "home" else "‹ Назад", parent))
+    return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
 def live_menu(stopped):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                button("📈 LIVE-позиции", "live_positions"),
+                button("🛡 Инциденты", "incidents"),
+            ],
+            [
+                button(
+                    "🔐 Проверить допуск" if stopped else "🛑 STOP",
+                    "live_resume" if stopped else "live_stop",
+                    "primary" if stopped else "danger",
+                )
+            ],
+            [button("↻ Обновить", "live"), button("‹ Главное меню", "home")],
+        ]
+    )
+
+
+def replay_menu(screen="replay"):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                button(
+                    "Фьючерсы ↔ Фьючерсы",
+                    "replay",
+                    "primary" if screen == "replay" else None,
+                )
+            ],
+            [
+                button(
+                    "Спот ↔ Фьючерсы",
+                    "sf_replay",
+                    "primary" if screen == "sf_replay" else None,
+                )
+            ],
+            [button("↻ Обновить", screen), button("‹ Главное меню", "home")],
+        ]
+    )
+
+
+def strategy_menu(enabled):
     rows = [
         [
-            InlineKeyboardButton(
-                text="📈 LIVE-позиции", callback_data="live_positions"
-            ),
-            InlineKeyboardButton(text="🛡 Инциденты", callback_data="incidents"),
-        ],
-        [
-            InlineKeyboardButton(
-                text="🛑 STOP" if not stopped else "🔐 Проверить и возобновить",
-                callback_data="live_stop" if not stopped else "live_resume",
+            button(
+                ("● " if on else "○ ") + STRATEGY_LABELS.get(name, name),
+                "strategy:" + name,
+                "success" if on else None,
             )
-        ],
-        [InlineKeyboardButton(text="‹ Главное меню", callback_data="home")],
+        ]
+        for name, on in enabled.items()
     ]
+    rows.append([button("‹ Главное меню", "home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

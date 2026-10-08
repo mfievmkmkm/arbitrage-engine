@@ -1,4 +1,4 @@
-import asyncio, time
+import asyncio, time, math
 from .contract_book import to_base_levels
 from .spot_future_symbols import normalize
 from .spot_future_scanner import evaluate
@@ -15,6 +15,7 @@ class SpotFutureSource:
         self.markets = {}
         self.cursor = {}
         self.watch_pairs = set()
+        self.watch_positions = {}
         self.allowed_venue = lambda v: True
 
     async def load(self):
@@ -31,19 +32,24 @@ class SpotFutureSource:
             try:
 
                 async def fetch(symbol):
+                    started = time.time()
                     book = await asyncio.wait_for(c.fetch_order_book(symbol), 8)
                     stamp = book.get("timestamp")
+                    if stamp is not None and not math.isfinite(float(stamp)):
+                        raise ValueError("INVALID_BOOK_TIMESTAMP")
+                    if time.time() - started > 12:
+                        raise ValueError("SLOW_BOOK")
                     if stamp is not None and (
                         time.time() - float(stamp) / 1000 > 12
                         or float(stamp) / 1000 > time.time() + 2
                     ):
                         raise ValueError("STALE_BOOK")
-                    return book, time.time()
+                    return book, float(stamp) / 1000 if stamp is not None else started
 
                 (s, st), (f, ft) = await asyncio.gather(
                     fetch(pair.spot_symbol), fetch(pair.future_symbol)
                 )
-                if abs(st - ft) > 12:
+                if abs(st - ft) > 12 or time.time() - min(st, ft) > 12:
                     return None
                 cs = self.markets[venue][pair.future_symbol].get("contractSize")
                 if cs is None or float(cs) <= 0:
@@ -53,6 +59,7 @@ class SpotFutureSource:
                     "bids": to_base_levels(f["bids"], float(cs)),
                     "asks": to_base_levels(f["asks"], float(cs)),
                 }
+                position = self.watch_positions.get((venue, pair.base))
                 return evaluate(
                     venue,
                     pair.base,
@@ -64,6 +71,8 @@ class SpotFutureSource:
                     self.fee_pct,
                     funding_pct,
                     self.safety_pct,
+                    now=min(st, ft),
+                    base_qty=position.base_qty if position else None,
                 )
             except Exception:
                 return None

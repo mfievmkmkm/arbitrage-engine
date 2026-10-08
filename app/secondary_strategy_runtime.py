@@ -10,6 +10,7 @@ class SecondaryRuntime:
         self.services = {}
         self.tasks = []
         self.running = False
+        self.paused = lambda: False
 
     def add(self, name, service):
         self.services[name] = service
@@ -17,7 +18,9 @@ class SecondaryRuntime:
     async def _loop(self, name, service):
         while self.running:
             try:
-                service.entry_enabled = self.runtime.enabled.get(name, True)
+                service.entry_enabled = (
+                    self.runtime.enabled.get(name, True) and not self.paused()
+                )
                 if not service.entry_enabled and not getattr(service, "paper", None):
                     self.runtime.update(name, [])
                     await asyncio.sleep(self.interval)

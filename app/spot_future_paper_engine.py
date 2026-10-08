@@ -15,13 +15,28 @@ class Engine:
 
     @property
     def used_capital(self):
-        return sum(p.notional * 2 for p in self.positions.values())
+        return sum(
+            p.base_qty * (p.spot_entry + p.future_entry)
+            for p in self.positions.values()
+        )
 
     def can_open(self, op):
+        prices = op["prices"]
+        spot = (
+            prices["spot_buy"]
+            if op["direction"] == "LONG_SPOT_SHORT_FUTURE"
+            else prices["spot_sell"]
+        )
+        future = (
+            prices["future_sell"]
+            if op["direction"] == "LONG_SPOT_SHORT_FUTURE"
+            else prices["future_buy"]
+        )
+        required = op["base_qty"] * (spot + future)
         return (
             len(self.positions) < self.max_positions
             and op["base"] not in {p.base for p in self.positions.values()}
-            and self.used_capital + self.reserved() + op["notional"] * 2 <= self.capital
+            and self.used_capital + self.reserved() + required <= self.capital
         )
 
     def open(self, op):
@@ -33,7 +48,7 @@ class Engine:
         return p
 
     def update(self, op, now=None):
-        now = time.time() if now is None else now
+        now = op.get("ts", time.time()) if now is None else now
         closed = []
         for i, p in list(self.positions.items()):
             if p.base != op["base"] or p.exchange != op["exchange"]:

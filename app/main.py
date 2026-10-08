@@ -68,7 +68,11 @@ from .bankroll_ledger import Ledger
 from .capital_view import render as render_capital
 from .strategy_observation import row as strategy_row
 from .strategy_diary import record as strategy_diary_record
-from .tg_ui import main_menu, back_menu, live_menu
+from .tg_ui import main_menu, back_menu, live_menu, replay_menu, strategy_menu
+from .spot_future_history_replay import (
+    build as build_sf_replay,
+    render as render_sf_replay,
+)
 from .tg_dashboard import (
     home as render_home,
     opportunities as render_market,
@@ -129,7 +133,7 @@ venue_controller = VenueController(
 
 
 def menu():
-    return main_menu()
+    return main_menu(scanner.paused)
 
 
 def allowed(uid):
@@ -197,12 +201,11 @@ async def text_for(s):
     if s == "top":
         return render_market_console(strategy_runtime)
     if s == "paper":
-        text = render_positions(paper)
-        if secondary and secondary.sf_paper.positions:
-            text += "\n\n🧪 SPOT ↔ FUTURES"
-            for p in secondary.sf_paper.positions.values():
-                text += f"\n{escape(p.base)} • {escape(p.exchange)} • NET {p.net:+.4f}$"
-        return text
+        return render_positions(paper, secondary.sf_paper if secondary else None)
+    if s == "sf_replay":
+        return render_sf_replay(
+            await build_sf_replay(config.db_path, max_gap=max(120, config.interval * 3))
+        )
     if s == "replay":
         data = await diary.replay_trades()
         validation = walk_forward(data)
@@ -270,7 +273,7 @@ async def text_for(s):
 async def start(m: Message):
     if allowed(m.from_user.id):
         await m.answer(
-            render_home(scanner, paper, risk, strategy_runtime, live_stop),
+            await text_for("home"),
             reply_markup=menu(),
             parse_mode="HTML",
         )
@@ -282,6 +285,7 @@ async def start(m: Message):
         "paper",
         "diary",
         "replay",
+        "sf_replay",
         "exchanges",
         "status",
         "risk",
@@ -337,6 +341,7 @@ async def commands(m: Message):
             "paper",
             "diary",
             "replay",
+            "sf_replay",
             "exchanges",
             "status",
             "risk",
@@ -366,6 +371,7 @@ async def callbacks(q: CallbackQuery):
         await q.answer("Готовлю выгрузку")
         await send_export(q.message)
         return
+    await q.answer()
     if s in ("pause", "resume"):
         scanner.paused = s == "pause"
         s = "status"
@@ -385,7 +391,6 @@ async def callbacks(q: CallbackQuery):
         command_resume(live_stop, ev, live_supervisor.kill)
         s = "live"
     await safe_edit(q.message, await text_for(s), keyboard_for(s))
-    await q.answer()
 
 
 async def send_export(message):
@@ -410,18 +415,12 @@ def keyboard_for(screen):
     if screen == "exchanges":
         return venue_keyboard(scanner.ids)
     if screen == "strategies":
-        rows = [
-            [
-                InlineKeyboardButton(
-                    text=("🟢 " if on else "⚫ ") + name,
-                    callback_data="strategy:" + name,
-                )
-            ]
-            for name, on in strategy_runtime.enabled.items()
-        ]
-        rows.append([InlineKeyboardButton(text="‹ Меню", callback_data="home")])
-        return InlineKeyboardMarkup(inline_keyboard=rows)
-    return back_menu()
+        return strategy_menu(strategy_runtime.enabled)
+    if screen in ("replay", "sf_replay"):
+        return replay_menu(screen)
+    if screen in ("live_positions", "incidents"):
+        return back_menu(screen, "live")
+    return back_menu(screen)
 
 
 @dp.callback_query(F.data.startswith("opp:"))
@@ -438,7 +437,7 @@ async def opportunity(q: CallbackQuery):
     except (ValueError, IndexError, StopIteration):
         await q.answer("Список обновился — открой рынок снова", show_alert=True)
         return
-    await safe_edit(q.message, render_market_detail(name, row), back_menu())
+    await safe_edit(q.message, render_market_detail(name, row), back_menu(parent="top"))
     await q.answer()
 
 
@@ -499,6 +498,8 @@ async def notify_paper_close(symbol, net, reason):
 
 
 def paper_entry_reason(op):
+    if scanner.paused:
+        return "SCANNER_PAUSED"
     if not strategy_runtime.enabled["futures_futures"]:
         return "STRATEGY_DISABLED"
     if not all(
@@ -519,64 +520,65 @@ async def scanning():
     global latest
     while True:
         try:
-            if not scanner.paused:
-                scanner.watch_routes = {
-                    (p.symbol, p.buy, p.sell) for p in paper.positions.values()
-                }
-                scanner.scan_enabled = {
-                    x for x in scanner.ids if venue_controller.get(x)["scan"]
-                }
-                quotes = await scanner.scan()
-                latest = [x for x in quotes if x["hypothetical_edge"] > 0]
-                strategy_runtime.update(
-                    "futures_futures",
-                    latest if strategy_runtime.enabled["futures_futures"] else [],
-                )
-                await strategy_diary_record(
+            scanner.watch_routes = {
+                (p.symbol, p.buy, p.sell) for p in paper.positions.values()
+            }
+            scanner.scan_enabled = {
+                x for x in scanner.ids if venue_controller.get(x)["scan"]
+            }
+            quotes = await scanner.scan()
+            latest = [x for x in quotes if x["hypothetical_edge"] > 0]
+            strategy_runtime.update(
+                "futures_futures",
+                (
+                    latest
+                    if strategy_runtime.enabled["futures_futures"]
+                    and not scanner.paused
+                    else []
+                ),
+            )
+            await strategy_diary_record(
+                config.db_path,
+                [strategy_row({**x, "strategy": "futures_futures"}) for x in latest],
+            )
+            risk.on_success()
+            await diary.record(quotes)
+            closed = await paper.mark_and_exit(quotes)
+            for p in closed:
+                risk.on_paper_close(p.current_net_usd)
+                bankroll.apply(p.current_net_usd)
+                await ledger_add(
                     config.db_path,
-                    [
-                        strategy_row({**x, "strategy": "futures_futures"})
-                        for x in latest
-                    ],
+                    datetime.now(timezone.utc).timestamp(),
+                    "PAPER_NET",
+                    p.current_net_usd,
+                    str(p.id),
+                    note=p.symbol,
                 )
-                risk.on_success()
-                await diary.record(quotes)
-                closed = await paper.mark_and_exit(quotes)
-                for p in closed:
-                    risk.on_paper_close(p.current_net_usd)
-                    bankroll.apply(p.current_net_usd)
-                    await ledger_add(
-                        config.db_path,
-                        datetime.now(timezone.utc).timestamp(),
-                        "PAPER_NET",
-                        p.current_net_usd,
-                        str(p.id),
-                        note=p.symbol,
-                    )
-                    log.info("Paper close %s net=%s", p.symbol, p.current_net_usd)
-                    await notify_paper_close(
-                        p.symbol,
-                        p.current_net_usd,
-                        "Закрытие по политике выхода; подробности в дневнике",
-                    )
-                decisions = []
-                for o in latest:
-                    reason = paper_entry_reason(o)
-                    p = await paper.open(o) if reason == "ENTRY_ALLOWED" else None
-                    decisions.append(
-                        {
-                            **o,
-                            "strategy": "futures_futures",
-                            "action": "PAPER_OPEN" if p else "SKIP",
-                            "reason": reason,
-                        }
-                    )
-                    if p:
-                        log.info("Paper open %s %s/%s", p.symbol, p.buy, p.sell)
-                await diary.record_decisions(decisions)
-                log.info(
-                    "Cycle opportunities=%s paper=%s", len(latest), len(paper.positions)
+                log.info("Paper close %s net=%s", p.symbol, p.current_net_usd)
+                await notify_paper_close(
+                    p.symbol,
+                    p.current_net_usd,
+                    "Закрытие по политике выхода; подробности в дневнике",
                 )
+            decisions = []
+            for o in latest:
+                reason = paper_entry_reason(o)
+                p = await paper.open(o) if reason == "ENTRY_ALLOWED" else None
+                decisions.append(
+                    {
+                        **o,
+                        "strategy": "futures_futures",
+                        "action": "PAPER_OPEN" if p else "SKIP",
+                        "reason": reason,
+                    }
+                )
+                if p:
+                    log.info("Paper open %s %s/%s", p.symbol, p.buy, p.sell)
+            await diary.record_decisions(decisions)
+            log.info(
+                "Cycle opportunities=%s paper=%s", len(latest), len(paper.positions)
+            )
         except Exception:
             risk.on_error()
             log.exception("Scan failed")
@@ -704,25 +706,28 @@ async def main():
             scanner.funding,
             scanner.universe.symbols if scanner.universe else (),
         )
+        secondary.runtime.paused = lambda: scanner.paused
         sf_cycle = secondary.runtime.services["spot_futures"]
         sf_cycle.allow_open = (
-            lambda x: risk.can_open_paper()
+            lambda x: not scanner.paused
+            and risk.can_open_paper()
             and venue_controller.get(x["exchange"])["scan"]
             and venue_controller.get(x["exchange"])["paper"]
         )
         sf_cycle.service.source.allowed_venue = (
-            lambda v: venue_controller.get(v)["scan"]
+            lambda v: not scanner.paused
+            and venue_controller.get(v)["scan"]
             and strategy_runtime.enabled["spot_futures"]
         )
         secondary.sf_paper.capital = config.paper_capital
         secondary.sf_paper.reserved = lambda: paper.used_capital
         paper.external_reserved = lambda: secondary.sf_paper.used_capital
         secondary.runtime.services["spot_spot"].source.allowed_venue = (
-            lambda v: venue_controller.get(v)["scan"]
+            lambda v: not scanner.paused and venue_controller.get(v)["scan"]
         )
         if "funding_arb" in secondary.runtime.services:
             secondary.runtime.services["funding_arb"].service.allowed_venue = (
-                lambda v: venue_controller.get(v)["scan"]
+                lambda v: not scanner.paused and venue_controller.get(v)["scan"]
             )
 
         async def sf_closed(position):

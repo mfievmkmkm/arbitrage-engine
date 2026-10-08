@@ -1,4 +1,14 @@
-def render(risk,supervisor,stop):
- s=risk.state;return ("<b>RISK CENTER</b>\n<code>FAIL-CLOSED CONTROLS</code>\n\n"
- f"Global state     {'🔴 HALTED' if s.halted else '🟢 NORMAL'}\nOperator STOP   {'🔴 ACTIVE' if stop.stopped else '🟢 CLEAR'}\nPrivate state   {'🟢 VERIFIED' if supervisor.private_verified else '🟠 UNVERIFIED'}\nRestart state   {'🟢 CLEAN' if supervisor.restart_clean else '🔴 RECONCILE'}\nUnknown orders  <b>{len(supervisor.unknown_orders)}</b>\n\n"
- f"Daily PnL       <b>{s.paper_daily_pnl:+.4f} USDT</b>\nEngine errors   <b>{s.engine_errors}</b>\n\n<i>Any untrusted exposure state blocks new LIVE entries.</i>")
+from html import escape
+from .tg_incident_banner import unknown_label
+
+
+def render(risk, supervisor, stop):
+    s = risk.state
+    return (
+        "🛡 <b>Контроль риска</b>\n\n"
+        f"Система: {'🔴 Остановлена' if s.halted else '🟢 Норма'}\nПричина: {escape(getattr(s,'reason','') or '—')}\n"
+        f"STOP: {'🔴 Активен' if stop.stopped else 'снят'}\nДанные позиций: {'🟢 Подтверждены' if supervisor.private_verified else '🟠 Не подтверждены'}\n"
+        f"Восстановление: {'🟢 Сверено' if supervisor.restart_clean else '🔴 Требуется сверка'}\nНеизвестные заявки: <b>{unknown_label(supervisor.unknown_orders)}</b>\n\n"
+        f"NET Paper за день: <b>{s.paper_daily_pnl:+.4f} USD</b>\nОшибок подряд: <b>{getattr(s,'consecutive_errors',0)}</b>\n\n"
+        "<i>Неподтверждённые позиции блокируют новые реальные входы.</i>"
+    )

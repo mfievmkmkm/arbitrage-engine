@@ -1,5 +1,6 @@
 import hashlib, json
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from .tg_ui import STRATEGY_LABELS, button
 
 
 def selection_key(name, row):
@@ -16,14 +17,14 @@ def build(rows):
         buttons.append(
             [
                 InlineKeyboardButton(
-                    text=f"{i+1:02d} · {name} · {edge:+.2f}%",
+                    text=f"{i+1:02d} · {STRATEGY_LABELS.get(name,name)} · {edge:+.2f}%",
                     callback_data="opp:" + selection_key(name, x),
                 )
             ]
         )
     buttons.append(
         [
-            InlineKeyboardButton(text="↻ Обновить", callback_data="top"),
+            button("↻ Обновить", "top", "primary"),
             InlineKeyboardButton(text="‹ Меню", callback_data="home"),
         ]
     )

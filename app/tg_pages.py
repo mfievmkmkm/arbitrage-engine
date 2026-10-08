@@ -1,15 +1,17 @@
 def strategies(runtime):
     labels = {
-        "futures_futures": "Futures ↔ Futures",
-        "spot_futures": "Spot ↔ Futures",
-        "spot_spot": "Spot ↔ Spot",
-        "funding_arb": "Funding Arbitrage",
+        "futures_futures": "Фьючерсы ↔ Фьючерсы",
+        "spot_futures": "Спот ↔ Фьючерсы",
+        "spot_spot": "Спот ↔ Спот",
+        "funding_arb": "Ставки funding",
         "cex_dex": "CEX ↔ DEX",
     }
-    out = ["<b>СТРАТЕГИИ</b>", "SCAN / PAPER / REAL", ""]
+    out = ["<b>СТРАТЕГИИ</b>", "Сканер · Paper · реальная торговля", ""]
     for name, label in labels.items():
         enabled = getattr(runtime, "enabled", {}).get(name, False)
-        mode = "PAPER" if name in ("futures_futures", "spot_futures") else "RESEARCH"
+        mode = (
+            "Paper" if name in ("futures_futures", "spot_futures") else "Исследование"
+        )
         out.append(
             f"<b>{label}</b>\n{'🟢 Включена' if enabled else '⚫ Выключена'} • {mode} • REAL 🔒\nНаблюдений сейчас: {runtime.counts().get(name,0)}"
         )
@@ -20,4 +22,10 @@ def strategies(runtime):
 
 
 def dex():
-    return "<b>DEX LAB</b>\n<code>RESEARCH ENVIRONMENT</code>\n\nQuote engine      🟡 foundation\nRoute validation  🟢 ready\nToken policy      🟢 ready\nGas / impact      🟢 ready\nWallet execution  🔴 disabled\nLIVE              🔒 locked\n\n<i>Никаких on-chain транзакций до отдельного DEX acceptance.</i>"
+    return (
+        "⛓ <b>DEX · исследование</b>\n\n"
+        "Индикативные котировки 0x — при настройке провайдера и контрактов.\n"
+        "Проверки gas, сети, ликвидности и маршрута ещё требуют сквозного подтверждения.\n\n"
+        "<blockquote>Paper и реальные on-chain сделки заблокированы.</blockquote>\n"
+        "<i>Получение цены не доказывает, что swap исполнится на этих условиях.</i>"
+    )

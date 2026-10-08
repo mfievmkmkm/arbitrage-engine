@@ -6,9 +6,11 @@ class Coordinator:
         closed = []
         opened = []
         for x in rows:
-            closed.extend(self.sf.update(x))
+            just_closed = self.sf.update(x)
+            closed.extend(just_closed)
             if (
-                (allow_open is None or allow_open(x))
+                not just_closed
+                and (allow_open is None or allow_open(x))
                 and x["hypothetical_edge"] >= entry_edge
                 and x["direction"] == "LONG_SPOT_SHORT_FUTURE"
             ):

@@ -150,12 +150,14 @@ class Scanner:
         )
 
     async def scan(self):
-        if self.paused:
-            return []
         symbols = list(
             dict.fromkeys(
                 [x[0] for x in sorted(self.watch_routes)]
-                + (self.universe.next_batch() if self.universe else [])
+                + (
+                    self.universe.next_batch()
+                    if self.universe and not self.paused
+                    else []
+                )
             )
         )
         sem = asyncio.Semaphore(self.concurrency)
@@ -190,7 +192,10 @@ class Scanner:
                 for n in self.clients
                 if s in self.symbols[n]
                 and (
-                    n in getattr(self, "scan_enabled", self.clients)
+                    (
+                        not self.paused
+                        and n in getattr(self, "scan_enabled", self.clients)
+                    )
                     or any(
                         route[0] == s and n in route[1:] for route in self.watch_routes
                     )
@@ -231,6 +236,8 @@ class Scanner:
             for x in ops
             if (x["symbol"], x["buy"], x["sell"]) not in self.watch_routes
         ]
+        if self.paused:
+            ranked = []
         ops = (
             watched
             + sorted(ranked, key=lambda x: x["hypothetical_edge"], reverse=True)[:50]

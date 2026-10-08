@@ -13,6 +13,10 @@ async def init(path):
         await d.execute(
             "CREATE TABLE IF NOT EXISTS spot_future_marks(id INTEGER PRIMARY KEY,position_id INTEGER,ts REAL,net REAL)"
         )
+        async with d.execute("PRAGMA table_info(spot_future_marks)") as c:
+            mark_columns = {x[1] for x in await c.fetchall()}
+        if "payload" not in mark_columns:
+            await d.execute("ALTER TABLE spot_future_marks ADD COLUMN payload TEXT")
         await d.commit()
 
 
@@ -60,7 +64,12 @@ async def all_rows(path):
 async def mark(path, p, ts):
     async with aiosqlite.connect(path) as d:
         await d.execute(
-            "INSERT INTO spot_future_marks(position_id,ts,net) VALUES(?,?,?)",
-            (p.id, ts, p.net),
+            "INSERT INTO spot_future_marks(position_id,ts,net,payload) VALUES(?,?,?,?)",
+            (
+                p.id,
+                (p.last_mark or {}).get("ts", ts),
+                p.net,
+                json.dumps(p.last_mark) if p.last_mark else None,
+            ),
         )
         await d.commit()
