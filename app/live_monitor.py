@@ -391,6 +391,40 @@ class Monitor:
                 )
                 payload["runtime_trade"] = trade.row()
                 info["phase"] = "OPEN"
+            if row["phase"] == "EXIT_SUBMITTING" and not hold:
+                from .exit_residual_evidence import evaluate as residual_evidence
+
+                try:
+                    residual = residual_evidence(
+                        trade, row, own, snapshot, now, self.max_private_age
+                    )
+                except (ValueError, TypeError, AttributeError, KeyError) as error:
+                    incidents.append(
+                        self._incident(
+                            "EXIT_RESIDUAL_REQUIRES_RECOVERY",
+                            tid,
+                            reason=(
+                                str(error)
+                                if isinstance(error, ValueError)
+                                else "RESIDUAL_PRIVATE_UNTRUSTED"
+                            ),
+                        )
+                    )
+                else:
+                    info.update(
+                        private_verified=True,
+                        base_qty=trade.base_qty,
+                        opened_at=trade.opened_at,
+                        exit_signal="EXIT_RESIDUAL",
+                        residual_long_contracts=residual.long_contracts,
+                        residual_short_contracts=residual.short_contracts,
+                    )
+                    incidents.append(
+                        self._incident(
+                            "EXIT_RESIDUAL_VERIFIED", tid, severity="WARNING"
+                        )
+                    )
+                continue
             match = verify_trade(trade, snapshot)
             if not match.safe:
                 incidents.append(self._incident(match.reason, tid))

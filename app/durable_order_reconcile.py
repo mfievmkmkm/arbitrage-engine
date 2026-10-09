@@ -53,12 +53,12 @@ async def reconcile_and_persist(diary, executors, trade_id=None, max_queries=50)
         if (
             not math.isfinite(filled)
             or filled < 0
-            or filled > float(meta.get("qty") or 0) + 1e-10
+            or filled > float(meta.get("qty") or 0) * (1 + 1e-10)
         ):
             unresolved.append(iid)
             continue
         # Cumulative fills can never shrink after a late acknowledgement/cancel.
-        if filled + 1e-10 < float(meta.get("filled") or 0):
+        if filled < float(meta.get("filled") or 0) * (1 - 1e-10):
             unresolved.append(iid)
             continue
         n = normalize(result.status, result.filled, meta.get("qty"))

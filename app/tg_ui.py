@@ -59,15 +59,16 @@ def back_menu(screen=None, parent="home"):
 def live_menu(stopped):
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [button("🧪 Проверка аккаунтов и NET", "live_checks", "primary")],
             [
                 button("📈 LIVE-позиции", "live_positions"),
                 button("🛡 Инциденты", "incidents"),
             ],
             [
                 button(
-                    "🔐 Проверить допуск" if stopped else "🛑 STOP",
+                    "▶ Снять STOP" if stopped else "🛑 STOP",
                     "live_resume" if stopped else "live_stop",
-                    "primary" if stopped else "danger",
+                    "success" if stopped else "danger",
                 )
             ],
             [button("↻ Обновить", "live"), button("‹ Главное меню", "home")],

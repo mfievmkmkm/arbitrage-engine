@@ -15,7 +15,7 @@ def normalize(status, filled=0, amount=None):
     if s in ("canceled", "cancelled", "rejected", "expired"):
         return MAP[s]
     if amount is not None and amount > 0:
-        if filled >= amount - 1e-12:
+        if filled >= amount * (1 - 1e-10):
             return "FILLED"
         if filled > 0:
             return "PARTIAL"

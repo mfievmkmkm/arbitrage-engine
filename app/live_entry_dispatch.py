@@ -37,6 +37,7 @@ class Coordinator:
         safety_pct=0.1,
         max_seconds=1200,
         clock=time.time,
+        exit_authority=None,
     ):
         self.durable, self.runtime, self.diary = durable, runtime, diary
         self.public, self.private, self.snapshots, self.funding = (
@@ -52,6 +53,7 @@ class Coordinator:
             minimum_net,
         )
         self.safety, self.max_seconds, self.clock = safety_pct, max_seconds, clock
+        self.exit_authority = exit_authority or authority
         self.lock = asyncio.Lock()
         self.latest = {"status": "NOT_STARTED"}
         self.halt = None
@@ -76,10 +78,10 @@ class Coordinator:
                 raise ValueError("ENTRY_ACCOUNT_NOT_FLAT")
         return snapshot
 
-    async def _prepare(self, op):
+    async def _prepare(self, op, require_authority=True):
         symbol, lv, sv = op["symbol"], op["buy"], op["sell"]
         venues = (lv, sv)
-        if lv == sv or not self.authority(symbol, lv, sv):
+        if lv == sv or (require_authority and not self.authority(symbol, lv, sv)):
             raise ValueError("ENTRY_AUTHORITY_REQUIRED")
         if any(v not in self.private or v not in self.public for v in venues):
             raise ValueError("ENTRY_CLIENT_MISSING")
@@ -233,6 +235,56 @@ class Coordinator:
             max(0, -daily_net),
         )
 
+    async def preview(self, op):
+        """Read-only account/book/cost check, including with trading disabled.
+
+        The normal process path always requires authority. Preview has no
+        executor/session, never reserves capacity and cannot remove STOP.
+        """
+        from .entry_cost import estimate
+        from .order_policy import choose
+
+        async with self.lock:
+            try:
+                plan, requests, fees, allowance, _, equity, daily_loss = (
+                    await self._prepare(op, require_authority=False)
+                )
+                long, short = requests[op["buy"]], requests[op["sell"]]
+                edge = (short.price - long.price) / long.price * 100
+                costs = estimate(
+                    plan, choose(edge, 0.01, True), long.price, short.price, fees
+                )
+                threshold = self.minimum + allowance
+                return dict(
+                    status=(
+                        "DATA_CHECKED"
+                        if costs.net_edge_usd >= threshold
+                        else "NET_BELOW_THRESHOLD"
+                    ),
+                    symbol=op["symbol"],
+                    long_venue=op["buy"],
+                    short_venue=op["sell"],
+                    base_qty=plan.base_amount,
+                    long_contracts=long.qty,
+                    short_contracts=short.qty,
+                    long_limit=long.price,
+                    short_limit=short.price,
+                    net_edge_usd=costs.net_edge_usd,
+                    required_net_usd=threshold,
+                    equity=equity,
+                    daily_loss=daily_loss,
+                    write_authorized=bool(
+                        self.authority(op["symbol"], op["buy"], op["sell"])
+                    ),
+                    orders_sent=False,
+                )
+            except Exception as e:
+                return dict(
+                    status=str(e) if isinstance(e, ValueError) else "CHECK_UNAVAILABLE",
+                    orders_sent=False,
+                    write_authorized=False,
+                )
+
     async def process(self, opportunities):
         async with self.lock:
             if await self.durable.active():
@@ -261,7 +313,7 @@ class Coordinator:
                             CCXTExecutor(v, self.private[v]),
                             self.diary,
                             gate,
-                            exit_gate=lambda: self.authority(
+                            exit_gate=lambda: self.exit_authority(
                                 op["symbol"], op["buy"], op["sell"]
                             ),
                         )

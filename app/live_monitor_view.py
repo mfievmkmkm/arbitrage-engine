@@ -7,6 +7,7 @@ REASONS = {
     "PRIVATE_SNAPSHOT_UNTRUSTED": "Нет свежих доверенных данных о позициях.",
     "HEDGE_FILL_MISMATCH": "Объёмы исполнений двух ног не совпадают.",
     "PERSISTED_PRIVATE_MISMATCH": "Позиции биржи не совпадают с сохранённой сделкой.",
+    "EXIT_RESIDUAL_VERIFIED": "Остаток совпал по terminal fills и приватным контрактам. Закрытие требует действующего write-допуска; итог ещё не подтверждён.",
     "EXIT_RESIDUAL_REQUIRES_RECOVERY": "После попытки выхода осталась экспозиция. Нужен контролируемый recovery.",
     "CLOSE_ACCOUNTING_PENDING": "Позиции закрыты, но комиссии или funding ещё не подтверждены.",
     "UNMANAGED_POSITION": "Обнаружена позиция, которой нет в журнале бота.",
@@ -33,7 +34,7 @@ def status(summary):
         f"Восстановление: {'сверено' if summary['reconciled'] and fresh else 'требует проверки'}\n"
         f"Неизвестных заявок: {summary['unknown_orders']}\nНезавершённых сделок в БД: {summary['active_db']}\n"
         f"Подтверждённый NET закрытых сделок: {net:+.4f} USD\n"
-        "Режим: чтение и наблюдение. Отправка ордеров заблокирована."
+        "Наблюдатель сверяет данные. Допуск отправки заявок указан в LIVE-контроле."
     )
 
 
@@ -47,6 +48,10 @@ def positions(summary):
             f"{escape(str(x['long_venue']))} LONG / {escape(str(x['short_venue']))} SHORT\n"
             f"Этап: <code>{escape(x['phase'])}</code>\nPrivate: {'сверено' if x.get('private_verified') else 'не подтверждено'}"
         )
+        if x.get("exit_signal") == "EXIT_RESIDUAL":
+            out.append(
+                f"Подтверждённый остаток: LONG {x['residual_long_contracts']:.8g} / SHORT {x['residual_short_contracts']:.8g} контрактов."
+            )
         if x.get("private_flat"):
             out.append("Экспозиция: ноль; ожидается окончательный учёт.")
         effects = x.get("recovery_effects")

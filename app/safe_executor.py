@@ -78,7 +78,7 @@ class SafeExecutor(ExchangeExecutor):
             if str(result.status).lower() in TERMINAL
             else (
                 "FILLED"
-                if result.filled >= request.qty - 1e-12
+                if result.filled >= request.qty * (1 - 1e-10)
                 else ("PARTIAL" if result.filled > 0 else "ACK")
             )
         )

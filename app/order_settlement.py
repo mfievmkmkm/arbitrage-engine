@@ -7,12 +7,17 @@ TERMINAL = {"closed", "filled", "canceled", "cancelled", "rejected", "expired"}
 
 def valid(result, requested, minimum=0, order_id=None):
     try:
+        if any(isinstance(x, bool) for x in (result.filled, requested, minimum)):
+            return False
         q = float(result.filled)
         target = float(requested)
-        tolerance = max(target * 1e-10, 1e-12)
+        minimum = float(minimum)
+        tolerance = target * 1e-10
         if (
-            not all(math.isfinite(x) for x in (q, target))
+            not all(math.isfinite(x) for x in (q, target, minimum))
             or target <= 0
+            or q < 0
+            or minimum < 0
             or not minimum - tolerance <= q <= target + tolerance
         ):
             return False
@@ -32,8 +37,8 @@ def valid(result, requested, minimum=0, order_id=None):
 
 
 def terminal(result, requested):
-    return str(result.status).lower() in TERMINAL or result.filled >= requested - max(
-        requested * 1e-10, 1e-12
+    return str(result.status).lower() in TERMINAL or result.filled >= requested * (
+        1 - 1e-10
     )
 
 

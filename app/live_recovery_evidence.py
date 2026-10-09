@@ -184,10 +184,9 @@ def exit_accounting(trade, intents):
         raise Unverified("ORDER_EVIDENCE_INCOMPLETE")
     lc, lp, lf = leg_fills(intents, trade.long_venue, "sell", True, trade.symbol)
     sc, sp, sf = leg_fills(intents, trade.short_venue, "buy", True, trade.symbol)
-    if (
-        abs(lc - trade.long_contracts) > 1e-10
-        or abs(sc - trade.short_contracts) > 1e-10
-    ):
+    if not math.isclose(
+        lc, trade.long_contracts, rel_tol=1e-10, abs_tol=0
+    ) or not math.isclose(sc, trade.short_contracts, rel_tol=1e-10, abs_tol=0):
         raise Unverified("EXIT_FILL_QUANTITY_MISMATCH")
     if lp is None or sp is None:
         raise Unverified("EXIT_PRICE_MISSING")

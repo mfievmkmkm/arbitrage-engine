@@ -314,6 +314,8 @@ def test_main_wires_secondary_runtime_and_cleans_up_without_network(
         assert main.live_exit_coordinator.latest == []
         assert main.live_entry_coordinator is not None
         assert main.live_entry_coordinator.latest['status']=='NOT_STARTED'
+        assert main.live_residual_coordinator is not None
+        assert main.live_residual_coordinator.latest == []
         assert events == [
             "scanner-start",
             "secondary-build",

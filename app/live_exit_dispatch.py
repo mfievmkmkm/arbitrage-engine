@@ -35,6 +35,7 @@ class Coordinator:
         max_age=1.5,
         runner=run,
         recovery=recover_close,
+        residual_recovery=False,
     ):
         self.durable, self.executors, self.market = durable, executors, market_reader
         self.authority, self.stop, self.clock, self.max_age = (
@@ -43,6 +44,7 @@ class Coordinator:
             clock,
             max_age,
         )
+        self.residual_recovery = residual_recovery
         self.runner, self.recovery = runner, recovery
         self.lock = asyncio.Lock()
         self.latest = []
@@ -151,7 +153,15 @@ class Coordinator:
                         and "SLIPPAGE_STOP" not in status
                     ):
                         status = "EXIT_FILLS_PENDING_PRIVATE"
-                    hold = status != "EXIT_FILLS_PENDING_PRIVATE"
+                    if self.residual_recovery and status in (
+                        "EXIT_RECOVERY_REQUIRED:BOTH_LEGS_RESIDUAL_RECONCILE",
+                        "EXIT_RECOVERY_REQUIRED:RECOVERY_PARTIAL",
+                    ):
+                        status = "EXIT_RESIDUAL_PENDING_RECONCILIATION"
+                    hold = status not in (
+                        "EXIT_FILLS_PENDING_PRIVATE",
+                        "EXIT_RESIDUAL_PENDING_RECONCILIATION",
+                    )
                     await self.durable.phase(
                         tid,
                         "EXIT_SUBMITTING",

@@ -22,6 +22,8 @@ class CCXTExecutor(ExchangeExecutor):
         self.timeout = timeout
 
     def _result(self, row):
+        if isinstance(row.get("filled"), bool) or isinstance(row.get("amount"), bool):
+            raise RuntimeError("ACTUAL_AMOUNT_INVALID")
         filled = float(row.get("filled") or 0)
         if not math.isfinite(filled) or filled < 0:
             raise RuntimeError("ACTUAL_FILL_INVALID")
@@ -42,7 +44,7 @@ class CCXTExecutor(ExchangeExecutor):
         if amount is not None and (
             not math.isfinite(float(amount))
             or float(amount) < 0
-            or filled > float(amount) + max(float(amount) * 1e-10, 1e-12)
+            or filled > float(amount) + float(amount) * 1e-10
         ):
             raise RuntimeError("ACTUAL_AMOUNT_INVALID")
         status = normalize(

@@ -77,7 +77,7 @@ async def recover(
         isinstance(qty, bool)
         or not isinstance(qty, (int, float))
         or not math.isfinite(qty)
-        or qty > requested + max(1e-12, requested * 1e-10)
+        or qty > requested * (1 + 1e-10)
     ):
         return RecoveryResult(
             p.action, False, None, "RECOVERY_QTY_INCREASED_OR_INVALID"

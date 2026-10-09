@@ -54,9 +54,7 @@ def build(
     sb = sc * short_contract_size
     matched = min(lb, sb)
     scale = max(lb, sb)
-    if not all(math.isfinite(x) for x in (lb, sb)) or scale > base_amount + max(
-        base_amount * 1e-10, 1e-12
-    ):
+    if not all(math.isfinite(x) for x in (lb, sb)) or scale > base_amount * (1 + 1e-10):
         return ExecutionPlan(None, None, 0, False, "ROUNDING_INCREASES_EXPOSURE")
     if matched <= 0:
         return ExecutionPlan(None, None, 0, False, "BELOW_MIN_SIZE")

@@ -14,6 +14,8 @@ class Reader:
         self.timeout = timeout
 
     def parse(self, row):
+        if isinstance(row.get("filled"), bool) or isinstance(row.get("amount"), bool):
+            raise ValueError("INVALID_FILLED")
         filled = float(row.get("filled") or 0)
         if not math.isfinite(filled) or filled < 0:
             raise ValueError("INVALID_FILLED")

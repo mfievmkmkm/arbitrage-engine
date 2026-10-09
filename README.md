@@ -9,7 +9,7 @@
 
 `app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, Spot/Spot scanner с сохраняемыми виртуальными запасами и Funding scanner с сохраняемым Paper. Для DEX доступен опциональный 0x price-research; кошелёк не подписывает и не отправляет транзакции.
 
-Telegram: `/start`, `/top`, `/paper`, `/funding_paper`, `/fund_replay`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/execution_replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
+Telegram: `/start`, `/top`, `/paper`, `/funding_paper`, `/fund_replay`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/execution_replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_checks`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
 
 Основной `/replay` использует проверенные Paper marks и purged train/test. `/execution_replay` проверяет задержки, partial fills и закрытие остатка по записанным публичным REST-стаканам. Незавершённое исполнение не получает итоговый NET. Это offline-модель IOC/taker, а не реальные fills; funding из этой проверки исключён, результат не меняет капитал.
 
@@ -37,11 +37,23 @@ Read-only monitor восстанавливает уменьшенную пару
 
 ## Исполнение выхода Futures/Futures
 
-Write-side координатор выхода подключён к обновлениям monitor в main. Он использует TARGET_CAPTURE/NET_TRAILING/NET_STOP/TIME_STOP, атомарно резервирует EXIT_SUBMITTING в SQLite, получает свежие reference books для обеих ног и отправляет reduce-only MARKET через SafeExecutor. Для известного остатка одной ноги применяется существующий recovery; неизвестные заявки, ошибки, прерывание и оба частичных остатка сохраняют фазу/STOP для сверки. Автоматического повторного выхода после reservation нет.
+Write-side координатор выхода подключён к обновлениям monitor в main. Он использует TARGET_CAPTURE/NET_TRAILING/NET_STOP/TIME_STOP, атомарно резервирует EXIT_SUBMITTING в SQLite, получает свежие reference books для обеих ног и отправляет reduce-only MARKET через SafeExecutor. Для известного остатка одной ноги применяется существующий recovery. Подтверждённые частичные остатки обеих ног передаются отдельному residual-координатору; неизвестные заявки, ошибки и неподтверждённые остатки сохраняют фазу/STOP для сверки. Автоматического повторного выхода после reservation нет.
 
 Закрытие по fills не объявляется private-flat и не зачисляет результат. Наблюдатель отдельно проверяет terminal intents, private-flat и историческое funding, затем атомарно фиксирует полный итог. Его обновление marks не может вернуть одновременно зарезервированный выход в OPEN.
 
 Исполнение требует явно заданных `LIVE_ENABLED=true`, `LIVE_EXIT_VENUES` для обеих площадок, снятого оператором STOP, отсутствия kill-блокировок и свежей согласованной private/market-сверки. Значения по умолчанию — наблюдение. Список площадок — разрешение записи, **не автоматическая сертификация** reduceOnly/one-way/account режима; его задают только после проверки площадок. Конфигурация автовыхода не включает новые входы. Telegram отдельно показывает настроенный автовыход. В этой сессии ключи и реальные заявки не использовались.
+
+## Подтверждённые остатки выхода
+
+`live_residual_dispatch.Coordinator` подключён к main после координатора выхода. Он работает только с EXIT_SUBMITTING без hold, завершённой первичной отправкой и terminal intent обеих исходных exit-ног. Сверяются весь денежный поток входа/выхода, RuntimeTrade, отсутствие чужих позиций/работающих ордеров и точный native-остаток приватного аккаунта. Несогласованные единицы, side, fees, price, дубли exchange order ID и UNKNOWN не разрешают отправку.
+
+Перед заявками атомарно сохраняется отдельная round reservation с fingerprint ордерной истории. История перепроверяется в той же SQLite-транзакции; после записи private snapshot читается заново. Fresh recovery quotes и SafeExecutor проверяют каждую reduce-only заявку перед отправкой. У каждой попытки свои client IDs. Повтор уже claimed fingerprint запрещён, включая crash до создания intent. Следующая попытка возможна только после terminal обеих заявок предыдущей и фактического прогресса fills; максимум три раунда. Нулевой прогресс, превышение лимита, actual slippage, неизвестная отправка и прерывание сохраняют hold/STOP. Нет автоматического снятия hold или kill-switch.
+
+Residual-координатор не объявляет private-flat и не записывает PnL: это делает monitor после свежей сверки, terminal cashflow и funding coverage. Минимальные ненулевые объёмы не округляются в flat; NaN/Infinity, bool и отсутствие списка позиций не подтверждают нулевую экспозицию. Для количества применяются относительные допуски, без абсолютного порога, превращающего малый working order в исполненный.
+
+`/live_checks` и кнопка «Проверка аккаунтов и NET» вызывают отдельный read-only preview даже при выключенной торговле. Проверяются доступные private/public данные и расчётные затраты; reservation, заявки, снятие STOP и автоматическое release acceptance отсутствуют. Preview не подтверждает реальные fills или прибыльность. Кнопка «Снять STOP» — отдельное явное действие; устаревшая/будущая/неполная сверка и active kill-switch его запрещают.
+
+Защитный выход после входа использует отдельное разрешение на reduce-only закрытие. Потеря entry acceptance/private stream не заменяет exit authority; STOP, kill-switch, заданные exit venues и свежие котировки остаются обязательными. Ни одна проверка не включает торговлю автоматически.
 
 ## Исполнение входа Futures/Futures
 

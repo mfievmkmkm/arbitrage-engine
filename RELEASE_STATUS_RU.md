@@ -2,7 +2,9 @@
 
 Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-Последний блок: приватные order streams с durable событиями, REST fallback и пробуждением monitor; production IOC-вход Futures/Futures из сканера; атомарная single-position reservation; account/fees/funding/native/depth/margin проверки; expiring operator acceptance. Quote gate повторяется после claim intent, private-позиции с неверным объёмом не считаются flat. Protective terminal/private-flat цикл учитывается без RuntimeTrade. Локально: 844 теста. Live-ордера не отправлялись. Настройки запуска предусмотрены для входа и выхода после принятой проверки площадок; реализация входа больше не отсутствует.
+Последний блок: bounded residual-exit coordinator подключён к main. Частичные остатки одной/обеих ног закрываются только при совпадении полного terminal cashflow и приватных native-контрактов. Round reservation атомарно сверяет fingerprint; stage IDs, terminal предыдущего раунда, фактический прогресс и максимум 3 раунда исключают слепые повторы. UNKNOWN, interruption, slippage, zero progress и лимит сохраняют hold. Добавлены read-only account/NET preview и `/live_checks`; явное снятие STOP требует свежей согласованной сверки. Защитный выход использует независимую exit authority. Исправлены false-flat/false-filled для очень малых количеств и invalid private data. Локально: 921 тест. Реальных заявок и сертификации площадок не было.
+
+Предыдущий блок (844 теста): приватные order streams с durable событиями, REST fallback и пробуждением monitor; production IOC-вход Futures/Futures из сканера; атомарная single-position reservation; account/fees/funding/native/depth/margin проверки; expiring operator acceptance. Quote gate повторяется после claim intent, private-позиции с неверным объёмом не считаются flat. Protective terminal/private-flat цикл учитывается без RuntimeTrade. Локально: 844 теста. Live-ордера не отправлялись. Настройки запуска предусмотрены для входа и выхода после принятой проверки площадок; реализация входа больше не отсутствует.
 
 Предыдущий блок (779 тестов): write-side автовыход Futures/Futures подключён к обновлениям monitor; atomic EXIT_SUBMITTING reservation, fresh book evidence, reduce-only SafeExecutor, известный one-leg residual recovery и сохранение UNKNOWN/partial/interrupted состояния. Итог закрытия остаётся у monitor после terminal/private-flat/funding проверки. Устаревшие marks не возвращают claimed exit в OPEN. Исправлена flat-проверка малых объёмов. Локально: 779 тестов. Явный LIVE_ENABLED + LIVE_EXIT_VENUES + снятый STOP разрешают настроенный выход; новые production-входы ещё не подключены. В этой сессии реальные заявки не отправлялись.
 
@@ -29,7 +31,7 @@
 | Остальные LIVE стратегии | Заблокированы |
 | Восстановление | Непрерывный read-only monitor подключён к main: lookup UNKNOWN, terminal fills, fresh private snapshots, восстановление JSON из SQLite |
 | STOP | Сохраняется; после каждого запуска STOP включён, снятие требует evidence |
-| Частичные fills | Работающий остаток отменяется перед recovery; неизвестный результат отмены блокирует продолжение |
+| Частичные fills | Работающий остаток отменяется перед recovery; подтверждённые exit-остатки закрываются до 3 раундов; UNKNOWN/нет прогресса требуют сверки |
 | Повторные ордера | Атомарная SQLite-резервация intent; повтор/UNKNOWN не отправляется вслепую |
 | Закрытие | Подключён опциональный write-side reduce-only выход по сигналам; монитор фиксирует итог после private-flat, terminal exit fills и подтверждённого funding; запись результата и terminal-фазы атомарна |
 | NET входа | Учитываются комиссии входа и консервативного taker-выхода; полный модельный блок существует отдельно |
@@ -133,7 +135,7 @@
 
 ## До целевого финала ещё требуется
 
-- Production CEX lifecycle: завершить проверку площадок и реального IOC-входа на выбранных аккаунтах. Production-entry admission подключён. Опциональный write-side автовыход и известный one-leg exit recovery со свежими reference quotes подключены к main; UNKNOWN и оба частичных остатка требуют дальнейшей сверки. Непрерывный read-only lookup, fresh snapshots, восстановление и exit-наблюдение уже подключены; разрешения на автоматическую торговлю они не дают.
+- Production CEX lifecycle: завершить проверку площадок и реального IOC-входа на выбранных аккаунтах. Production-entry admission подключён. Опциональный write-side автовыход и известный one-leg exit recovery со свежими reference quotes подключены к main; UNKNOWN и остатки без совпадающих terminal/private доказательств требуют дальнейшей сверки; подтверждённые остатки закрываются отдельным bounded координатором. Непрерывный read-only lookup, fresh snapshots, восстановление и exit-наблюдение уже подключены; разрешения на автоматическую торговлю они не дают.
 - Опциональный публичный WS-транспорт подключён; private order streams подключены; ещё нужны certification snapshot/delta/sequence recovery каждой площадки и динамический приоритет подписок на весь меняющийся universe. Текущий sticky cap переводит overflow-пары на REST. Реальные подключения и плотная выборка в этой сессии не проверялись.
 - Подтвердить полноту приватной funding history на каждой площадке и задержки settlement; завершить fee/slippage attribution и реальные account acceptance. Открытый funding до текущего времени остаётся незрелым и не разрешает target/trailing по подтверждённому NET.
 - Spot/Futures replay уже работает по сохранённым model marks с purged train/test. Ещё нужны полноценная симуляция latency/fills, достаточная выборка, сквозное подтверждение Spot/Spot fills/latency и валидация Funding Paper на длительной записи публичных ставок и стаканов.

@@ -23,6 +23,9 @@ def plan(trade, exit_result, tolerance=1e-12):
             isinstance(v, bool) or not math.isfinite(float(v)) or v < 0 for v in values
         ):
             raise ValueError()
+        tolerance = min(
+            tolerance, min(trade.long_contracts, trade.short_contracts) * 1e-10
+        )
         if (
             exit_result.long_result.filled > trade.long_contracts + tolerance
             or exit_result.short_result.filled > trade.short_contracts + tolerance

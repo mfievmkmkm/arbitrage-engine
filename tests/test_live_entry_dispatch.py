@@ -397,3 +397,71 @@ def test_malformed_acceptance_record_fails_closed(tmp_path, field, value):
         d[field] = value
     p.write_text(json.dumps(d))
     assert not accepted(p, ("a", "b"), now)
+
+
+@pytest.mark.parametrize("authorized", [False, True])
+def test_read_only_preview_never_reserves_or_sends_even_with_write_authority(
+    tmp_path, authorized
+):
+    async def go():
+        c, clients, positions, sent = await setup(tmp_path)
+        c.authority = lambda *args: authorized
+        x = await c.preview(op())
+        assert x["status"] == "DATA_CHECKED" and x["write_authorized"] is authorized
+        assert x["base_qty"] == 0.04 and not x["orders_sent"]
+        assert x["net_edge_usd"] > x["required_net_usd"] > 0
+        assert (
+            not sent
+            and not await c.durable.active()
+            and not await c.diary.order_intents()
+        )
+        if not authorized:
+            assert not (await c.process([op()])).get("opened") and not sent
+
+    asyncio.run(go())
+
+
+def test_preview_blocks_bad_private_and_low_net_without_any_execution(tmp_path):
+    async def go():
+        c, clients, positions, sent = await setup(tmp_path)
+        positions["a"] = [NS()]
+        assert (await c.preview(op()))["status"] == "ENTRY_ACCOUNT_NOT_FLAT"
+        positions["a"] = []
+        c.minimum = 100
+        x = await c.preview(op())
+        assert (
+            x["status"] == "NET_BELOW_THRESHOLD"
+            and not sent
+            and not await c.durable.active()
+        )
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("exit_allowed", [True, False])
+def test_entry_authority_loss_does_not_replace_independent_protective_exit_permission(
+    tmp_path, exit_allowed
+):
+    async def go():
+        from dataclasses import replace
+
+        c, clients, positions, sent = await setup(tmp_path)
+        original = c.snapshots
+        c.exit_authority = lambda *args: exit_allowed
+
+        async def mismatch():
+            if positions["a"] and positions["b"]:
+                positions["a"] = [replace(positions["a"][0], qty=0.03, contracts=3)]
+                c.authority = lambda *args: False
+            return await original()
+
+        c.snapshots = mismatch
+        result = await c.process([op()])
+        assert not result["opened"]
+        assert len(sent) == (4 if exit_allowed else 2)
+        if exit_allowed:
+            assert not positions["a"] and not positions["b"]
+        else:
+            assert positions["a"] and positions["b"]
+
+    asyncio.run(go())

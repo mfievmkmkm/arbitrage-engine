@@ -1,3 +1,4 @@
+import time
 import asyncio, logging, tempfile
 from html import escape
 from pathlib import Path
@@ -26,6 +27,7 @@ from .private_funding_reader import (
 from .live_market_reader import Reader as LiveMarketReader
 from .live_monitor import Monitor as LiveMonitor
 from .live_exit_dispatch import Coordinator as LiveExitCoordinator
+from .live_residual_dispatch import Coordinator as LiveResidualCoordinator
 from .live_entry_dispatch import Coordinator as LiveEntryCoordinator
 from .live_acceptance import accepted as live_accepted
 from .safe_executor import SafeExecutor
@@ -58,9 +60,9 @@ from .venue_controller import Controller as VenueController
 from .tg_venue_keyboard import list_keyboard as venue_keyboard, control as venue_control
 from .tg_venue_detail import render as venue_detail
 from .live_control_view import render as render_live_control
+from .live_preflight_view import render as render_live_preflight
 from .live_commands import stop as command_stop, resume as command_resume
-from .resume_evidence import collect as collect_resume
-from .live_heartbeat import evaluate as heartbeat_eval
+from .resume_evidence import collect_current as collect_resume_current
 from types import SimpleNamespace
 from .strategy_runtime import StrategyRuntime
 from .multi_strategy_view import render as render_strategies
@@ -138,6 +140,7 @@ secondary = None
 live_monitor = None
 live_exit_coordinator = None
 live_entry_coordinator = None
+live_residual_coordinator = None
 live_trades = []
 durable = LiveTradeStore(config.db_path)
 strategy_toggles = StrategyToggleStore(config.runtime_state_path + ".strategies.json")
@@ -300,6 +303,13 @@ async def text_for(s):
             + "\n\n"
             + monitor_status(summary)
         )
+    if s == "live_checks":
+        result = (
+            await live_entry_coordinator.preview(latest[0])
+            if live_entry_coordinator and latest
+            else None
+        )
+        return render_live_preflight(result)
     if s == "live_positions":
         return monitor_positions(live_monitor.latest if live_monitor else None)
     if s == "incidents":
@@ -348,6 +358,7 @@ async def start(m: Message):
         "live",
         "live_stop",
         "live_resume",
+        "live_checks",
         "live_positions",
         "incidents",
         "strategies",
@@ -362,6 +373,7 @@ async def start(m: Message):
 async def commands(m: Message):
     if not allowed(m.from_user.id):
         return
+    notice = ""
     s = m.text.split()[0].lstrip("/").split("@")[0]
     if s == "export":
         await send_export(m)
@@ -373,18 +385,21 @@ async def commands(m: Message):
         command_stop(live_stop)
         s = "live"
     if s == "live_resume":
-        ev = collect_resume(
-            SimpleNamespace(
-                safe=live_supervisor.restart_clean, reason="RESTART_UNSAFE"
-            ),
-            live_supervisor.private_verified,
-            live_supervisor.unknown_orders,
-            heartbeat_eval(0, 0, True, True),
-            False,
+        ev = collect_resume_current(
+            live_supervisor, live_monitor.latest if live_monitor else None, time.time()
         )
-        command_resume(live_stop, ev, live_supervisor.kill)
+        result = command_resume(live_stop, ev, live_supervisor.kill)
+        notice = (
+            "▶ STOP снят."
+            if result.allowed
+            else "🛑 STOP остаётся: " + escape(result.reason)
+        )
         s = "live"
-    await m.answer(await text_for(s), reply_markup=keyboard_for(s), parse_mode="HTML")
+    await m.answer(
+        (notice + "\n\n" if notice else "") + await text_for(s),
+        reply_markup=keyboard_for(s),
+        parse_mode="HTML",
+    )
 
 
 @dp.callback_query(
@@ -409,6 +424,7 @@ async def commands(m: Message):
             "live",
             "live_stop",
             "live_resume",
+            "live_checks",
             "live_positions",
             "incidents",
             "strategies",
@@ -425,6 +441,7 @@ async def callbacks(q: CallbackQuery):
     if not allowed(q.from_user.id):
         await q.answer("Нет доступа", show_alert=True)
         return
+    notice = ""
     s = q.data
     if s == "export":
         await q.answer("Готовлю выгрузку")
@@ -438,18 +455,21 @@ async def callbacks(q: CallbackQuery):
         command_stop(live_stop)
         s = "live"
     if s == "live_resume":
-        ev = collect_resume(
-            SimpleNamespace(
-                safe=live_supervisor.restart_clean, reason="RESTART_UNSAFE"
-            ),
-            live_supervisor.private_verified,
-            live_supervisor.unknown_orders,
-            heartbeat_eval(0, 0, True, True),
-            False,
+        ev = collect_resume_current(
+            live_supervisor, live_monitor.latest if live_monitor else None, time.time()
         )
-        command_resume(live_stop, ev, live_supervisor.kill)
+        result = command_resume(live_stop, ev, live_supervisor.kill)
+        notice = (
+            "▶ STOP снят."
+            if result.allowed
+            else "🛑 STOP остаётся: " + escape(result.reason)
+        )
         s = "live"
-    await safe_edit(q.message, await text_for(s), keyboard_for(s))
+    await safe_edit(
+        q.message,
+        (notice + "\n\n" if notice else "") + await text_for(s),
+        keyboard_for(s),
+    )
 
 
 async def send_export(message):
@@ -506,7 +526,7 @@ def keyboard_for(screen):
         return back_menu(screen, "paper")
     if screen == "ss_inventory":
         return back_menu(screen, "paper")
-    if screen in ("live_positions", "incidents"):
+    if screen in ("live_positions", "incidents", "live_checks"):
         return back_menu(screen, "live")
     return back_menu(screen)
 
@@ -692,7 +712,7 @@ async def scanning():
 
 
 async def main():
-    global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor, live_exit_coordinator, live_entry_coordinator
+    global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor, live_exit_coordinator, live_entry_coordinator, live_residual_coordinator
     live_stop = Stop(config.runtime_state_path + ".stop.json")
     pf = preflight_check(config)
     if not pf.ok:
@@ -703,6 +723,7 @@ async def main():
     live_monitor = None
     live_exit_coordinator = None
     live_entry_coordinator = None
+    live_residual_coordinator = None
     private_clients = {}
     bot = None
     task = None
@@ -818,12 +839,23 @@ async def main():
             exit_authority,
             live_stop,
             max_age=config.live_max_book_age_ms / 1000,
+            residual_recovery=True,
+        )
+        live_residual_coordinator = LiveResidualCoordinator(
+            durable,
+            diary,
+            exit_executors,
+            registry.snapshot,
+            RecoveryMarketReader(scanner.clients),
+            exit_authority,
+            live_stop,
         )
 
         async def monitor_update(summary, new_incidents):
             global live_trades
             live_trades = [RuntimeTrade(**row) for row in summary["runtime_trades"]]
             await live_exit_coordinator.process(summary)
+            await live_residual_coordinator.process(summary)
             if notification_bot:
                 for item in new_incidents:
                     if item["severity"] in ("CRITICAL", "HIGH"):
@@ -911,6 +943,9 @@ async def main():
             registry.snapshot,
             scanner.funding,
             entry_authority,
+            exit_authority=lambda symbol, lv, sv: exit_authority(
+                SimpleNamespace(symbol=symbol, long_venue=lv, short_venue=sv)
+            ),
             bankroll=config.live_capital,
             notional=config.notional,
             minimum_net=config.live_min_net_edge_usd,
