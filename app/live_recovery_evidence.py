@@ -52,6 +52,14 @@ def validate_trade(trade):
         math.isfinite(float(x)) and float(x) > 0 for x in positive
     ) or not math.isfinite(float(trade.entry_fees)):
         raise Unverified("RUNTIME_ACCOUNTING_INVALID")
+    if (
+        not all(
+            math.isfinite(float(v))
+            for v in (trade.recovery_gross, trade.recovery_fees, trade.recovery_capital)
+        )
+        or trade.recovery_capital < 0
+    ):
+        raise Unverified("RUNTIME_ACCOUNTING_INVALID")
     for qty, size in (
         (trade.long_contracts, trade.long_contract_size),
         (trade.short_contracts, trade.short_contract_size),
@@ -74,7 +82,17 @@ def validate_sides(intents, lv, sv):
 def rebuild(row, payload, intents, snapshot):
     if not intents or any(x["state"] not in TERMINAL for x in intents):
         raise Unverified("ORDER_EVIDENCE_INCOMPLETE")
-    if any(bool(x["reduce_only"]) and float(x.get("filled") or 0) > 0 for x in intents):
+    reduced = any(
+        bool(x["reduce_only"])
+        and x["intent_id"].startswith(row["trade_id"] + ":entry-recovery:")
+        for x in intents
+    )
+    if any(
+        bool(x["reduce_only"])
+        and not x["intent_id"].startswith(row["trade_id"] + ":entry-recovery:")
+        and float(x.get("filled") or 0) > 0
+        for x in intents
+    ):
         raise Unverified("ENTRY_WITH_CLOSE_FILLS_REQUIRES_ACCOUNTING")
     symbol = row["symbol"]
     lv = row["long_venue"]
@@ -84,6 +102,19 @@ def rebuild(row, payload, intents, snapshot):
     validate_sides(intents, lv, sv)
     lc, lp, lf = leg_fills(intents, lv, "buy", False, symbol)
     sc, sp, sf = leg_fills(intents, sv, "sell", False, symbol)
+    b = None
+    if reduced:
+        from .reduced_fill_accounting import basis
+
+        b = basis(row, payload, intents)
+        lc, sc, lp, sp, lf, sf = (
+            b["remaining_long"],
+            b["remaining_short"],
+            b["long_entry"],
+            b["short_entry"],
+            b["entry_fees"],
+            0,
+        )
     ls = payload.get("long_contract_size")
     ss = payload.get("short_contract_size")
     if ls is None or ss is None:
@@ -113,6 +144,9 @@ def rebuild(row, payload, intents, snapshot):
         sp,
         opened,
         entry_fees=lf + sf,
+        recovery_gross=b["recovery_gross"] if b else 0,
+        recovery_fees=b["recovery_fees"] if b else 0,
+        recovery_capital=b["capital"] if b else 0,
     )
     if not verify_trade(trade, snapshot).safe:
         raise Unverified("PRIVATE_POSITION_MISMATCH")
@@ -123,6 +157,28 @@ def exit_accounting(trade, intents):
     from .trade_result import finalize
 
     validate_trade(trade)
+    if any(
+        bool(x["reduce_only"])
+        and x["intent_id"].startswith(trade.trade_id + ":entry-recovery:")
+        for x in intents
+    ):
+        from .reduced_fill_accounting import basis, check_runtime, cycle
+
+        row = dict(
+            trade_id=trade.trade_id,
+            symbol=trade.symbol,
+            long_venue=trade.long_venue,
+            short_venue=trade.short_venue,
+        )
+        payload = dict(
+            long_contract_size=trade.long_contract_size,
+            short_contract_size=trade.short_contract_size,
+            opened_at=trade.opened_at,
+        )
+        check_runtime(trade, basis(row, payload, intents))
+        return cycle(row, payload, intents)[1]
+    if trade.recovery_gross or trade.recovery_fees or trade.recovery_capital:
+        raise Unverified("REDUCED_EVIDENCE_MISSING")
     validate_sides(intents, trade.long_venue, trade.short_venue)
     if any(x["state"] not in TERMINAL for x in intents):
         raise Unverified("ORDER_EVIDENCE_INCOMPLETE")

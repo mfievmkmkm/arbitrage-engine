@@ -63,7 +63,9 @@ async def close(
                     )
                 fees = execution.long_result.fee + execution.short_result.fee
                 f = trade.funding if funding is None else funding
-                capital = trade.base_qty * ((trade.long_entry + trade.short_entry) / 2)
+                capital = trade.recovery_capital or trade.base_qty * (
+                    (trade.long_entry + trade.short_entry) / 2
+                )
                 result = finalize(
                     trade.trade_id,
                     trade.base_qty,
@@ -76,6 +78,8 @@ async def close(
                     f,
                     capital,
                     reason,
+                    recovery_gross=trade.recovery_gross,
+                    recovery_fees=trade.recovery_fees,
                 )
                 return LifecycleClose(True, "CLOSED_VERIFIED", result, execution)
             last = v.reason

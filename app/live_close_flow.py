@@ -36,7 +36,7 @@ def _finalize_recovered(
     )
     fees = x.long_result.fee + x.short_result.fee if exit_fees == 0 else exit_fees
     f = t.funding if funding is None else funding
-    capital = t.base_qty * ((t.long_entry + t.short_entry) / 2)
+    capital = t.recovery_capital or t.base_qty * ((t.long_entry + t.short_entry) / 2)
     return finalize(
         t.trade_id,
         t.base_qty,
@@ -49,6 +49,8 @@ def _finalize_recovered(
         f,
         capital,
         reason,
+        recovery_gross=t.recovery_gross,
+        recovery_fees=t.recovery_fees,
     )
 
 

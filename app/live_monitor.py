@@ -259,6 +259,19 @@ class Monitor:
                 and not filled
                 and row["phase"] in ("PLANNED", "ENTRY_SUBMITTING", "UNKNOWN")
             ):
+                try:
+                    if any(
+                        x.get("fee") is None
+                        or not math.isfinite(float(x["fee"]))
+                        or float(x["fee"]) != 0
+                        for x in own
+                    ):
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    incidents.append(
+                        self._incident("ZERO_FILL_ACCOUNTING_REQUIRED", tid)
+                    )
+                    continue
                 await self.durable.phase(
                     tid, "ABORTED", reason="PRIVATE_FLAT_NO_FILLED_INTENTS"
                 )
@@ -266,6 +279,9 @@ class Monitor:
                 info["private_verified"] = True
                 continue
             trade = None
+            from .reduced_fill_accounting import reduction, basis, check_runtime, cycle
+
+            reduced = any(reduction(x, tid) for x in own)
             if payload.get("runtime_trade"):
                 try:
                     trade = RuntimeTrade(**payload["runtime_trade"])
@@ -283,8 +299,21 @@ class Monitor:
                         self._incident("RUNTIME_PAYLOAD_SCOPE_MISMATCH", tid)
                     )
                     continue
+                if reduced:
+                    try:
+                        check_runtime(trade, basis(row, payload, own))
+                    except Unverified as error:
+                        incidents.append(self._incident(str(error), tid))
+                        continue
+                elif (
+                    trade.recovery_gross
+                    or trade.recovery_fees
+                    or trade.recovery_capital
+                ):
+                    incidents.append(self._incident("REDUCED_EVIDENCE_MISSING", tid))
+                    continue
             if flat:
-                if trade is None:
+                if trade is None and not reduced:
                     incidents.append(
                         self._incident(
                             "FLAT_ENTRY_ACCOUNTING_REQUIRED", tid, severity="HIGH"
@@ -292,7 +321,10 @@ class Monitor:
                     )
                     continue
                 try:
-                    calculate = exit_accounting(trade, own)
+                    if reduced:
+                        trade, calculate = cycle(row, payload, own)
+                    else:
+                        calculate = exit_accounting(trade, own)
                 except Unverified as error:
                     incidents.append(self._incident(str(error), tid, severity="HIGH"))
                     continue
@@ -395,17 +427,34 @@ class Monitor:
             gross = (
                 (market["long_exit"] - trade.long_entry)
                 + (trade.short_entry - market["short_exit"])
-            ) * trade.base_qty
+            ) * trade.base_qty + trade.recovery_gross
             fee = market.get("exit_fee")
             estimate = (
                 None
                 if fee is None
-                else gross - trade.entry_fees - fee + coverage.amount
+                else gross
+                - trade.entry_fees
+                - trade.recovery_fees
+                - fee
+                + coverage.amount
             )
             best = float(payload.get("best_net", -1e18))
             edge = payload.get("entry_net_edge_usd")
             signal = "TIME_STOP" if age >= self.max_seconds else "HOLD"
             costs_verified = bool(market.get("fees_verified") and coverage.verified)
+            target_basis = None
+            if trade.recovery_capital > 0 and costs_verified and fee is not None:
+                ceiling = max(
+                    0,
+                    (trade.short_entry - trade.long_entry) * trade.base_qty
+                    + trade.recovery_gross
+                    - trade.entry_fees
+                    - trade.recovery_fees
+                    - fee
+                    + coverage.amount,
+                )
+                edge = min(float(edge), ceiling) if edge is not None else ceiling
+                target_basis = "REDUCED_FULL_CONVERGENCE_CEILING_MODEL"
             if costs_verified and estimate is not None:
                 state = ExitState(
                     float(edge) if edge is not None else 1e99, trade.opened_at, best
@@ -428,6 +477,10 @@ class Monitor:
                 "exit_signal": signal,
                 "spread": market["spread"],
                 "market_ts": market["ts"],
+                "target_edge_basis": target_basis,
+                "target_net_model": (
+                    max(0, float(edge) * self.target) if target_basis else None
+                ),
             }
             marks.append(mark)
             info.update(mark)

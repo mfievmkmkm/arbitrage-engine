@@ -2,7 +2,9 @@
 
 Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-Последний блок: read-only сравнение FLATTEN/COMPLETE по общему и дополнительному NET; paid entry fees, taker entry/exit costs, funding allowance, slippage reserve, safety и break-even capture. Quote-backed incomplete entry теперь использует reduce-only сокращение лишнего объёма, сохраняет фактический результат сокращения и остаток обеих ног. Assessment не разрешает дооткрытие; сокращённая позиция не выдаётся за подтверждённый новый runtime-вход. Диагностика подключена к read-only карточкам Telegram. Локально: 688 тестов. LIVE, reader и новый assessor в main не включены; account/position-mode/reduceOnly проверки и подтверждённый учёт уменьшенной пары остаются следующими этапами.
+Последний блок: read-only восстановление уменьшенной пары по terminal fills и private-остатку; перенос realized recovery gross и всех расходов в marks/закрытие без двойного зачисления; полный cashflow-учёт закрытой сделки, включая односторонний abort; funding за весь исходный период; исходный notional для ROI; пересчёт модельной цели для меньшего остатка. Локально: 722 теста. Monitor подключён к main, отправка ордеров не добавлена. STOP не снимается. Account/position-mode/reduceOnly проверки, реальное execution-подключение и дооткрытие COMPLETE остаются следующими этапами.
+
+Предыдущий блок (688 тестов): read-only сравнение FLATTEN/COMPLETE по общему и дополнительному NET, paid entry fees, taker вход/выход, funding allowance, slippage reserve, safety и break-even capture. Quote-backed incomplete entry использует reduce-only сокращение лишнего объёма и сохраняет его cashflow. Assessment не разрешает дооткрытие; reader и assessor в main не включены.
 
 Предыдущий блок (658 тестов): опциональные свежие recovery quotes с native limits, полной контрактной глубиной и worst-level slippage; атомарное сохранение request/book evidence вместе с intent; повторная проверка gate/свежести после записи; export evidence; durable hold при actual slippage; транзакционная защита накопленных fills от запоздалого ответа отмены.
 
