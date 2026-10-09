@@ -57,6 +57,20 @@ def positions(summary):
                 out.append(f"Оценка NET выхода: {x['estimated_net']:+.4f} USD")
             out.append("Управление: /sf_live")
             continue
+        if x.get("strategy") == "spot_spot":
+            out.append(
+                f"\n<b>{escape(x['symbol'])}</b> • Spot/Spot\n<code>{escape(x['trade_id'])}</code>\nЭтап: {escape(x['phase'])}\nPrivate: {'сверено' if x.get('private_verified') else 'не подтверждено'}"
+            )
+            if x.get("cashflow"):
+                out.append(
+                    "Изменение запаса: "
+                    + " / ".join(
+                        f"{escape(v)} {q:+.8g} BASE"
+                        for v, q in x["cashflow"]["base"].items()
+                    )
+                )
+            out.append("Управление: /ss_live")
+            continue
         out.append(
             f"\n<b>{escape(str(x.get('symbol','—')))}</b>\n<code>{escape(x['trade_id'])}</code>\n"
             f"{escape(str(x['long_venue']))} LONG / {escape(str(x['short_venue']))} SHORT\n"

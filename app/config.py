@@ -58,6 +58,18 @@ class Config:
     live_spot_futures_enabled: bool = os.getenv(
         "LIVE_SPOT_FUTURES_ENABLED", "true"
     ).strip().lower() in ("true", "1", "yes", "on")
+    live_spot_spot_enabled: bool = os.getenv(
+        "LIVE_SPOT_SPOT_ENABLED", "true"
+    ).strip().lower() in ("true", "1", "yes", "on")
+    live_funding_enabled: bool = os.getenv(
+        "LIVE_FUNDING_ENABLED", "true"
+    ).strip().lower() in ("true", "1", "yes", "on")
+    live_funding_hold_seconds: int = min(
+        86400, max(60, int(os.getenv("LIVE_FUNDING_HOLD_SECONDS", "28800")))
+    )
+    live_funding_min_carry_pct: float = max(
+        0, float(os.getenv("LIVE_FUNDING_MIN_CARRY_PCT", "0.03"))
+    )
     live_acceptance_path: str = os.getenv(
         "LIVE_ACCEPTANCE_PATH", "live_acceptance.json"
     )

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "evidence_id": "",
+  "verified_at": 0,
+  "expires_at": 0,
+  "chains": {
+    "1": {
+      "network_verified": false,
+      "transaction_targets": [],
+      "native_symbol": "ETH/USDT:USDT",
+      "native_decimals": 18,
+      "tokens": {
+        "0x1111111111111111111111111111111111111111": {
+          "contract_verified": false,
+          "decimals": 6,
+          "quote_usdt": true
+        },
+        "0x2222222222222222222222222222222222222222": {
+          "contract_verified": false,
+          "decimals": 18,
+          "base": "X",
+          "cex_venue": "binance",
+          "cex_symbol": "X/USDT:USDT"
+        }
+      }
+    }
+  }
+}

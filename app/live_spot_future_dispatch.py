@@ -13,6 +13,7 @@ from .exchange_executor import SubmitRequest
 from .recovery_market import Reader as Quotes
 from .private_funding_reader import Reader as Funding
 from .dynamic_exit import ExitState, decide
+from .live_decision_diary import record as record_decision
 
 
 class Coordinator:
@@ -40,6 +41,7 @@ class Coordinator:
                 continue
             result = await self.session.enter(r, "sf-" + uuid.uuid4().hex[:20])
             self.latest = result
+            await record_decision(self.session.diary,"spot_futures",r,result,self.clock)
             if result.get("status") != "BLOCKED":
                 return result
         if not offers:

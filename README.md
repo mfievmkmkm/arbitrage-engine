@@ -9,6 +9,9 @@
 
 `app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, Spot/Spot scanner с сохраняемыми виртуальными запасами и Funding scanner с сохраняемым Paper. Для DEX доступен опциональный 0x price-research; кошелёк не подписывает и не отправляет транзакции.
 
+LIVE Spot/Spot и Funding теперь зарегистрированы в основном запуске с отдельным account acceptance. Spot/Spot исполняет inventory-backed cash round trip и bounded explicit recovery; Funding использует общий derivative lifecycle с собственным горизонтом и reserve фактических расходов. Команды: `/ss_live`, `/ss_checks`, `/funding_live`, `/funding_checks`. CEX/DEX дополнительно поддерживает 0x firm quote + read-only RPC simulation и native CEX hedge/NET ceiling model. Это пока не полноценный DEX Paper/Replay или wallet LIVE. Подробности: [REMAINING_LIVE_RUNBOOK_RU.md](REMAINING_LIVE_RUNBOOK_RU.md).
+
+
 Telegram: `/start`, `/top`, `/paper`, `/funding_paper`, `/fund_replay`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/execution_replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_checks`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
 
 Основной `/replay` использует проверенные Paper marks и purged train/test. `/execution_replay` проверяет задержки, partial fills и закрытие остатка по записанным публичным REST-стаканам. Незавершённое исполнение не получает итоговый NET. Это offline-модель IOC/taker, а не реальные fills; funding из этой проверки исключён, результат не меняет капитал.

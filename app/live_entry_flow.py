@@ -50,6 +50,7 @@ async def execute(
     recovery_market_reader=None,
     recovery_assessor=None,
     prepared_requests=None,
+    durable_metadata=None,
 ):
     if private_snapshot is None:
         return LiveEntryResult(False, "PRIVATE_STATE_REQUIRED", "")
@@ -81,6 +82,18 @@ async def execute(
             long_contract_size=plan.long.contract_size,
             short_contract_size=plan.short.contract_size,
         )
+        extra = durable_metadata or {}
+        if set(extra) - {"strategy", "funding_plan"} or (
+            extra
+            and (
+                extra.get("strategy") != "funding_arb"
+                or not isinstance(extra.get("funding_plan"), dict)
+            )
+        ):
+            return LiveEntryResult(
+                False, "DURABLE_STRATEGY_METADATA_INVALID", trade_id, admission=adm
+            )
+        meta.update(extra)
         if hasattr(durable_store, "reserve_entry"):
             if not await durable_store.reserve_entry(trade_id, **meta):
                 return LiveEntryResult(

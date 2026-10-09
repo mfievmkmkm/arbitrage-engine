@@ -16,10 +16,13 @@ Held spot inventory remains separate from derivative flat proof. Next: account
 certification of fee units, IOC/lookup, private history completeness and canary;
 extend dense execution stress evidence to the cash strategy.
 
-Then complete live Spot/Spot inventory and Funding lifecycles; CEX/DEX remains
-quote/simulation/security work, not an assumed executable route. Finish with
-per-venue account certification, dense Paper/OOS evidence and separately
-accepted canary. No percentage or file-count substitutes for these checks.
+Spot/Spot and Funding live lifecycles are now registered with strategy-scoped
+acceptance, shared capacity/private monitor and Telegram. DEX firm/RPC simulation
+and native CEX hedge/NET ceiling evidence are registered read-only. Remaining:
+real account certification/canary, dense recorded OOS evidence for cash/Funding,
+and complete two-sided CEX/DEX Paper/Replay plus wallet signer/receipt lifecycle.
+The one-cycle DEX convergence ceiling is not a booked Paper/live trade. No
+percentage or file-count substitutes for these checks.
 
 ## A. Finish integration, not architecture
 - wire StrategyRuntime into Telegram and scan loop

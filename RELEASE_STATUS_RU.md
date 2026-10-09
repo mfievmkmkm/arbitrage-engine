@@ -2,7 +2,17 @@
 
 Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: Spot/Futures подключён к основному боту
+## Текущий блок: LIVE Spot/Spot, Funding и firm DEX simulation
+
+В main зарегистрированы LIVE Spot/Spot и Funding, strategy-scoped acceptance, общая capacity и монитор, Telegram read-only checks, close/recovery controls. Spot/Spot восстанавливает предварительно размещённые запасы по terminal/private cashflow, не использует transfers/borrow. Остаточные allocation deltas сохраняются отдельно; их наличие не считается flat. Funding прогноз не кредитуется; известные расходы каждой ноги резервируются отдельно, hold сохраняется до отправки, вывод результата требует mature private income. Цена/fee NET_STOP может работать без предполагаемого funding income.
+
+Pair funding mark теперь сверяет maturity cutoff + calendar gap; наблюдатель больше не требует незрелый until=now private history для profit capture. Funding evidence берётся до свежих closing books. Добавлен операторский derivative exit по свежей сверке и атомарному claim. LIVE admission outcomes записываются в дневник.
+
+CEX/DEX: 0x firm quote, exact units/min-received/tax/issues, expiring token/CEX identity registry, chain/block/hash/decimals/code/wallet/gas RPC proof и eth_call. Native CEX hedge и fee/gas NET ceiling model подключены к secondary scanner, Telegram и observations. Подписи, approvals и wallet transactions отсутствуют. Полноценный двусторонний DEX Paper/Replay и wallet LIVE ещё не реализованы.
+
+Локальная проверка этого блока: **1110 тестов**, compileall, импорт main и diff check. Реальные аккаунты и транзакции не запускались. Инструкция: `REMAINING_LIVE_RUNBOOK_RU.md`.
+
+## Предыдущий блок: Spot/Futures подключён к основному боту
 
 Market-scoped spot private clients создаются отдельно от swap clients. Secondary scanner вызывает cash entry после сохранения observations и под общим monitor lock. Admission/gates требуют общих LIVE/ENTRY флагов, отдельного SF feature flag, свежей общей сверки, derivative private stream и дополнительных strategy/venue acceptance checks. Уже существующая конфигурация Futures/Futures не переписывается; его acceptance не разрешает SF.
 
@@ -50,10 +60,12 @@ Spot/Futures public native-план **подключён к scanner, сохра�
 | Spot ↔ Futures | Discovery, публичный fee-aware native-план, сохраняемый Paper и Replay подключены; short spot без borrowing не открывается |
 | Spot ↔ Spot | Подключены сканер, сохраняемый inventory-aware Paper и Replay marks; вход требует виртуальных запасов, borrow/transfer не имитируются |
 | Funding arbitrage | Сканер + сохраняемый Funding Paper: closing VWAP, историческая сверка ставок, pending accounting, Ledger, экспорт и Replay модели |
-| CEX ↔ DEX | Опциональный 0x price-research для заданных контрактов; отсутствует подтверждённый исполнимый CEX/DEX спред |
+| CEX ↔ DEX | Price research + optional firm quote/RPC simulation + native CEX hedge/NET ceiling model; нет полного Paper/Replay или wallet LIVE |
 | LIVE Futures ↔ Futures | IOC-вход из сканера, private streams, durable session и автовыход подключены; реальные аккаунты/исполнение не сертифицированы |
 | LIVE Spot ↔ Futures | Account preflight, scanner entry, sequential session, общий monitor, dynamic exit, explicit recovery, atomic cash-result, Telegram и уведомления подключены; реальное исполнение не сертифицировано |
-| Остальные LIVE стратегии | В основном боте не реализовано исполнение Spot/Spot, Funding и CEX/DEX |
+| LIVE Spot ↔ Spot | Sequential inventory-backed session, common monitor, dynamic exit, explicit recovery, atomic cashflow/result/allocation accounting, Telegram подключены; реальные аккаунты не сертифицированы |
+| LIVE Funding | Общий derivative entry/exit lifecycle, отдельный hold/calendar/expense reserve и acceptance, private funding/results, ручной выход подключены; реальные аккаунты не сертифицированы |
+| LIVE CEX/DEX | Wallet execution не реализован; read-only firm/RPC simulation не разрешает transactions |
 | Восстановление | Непрерывный read-only monitor подключён к main: lookup UNKNOWN, terminal fills, fresh private snapshots, восстановление JSON из SQLite |
 | STOP | Сохраняется; после каждого запуска STOP включён, снятие требует evidence |
 | Частичные fills | Работающий остаток отменяется перед recovery; подтверждённые exit-остатки закрываются до 3 раундов; UNKNOWN/нет прогресса требуют сверки |
@@ -75,7 +87,7 @@ Spot/Futures public native-план **подключён к scanner, сохра�
 - Весь первоначальный reserve по заданным reference prices включён в общий Paper-бюджет с Futures/Futures и Spot/Futures. Начальная стоимость актива в запасе сама по себе не считается прибылью. Изменение рыночной цены постоянно удерживаемого seed-актива не отражено в NET отдельных round trips.
 - Watch-запросы сохраняют исходные buy/sell площадки и base_qty, даже если лучший спред сменил направление или discovery отключён. Старые/неполные стаканы не используются для закрытия.
 - Telegram: позиции и виртуальные запасы, третий экран Replay; экспорт: inventory state, сделки, marks и решения. Ledger восстанавливает закрытый NET после перезапуска.
-- Spot/Spot Replay использует те же проверки состава затрат, хронологии, purged train/test и censored paths. Это моделирование записанных marks, без доказательства реальных fills/latency. LIVE остаётся заблокированным.
+- Spot/Spot Replay использует те же проверки состава затрат, хронологии, purged train/test и censored paths. Это моделирование записанных marks, без доказательства реальных fills/latency. Это исторический Paper-блок; текущий LIVE-контур описан выше.
 
 ## Telegram и Spot/Futures — текущая доработка
 

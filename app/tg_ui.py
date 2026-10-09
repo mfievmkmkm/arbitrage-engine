@@ -61,6 +61,7 @@ def live_menu(stopped, kill_active=False):
         inline_keyboard=[
             [button("🧪 Проверка аккаунтов и NET", "live_checks", "primary")],
             [button("📊 Spot/Futures LIVE", "sf_live", "primary")],
+            [button("🔄 Spot/Spot LIVE", "ss_live", "primary"), button("🕒 Funding LIVE", "funding_live", "primary")],
             *(
                 [[button("Снять блокировку после сверки", "live_clear", "success")]]
                 if kill_active

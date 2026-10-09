@@ -56,8 +56,10 @@ class Reader:
             row = await asyncio.wait_for(c.fetch_trading_fee(symbol), self.timeout)
             if row.get("symbol") != symbol or row.get("taker") is None:
                 return None
+            if isinstance(row["taker"], bool):
+                return None
             rate = float(row["taker"])
-            if not math.isfinite(rate) or rate < 0:
+            if not math.isfinite(rate) or not 0 <= rate <= 0.1:
                 return None
             self.fee_cache[key] = (self.clock(), rate)
             return rate

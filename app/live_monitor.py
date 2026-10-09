@@ -40,6 +40,7 @@ class Monitor:
         clock=time.time,
         on_update=None,
         cash_observer=None,
+        stop_net=None,
     ):
         self.durable = durable
         self.runtime = runtime
@@ -58,6 +59,7 @@ class Monitor:
         self.clock = clock
         self.on_update = on_update
         self.cash_observer = cash_observer
+        self.stop_net = stop_net
         self.store = MonitorStore(durable.path)
         self.lock = asyncio.Lock()
         self.task = None
@@ -109,11 +111,16 @@ class Monitor:
                 return False
         return bool(venues)
 
-    async def _coverage(self, trade, until):
+    async def _coverage(self, trade, until, mark=False):
         if self.funding is None:
             return Evidence(False, 0, (), "FUNDING_EVIDENCE_REQUIRED")
         try:
-            result = await self.funding.collect(trade, until)
+            reader = (
+                self.funding.mark
+                if mark and hasattr(self.funding, "mark")
+                else self.funding.collect
+            )
+            result = await reader(trade, until)
             if not math.isfinite(result.amount):
                 return Evidence(False, 0, (), "FUNDING_AMOUNT_INVALID")
             if result.verified and result.covered_until + 1e-6 < until:
@@ -140,7 +147,7 @@ class Monitor:
         cash_rows = [
             r
             for r in rows
-            if json.loads(r["payload"]).get("strategy") == "spot_futures"
+            if json.loads(r["payload"]).get("strategy") in ("spot_futures", "spot_spot")
         ]
         rows = [r for r in rows if r not in cash_rows]
         snapshot = await self.snapshot_source()
@@ -234,6 +241,7 @@ class Monitor:
             symbol = row.get("symbol")
             info = {
                 "trade_id": tid,
+                "strategy": payload.get("strategy", "futures_futures"),
                 "symbol": symbol,
                 "phase": row["phase"],
                 "long_venue": lv,
@@ -485,15 +493,28 @@ class Monitor:
             if row["phase"] == "HEDGED_PRIVATE_VERIFIED":
                 await self.durable.mark_open(tid, reason="PRIVATE_RECONCILED")
                 info["phase"] = "OPEN"
+            coverage = await self._coverage(trade, now, mark=True)
             market = (
                 await self.market.mark(trade)
                 if self.market is not None
                 else {"ok": False, "reason": "EXIT_MARKET_SOURCE_MISSING"}
             )
+            hold_seconds = self.max_seconds
+            if payload.get("strategy") == "funding_arb":
+                hold_seconds = payload.get("funding_plan", {}).get(
+                    "hold_seconds", self.max_seconds
+                )
+                if (
+                    type(hold_seconds) not in (int, float)
+                    or not math.isfinite(hold_seconds)
+                    or not 60 <= hold_seconds <= 86400
+                ):
+                    incidents.append(self._incident("FUNDING_HOLD_CONFIG_INVALID", tid))
+                    continue
             age = now - trade.opened_at
             if not market.get("ok"):
                 info["exit_signal"] = (
-                    "TIME_STOP" if age >= self.max_seconds else "DATA_UNAVAILABLE"
+                    "TIME_STOP" if age >= hold_seconds else "DATA_UNAVAILABLE"
                 )
                 incidents.append(
                     self._incident(
@@ -504,7 +525,6 @@ class Monitor:
                     )
                 )
                 continue
-            coverage = await self._coverage(trade, now)
             gross = (
                 (market["long_exit"] - trade.long_entry)
                 + (trade.short_entry - market["short_exit"])
@@ -521,7 +541,7 @@ class Monitor:
             )
             best = float(payload.get("best_net", -1e18))
             edge = payload.get("entry_net_edge_usd")
-            signal = "TIME_STOP" if age >= self.max_seconds else "HOLD"
+            signal = "TIME_STOP" if age >= hold_seconds else "HOLD"
             costs_verified = bool(market.get("fees_verified") and coverage.verified)
             target_basis = None
             if trade.recovery_capital > 0 and costs_verified and fee is not None:
@@ -541,12 +561,29 @@ class Monitor:
                     float(edge) if edge is not None else 1e99, trade.opened_at, best
                 )
                 decision = decide(
-                    state, now, estimate, self.target, self.trailing, self.max_seconds
+                    state,
+                    now,
+                    estimate,
+                    self.target,
+                    self.trailing,
+                    hold_seconds,
+                    stop_net=self.stop_net,
                 )
                 signal = decision.reason if decision.close else "HOLD"
                 best = state.best_net
+            # A conservative price/fee stop needs no forecast funding credit.
+            if (
+                self.stop_net is not None
+                and fee is not None
+                and market.get("fees_verified")
+                and gross - trade.entry_fees - trade.recovery_fees - fee
+                <= self.stop_net
+            ):
+                signal = "NET_STOP"
             mark = {
                 "trade_id": tid,
+                "strategy": payload.get("strategy", "futures_futures"),
+                "strategy": payload.get("strategy", "futures_futures"),
                 "symbol": symbol,
                 "estimated_net": estimate,
                 "gross": gross,
@@ -579,7 +616,7 @@ class Monitor:
                 info = dict(
                     trade_id=tid,
                     symbol=row["symbol"],
-                    strategy="spot_futures",
+                    strategy=json.loads(row["payload"]).get("strategy"),
                     phase=row["phase"],
                     long_venue=row["long_venue"],
                     short_venue=row["short_venue"],
@@ -596,7 +633,7 @@ class Monitor:
                         reason=info.get("cash_error", "UNKNOWN"),
                     )
                 )
-            elif row["phase"] != "CASH_OPEN":
+            elif row["phase"] not in ("CASH_OPEN", "SS_OPEN"):
                 incidents.append(
                     self._incident(
                         "CASH_RECONCILED_PENDING",

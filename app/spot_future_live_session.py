@@ -101,8 +101,15 @@ class Session:
         return result
 
     async def _flow(self, tid, p):
+        intents = await self.diary.order_intents(tid)
+        if not intents:
+            row = await self.store.get(tid)
+            if row and row["phase"] == "PLANNED":
+                from .spot_future_cashflow import Cashflow
+
+                return Cashflow(0, 0, 0, 0, 0, 0, 0)
         return rebuild(
-            await self.diary.order_intents(tid),
+            intents,
             tid,
             p.venue + ":spot",
             p.venue,
@@ -422,6 +429,10 @@ class Session:
             if observation.get("status") != "PRIVATE_VERIFIED":
                 return observation
             row = await self.store.get(trade_id)
+            if row and row["phase"] == "PLANNED":
+                from .cash_reserved_abort import abort
+
+                return await abort(self.store, row, self.clock())
             if not row or row["phase"] not in (
                 "CASH_HOLD",
                 "CASH_ACCOUNTING_PENDING",

@@ -29,7 +29,18 @@ from .live_monitor import Monitor as LiveMonitor
 from .live_exit_dispatch import Coordinator as LiveExitCoordinator
 from .live_residual_dispatch import Coordinator as LiveResidualCoordinator
 from .live_entry_dispatch import Coordinator as LiveEntryCoordinator
-from .live_acceptance import accepted as live_accepted, spot_accepted
+from .live_acceptance import (
+    accepted as live_accepted,
+    spot_accepted,
+    cash_spot_accepted,
+)
+from .live_funding_dispatch import Coordinator as FundingLiveCoordinator
+from .spot_spot_live import Session as SpotSpotSession
+from .live_spot_spot_dispatch import Coordinator as SpotSpotCoordinator, CashObserver
+from .tg_remaining_live import (
+    render as render_remaining_live,
+    menu as remaining_live_menu,
+)
 from .spot_future_live_preflight import Admission as SpotFutureAdmission
 from .spot_future_live_session import Session as SpotFutureSession
 from .live_spot_future_dispatch import Coordinator as SpotFutureCoordinator
@@ -139,6 +150,8 @@ startup_text = "🚦 Startup ещё не выполнен"
 private_clients = {}
 spot_private_clients = {}
 spot_future_live = None
+spot_spot_live = None
+funding_live = None
 live_supervisor = LiveSupervisor(config.max_engine_errors)
 live_stop = None
 strategy_runtime = StrategyRuntime()
@@ -215,14 +228,34 @@ async def text_for(s):
                 render_dex_console()
                 + "\n\nДля price-research нужны ZEROX_API_KEY и DEX_RESEARCH_ROUTES_JSON."
             )
-        out = ["⛓ DEX • индикативные цены • REAL/PAPER заблокированы"]
+        out = ["⛓ DEX • проверка котировок и исполнения"]
         for row in rows:
             q = row["quote"]
             out.append(
                 escape(row["symbol"])
                 + " • "
-                + ("buy raw " + q["buy_amount_raw"] if q["ok"] else q["reason"])
+                + escape(
+                    str(
+                        row.get(
+                            "reason",
+                            (
+                                "buy raw " + q.get("buy_amount_raw", "—")
+                                if q["ok"]
+                                else q["reason"]
+                            ),
+                        )
+                    )
+                )
             )
+            if row.get("net_ceiling_model") is not None:
+                out.append(
+                    f"NET-модель полного схождения: {row['net_ceiling_model']:+.4f} USD • газ {row['gas_usd']:.4f} USD"
+                )
+            if q.get("simulation_verified"):
+                out.append(
+                    "Firm quote + RPC симуляция подтверждены. Это модель, не совершённая сделка."
+                )
+        out.append("Заявки CEX, approvals и транзакции кошелька не отправляются.")
         return "\n".join(out)
     if s == "top":
         return render_market_console(strategy_runtime)
@@ -337,6 +370,32 @@ async def text_for(s):
             ),
             preview,
         )
+    if s in ("ss_live", "ss_checks", "funding_live", "funding_checks"):
+        strategy = "spot_spot" if s.startswith("ss_") else "funding_arb"
+        coordinator = spot_spot_live if strategy == "spot_spot" else funding_live
+        preview = None
+        offers = strategy_runtime.top(strategy, 1)
+        if s.endswith("checks"):
+            if coordinator and offers:
+                offer = offers[0]
+                if strategy == "funding_arb":
+                    preview = await coordinator.preview(
+                        dict(
+                            symbol=offer["symbol"],
+                            buy=offer["long_venue"],
+                            sell=offer["short_venue"],
+                        )
+                    )
+                else:
+                    preview = await coordinator.session.preview(offer)
+            else:
+                preview = dict(status="NO_OPPORTUNITY", orders_sent=False)
+        return render_remaining_live(
+            strategy,
+            live_monitor.latest if live_monitor else None,
+            coordinator,
+            preview,
+        )
     if s == "live_positions":
         return monitor_positions(live_monitor.latest if live_monitor else None)
     if s == "incidents":
@@ -394,6 +453,10 @@ async def start(m: Message):
         "live_checks",
         "sf_live",
         "sf_checks",
+        "ss_live",
+        "ss_checks",
+        "funding_live",
+        "funding_checks",
         "live_positions",
         "incidents",
         "strategies",
@@ -474,6 +537,10 @@ async def commands(m: Message):
             "live_checks",
             "sf_live",
             "sf_checks",
+            "ss_live",
+            "ss_checks",
+            "funding_live",
+            "funding_checks",
             "live_positions",
             "incidents",
             "strategies",
@@ -557,6 +624,70 @@ async def spot_live_action(q: CallbackQuery):
     )
 
 
+@dp.callback_query(F.data.startswith("ss_close:") | F.data.startswith("ss_recover:"))
+async def spot_spot_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        await q.answer("Нет доступа", show_alert=True)
+        return
+    await q.answer("Проверяю остатки")
+    if not spot_spot_live or not live_monitor:
+        return
+    action, tid = q.data.split(":", 1)
+    async with live_monitor.lock:
+        result = await (
+            spot_spot_live.session.close(tid)
+            if action == "ss_close"
+            else spot_spot_live.session.recover(tid)
+        )
+    await live_monitor.cycle()
+    await safe_edit(
+        q.message,
+        "Результат: <code>"
+        + escape(str(result.get("status", "UNKNOWN")))
+        + "</code>\n\n"
+        + await text_for("ss_live"),
+        keyboard_for("ss_live"),
+    )
+
+
+@dp.callback_query(F.data.startswith("fund_close:"))
+async def funding_close_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        await q.answer("Нет доступа", show_alert=True)
+        return
+    await q.answer("Проверяю выход")
+    if not live_monitor or not live_exit_coordinator:
+        return
+    tid = q.data.split(":", 1)[1]
+    summary = await live_monitor.cycle()
+    from copy import deepcopy
+
+    requested = deepcopy(summary)
+    requested["trades"] = [
+        x
+        for x in requested["trades"]
+        if x["trade_id"] == tid and x.get("strategy") == "funding_arb"
+    ]
+    for x in requested["trades"]:
+        x["exit_signal"] = "OPERATOR_EXIT"
+    async with live_monitor.lock:
+        outcomes = await live_exit_coordinator.process(requested)
+    await live_monitor.cycle()
+    notice = (
+        "; ".join(x.status for x in outcomes)
+        if outcomes
+        else "Нет подтверждённой активной позиции"
+    )
+    await safe_edit(
+        q.message,
+        "Выход: <code>"
+        + escape(notice)
+        + "</code>\n\n"
+        + await text_for("funding_live"),
+        keyboard_for("funding_live"),
+    )
+
+
 async def send_export(message):
     with tempfile.TemporaryDirectory(prefix="arbitrage-export-") as directory:
         workbook, archive = await build_audit_export(config.db_path, directory)
@@ -574,6 +705,11 @@ def keyboard_for(screen):
         return menu()
     if screen == "live":
         return live_menu(live_stop.stopped, bool(live_supervisor.kill.global_reason))
+    if screen in ("ss_live", "ss_checks", "funding_live", "funding_checks"):
+        return remaining_live_menu(
+            "spot_spot" if screen.startswith("ss_") else "funding_arb",
+            live_monitor.latest,
+        )
     if screen in ("sf_live", "sf_checks"):
         return sf_live_menu(live_monitor.latest if live_monitor else None)
     if screen == "top":
@@ -799,6 +935,7 @@ async def scanning():
 
 
 async def main():
+    global spot_spot_live, funding_live
     global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor, live_exit_coordinator, live_entry_coordinator, live_residual_coordinator
     global spot_private_clients, spot_future_live
     live_stop = Stop(config.runtime_state_path + ".stop.json")
@@ -815,6 +952,8 @@ async def main():
     private_clients = {}
     spot_private_clients = {}
     spot_future_live = None
+    spot_spot_live = None
+    funding_live = None
     bot = None
     task = None
     stream_recorder = None
@@ -929,13 +1068,17 @@ async def main():
                 and not live_supervisor.kill.check("", venue, venue).blocked
             )
 
-        def spot_entry_authority(venue):
+        def spot_entry_authority(venue, strategy="spot_futures"):
             summary = live_monitor.latest if live_monitor else {}
             return bool(
                 config.live_enabled
                 and config.live_entry_enabled
-                and config.live_spot_futures_enabled
-                and strategy_runtime.enabled.get("spot_futures", False)
+                and (
+                    config.live_spot_futures_enabled
+                    if strategy == "spot_futures"
+                    else config.live_spot_spot_enabled
+                )
+                and strategy_runtime.enabled.get(strategy, False)
                 and not scanner.paused
                 and not live_stop.stopped
                 and venue in config.live_exit_venues
@@ -948,12 +1091,21 @@ async def main():
                 and summary.get("reconciled") is True
                 and summary.get("unknown_orders") == 0
                 and 0 <= time.time() - summary.get("ts", 0) <= 15
-                and order_streams is not None
-                and venue in order_streams.tasks
-                and not order_streams.tasks[venue].done()
-                and venue in order_streams.observed
-                and venue not in order_streams.errors
-                and spot_accepted(config.live_acceptance_path, venue)
+                and (
+                    strategy == "spot_spot"
+                    or (
+                        order_streams is not None
+                        and venue in order_streams.tasks
+                        and not order_streams.tasks[venue].done()
+                        and venue in order_streams.observed
+                        and venue not in order_streams.errors
+                    )
+                )
+                and (
+                    spot_accepted(config.live_acceptance_path, venue)
+                    if strategy == "spot_futures"
+                    else cash_spot_accepted(config.live_acceptance_path, venue)
+                )
             )
 
         spot_admission = SpotFutureAdmission(
@@ -974,6 +1126,24 @@ async def main():
                 spot_entry_authority,
                 venue_exit_authority,
                 halt=live_stop.stop,
+            ),
+            max_seconds=config.paper_max_seconds,
+            target=config.paper_target_convergence,
+            trailing=config.paper_trailing_drawdown,
+        )
+
+        spot_spot_live = SpotSpotCoordinator(
+            SpotSpotSession(
+                durable,
+                diary,
+                spot_private_clients,
+                lambda v: spot_entry_authority(v, "spot_spot"),
+                venue_exit_authority,
+                halt=live_stop.stop,
+                bankroll=config.live_capital,
+                notional=config.notional,
+                minimum_net=config.live_min_net_edge_usd,
+                safety_pct=config.safety_buffer_pct,
             ),
             max_seconds=config.paper_max_seconds,
             target=config.paper_target_convergence,
@@ -1015,6 +1185,7 @@ async def main():
             await live_exit_coordinator.process(summary)
             await live_residual_coordinator.process(summary)
             summary["closed"].extend(await spot_future_live.process(summary))
+            summary["closed"].extend(await spot_spot_live.process(summary))
             summary["realized"] = await live_monitor.store.totals()
             if notification_bot:
                 for item in new_incidents:
@@ -1057,13 +1228,14 @@ async def main():
             market_reader=LiveMarketReader(
                 scanner.clients, private_clients, config.live_max_book_age_ms / 1000
             ),
-            funding_reader=PairFundingReader(funding_readers),
+            funding_reader=PairFundingReader(funding_readers, calendar=scanner.funding),
             interval=config.live_reconcile_interval,
             max_seconds=config.paper_max_seconds,
             target_capture=config.paper_target_convergence,
             trailing=config.paper_trailing_drawdown,
             on_update=monitor_update,
-            cash_observer=spot_future_live,
+            cash_observer=CashObserver(spot_future_live, spot_spot_live),
+            stop_net=-config.live_capital * 0.01,
         )
         await live_monitor.init()
         if config.private_order_streams:
@@ -1075,11 +1247,15 @@ async def main():
                 order_readers[venue] = StreamReader(venue, client, order_streams)
             order_streams.start()
 
-        def entry_authority(symbol, long_venue, short_venue):
+        def entry_authority(
+            symbol, long_venue, short_venue, strategy="futures_futures"
+        ):
             venues = (long_venue, short_venue)
             return bool(
                 config.live_enabled
                 and config.live_entry_enabled
+                and strategy_runtime.enabled.get(strategy, False)
+                and not scanner.paused
                 and not live_stop.stopped
                 and all(
                     v in config.live_exit_venues and venue_controller.get(v)["scan"]
@@ -1119,6 +1295,30 @@ async def main():
             max_seconds=config.paper_max_seconds,
         )
         live_entry_coordinator.halt = live_stop.stop
+        funding_live = FundingLiveCoordinator(
+            durable,
+            runtime_store,
+            diary,
+            scanner.clients,
+            private_clients,
+            registry.snapshot,
+            scanner.funding,
+            lambda symbol, lv, sv: config.live_funding_enabled
+            and entry_authority(symbol, lv, sv, "funding_arb")
+            and live_accepted(
+                config.live_acceptance_path, (lv, sv), strategy="funding_arb"
+            ),
+            exit_authority=lambda symbol, lv, sv: exit_authority(
+                SimpleNamespace(symbol=symbol, long_venue=lv, short_venue=sv)
+            ),
+            bankroll=config.live_capital,
+            notional=config.notional,
+            minimum_net=config.live_min_net_edge_usd,
+            safety_pct=config.safety_buffer_pct,
+            max_seconds=config.live_funding_hold_seconds,
+            min_carry_pct=config.live_funding_min_carry_pct,
+        )
+        funding_live.halt = live_stop.stop
         secondary = await build_bundle(
             config.exchanges,
             config.notional,
@@ -1129,13 +1329,19 @@ async def main():
             config.db_path,
             scanner.funding,
             scanner.universe.symbols if scanner.universe else (),
+            private_clients=private_clients,
         )
         secondary.runtime.paused = lambda: scanner.paused
 
         async def secondary_rows(name, rows, entry_enabled):
-            if name == "spot_futures" and entry_enabled and spot_future_live:
+            coordinator = {
+                "spot_futures": spot_future_live,
+                "spot_spot": spot_spot_live,
+                "funding_arb": funding_live,
+            }.get(name)
+            if entry_enabled and coordinator:
                 async with live_monitor.lock:
-                    await spot_future_live.process_rows(rows)
+                    await coordinator.process_rows(rows)
                 live_monitor.request_cycle()
 
         secondary.runtime.on_rows = secondary_rows

@@ -65,18 +65,39 @@ def accepted(path, venues, now=None, strategy=None):
         )
         if strategy is None:
             return standard
-        if strategy != "spot_futures" or len(venues) != 1:
+        if strategy not in ("spot_futures", "spot_spot", "funding_arb"):
             return False
-        scope = (
-            d.get("strategies", {})
-            .get(strategy, {})
-            .get("venues", {})
-            .get(venues[0], {})
+        if strategy == "spot_futures" and len(venues) != 1:
+            return False
+        scoped = d.get("strategies", {}).get(strategy, {}).get("venues", {})
+        required = (
+            SPOT_CHECKS
+            if strategy == "spot_futures"
+            else (
+                SPOT_CHECKS + ("inventory_restoration",)
+                if strategy == "spot_spot"
+                else (
+                    "settlement_calendar",
+                    "private_income",
+                    "holding_exit",
+                    "spread_stop",
+                )
+            )
         )
-        return standard and all(scope.get(k) is True for k in SPOT_CHECKS)
+        global_checks = all(d.get("checks", {}).get(k) is True for k in CHECKS)
+        scoped_checks = all(
+            all(scoped.get(v, {}).get(k) is True for k in required) for v in venues
+        )
+        return (
+            global_checks if strategy == "spot_spot" else standard
+        ) and scoped_checks
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
 
 
 def spot_accepted(path, venue, now=None):
     return accepted(path, (venue,), now, strategy="spot_futures")
+
+
+def cash_spot_accepted(path, venue, now=None):
+    return accepted(path, (venue,), now, strategy="spot_spot")

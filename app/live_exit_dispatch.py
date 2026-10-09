@@ -13,7 +13,7 @@ from .live_recovery_evidence import validate_trade
 from .persisted_exit_runner import run
 from .close_recovery_executor import recover_close
 
-SIGNALS = {"TARGET_CAPTURE", "NET_TRAILING", "TIME_STOP", "NET_STOP"}
+SIGNALS = {"TARGET_CAPTURE", "NET_TRAILING", "TIME_STOP", "NET_STOP", "OPERATOR_EXIT"}
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,7 @@ class Coordinator:
             rows = {t["trade_id"]: t for t in summary.get("runtime_trades", [])}
             seen = set()
             for mark in summary.get("trades", []):
-                if mark.get("strategy") == "spot_futures":
+                if mark.get("strategy") in ("spot_futures", "spot_spot"):
                     continue
                 tid = mark.get("trade_id")
                 if tid in seen or mark.get("exit_signal") not in SIGNALS:

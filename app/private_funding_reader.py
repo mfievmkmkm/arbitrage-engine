@@ -100,8 +100,9 @@ class Reader:
 
 
 class PairReader:
-    def __init__(self, readers):
+    def __init__(self, readers, calendar=None, clock=time.time):
         self.readers = readers
+        self.calendar, self.clock = calendar, clock
 
     async def collect(self, trade, until):
         names = (trade.long_venue, trade.short_venue)
@@ -120,3 +121,42 @@ class PairReader:
             ";".join(x.reason for x in rows),
             min(x.covered_until for x in rows),
         )
+
+    async def mark(self, trade, until):
+        """Mature income plus public calendar proof of no newer settlement."""
+        if self.calendar is None:
+            return await self.collect(trade, until)
+        names = (trade.long_venue, trade.short_venue)
+        if any(v not in self.readers for v in names):
+            return Evidence(False, 0, (), "FUNDING_VENUE_MISSING")
+        cutoff = until - max(self.readers[v].maturity for v in names)
+        if cutoff < trade.opened_at:
+            return Evidence(False, 0, (), "FUNDING_ENTRY_MATURITY_PENDING")
+        mature = await self.collect(trade, cutoff)
+        if not mature.verified:
+            return mature
+        try:
+            snaps = await asyncio.gather(
+                *(self.calendar.get(v, trade.symbol) for v in names)
+            )
+            from .native_order_plan import number
+
+            for v, s in zip(names, snaps):
+                if (s.exchange, s.symbol) != (v, trade.symbol):
+                    raise ValueError("FUNDING_CALENDAR_SCOPE_MISMATCH")
+                nxt = float(number(s.next_ts, "FUNDING_TIMESTAMP"))
+                nxt = nxt / 1000 if nxt > 10_000_000_000 else nxt
+                interval = float(number(s.interval_hours, "FUNDING_INTERVAL")) * 3600
+                if interval > 86400 or nxt <= self.clock() or nxt - interval > cutoff:
+                    raise ValueError("FUNDING_RECENT_SETTLEMENT_PENDING")
+            return Evidence(
+                True,
+                mature.amount,
+                mature.events,
+                "MATURE_PRIVATE_INCOME_CALENDAR",
+                until,
+            )
+        except Exception:
+            return Evidence(
+                False, mature.amount, mature.events, "FUNDING_CALENDAR_GAP", cutoff
+            )

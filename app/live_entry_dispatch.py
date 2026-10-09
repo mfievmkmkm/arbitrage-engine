@@ -18,6 +18,7 @@ from .ccxt_executor import CCXTExecutor
 from .quote_order_evidence import validate
 from .live_durable_session import Session
 from .trade_journal import TradeJournal
+from .live_decision_diary import record as record_decision
 
 
 class Coordinator:
@@ -235,6 +236,9 @@ class Coordinator:
             max(0, -daily_net),
         )
 
+    def durable_metadata(self, op):
+        return {}
+
     async def preview(self, op):
         """Read-only account/book/cost check, including with trading disabled.
 
@@ -359,6 +363,7 @@ class Coordinator:
                                 )
                             ),
                             prepared_requests=requests,
+                            durable_metadata=self.durable_metadata(op),
                             recovery_market_reader=RecoveryReader(self.public),
                         ),
                         dict(
@@ -381,6 +386,13 @@ class Coordinator:
                         and self.halt
                     ):
                         self.halt("ENTRY_RECONCILIATION_REQUIRED")
+                    await record_decision(
+                        self.diary,
+                        getattr(self, "strategy", "futures_futures"),
+                        op,
+                        self.latest,
+                        self.clock,
+                    )
                     return self.latest
                 except (ValueError, KeyError, TypeError, RuntimeError) as error:
                     if started and self.halt:
@@ -400,4 +412,11 @@ class Coordinator:
                     if started and self.halt:
                         self.halt("ENTRY_DISPATCH_UNKNOWN")
                     self.latest = {"status": "ENTRY_PREPARATION_UNAVAILABLE"}
+                await record_decision(
+                    self.diary,
+                    getattr(self, "strategy", "futures_futures"),
+                    op,
+                    self.latest,
+                    self.clock,
+                )
             return self.latest

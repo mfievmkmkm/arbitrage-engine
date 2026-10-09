@@ -1,4 +1,6 @@
 import os, json
+from pathlib import Path
+from .dex_firm_simulation import Provider as FirmProvider, Cycle as FirmCycle
 from .zerox_research import Provider as DexProvider, Cycle as DexCycle
 from .public_client_factory import build, close
 from .spot_future_service import Service as SpotFutureService
@@ -21,6 +23,7 @@ class Bundle:
         self.runtime = runtime
         self.sf_paper = sf_paper
         self.dex_provider = None
+        self.dex_sim_provider = None
         self.ss_paper = None
         self.funding_paper = None
 
@@ -29,6 +32,8 @@ class Bundle:
         await close(self.clients)
         if self.dex_provider:
             await self.dex_provider.close()
+        if self.dex_sim_provider:
+            await self.dex_sim_provider.close()
 
 
 async def build_bundle(
@@ -41,8 +46,10 @@ async def build_bundle(
     db_path,
     funding_service=None,
     future_symbols=(),
+    private_clients=None,
 ):
     clients = await build(ids)
+    bundle = None
     try:
         sf = SpotFutureService(clients, notional, min_edge)
         await sf.start()
@@ -101,7 +108,43 @@ async def build_bundle(
             bundle.dex_provider = DexProvider(os.getenv("ZEROX_API_KEY"))
             sr.add("cex_dex", DexCycle(bundle.dex_provider, routes))
             runtime.enabled["cex_dex"] = True
+        simulation_routes = json.loads(os.getenv("DEX_SIMULATION_ROUTES_JSON", "[]"))
+        if simulation_routes:
+            required = {
+                "chain_id",
+                "sell_token",
+                "buy_token",
+                "sell_amount_raw",
+                "taker",
+            }
+            if not isinstance(simulation_routes, list) or not all(
+                isinstance(x, dict) and required <= x.keys() for x in simulation_routes
+            ):
+                raise ValueError("DEX_SIMULATION_ROUTES_INVALID")
+            registry = json.loads(
+                Path(
+                    os.getenv("DEX_TOKEN_REGISTRY_PATH", "dex_token_registry.json")
+                ).read_text()
+            )
+            bundle.dex_sim_provider = FirmProvider(
+                os.getenv("ZEROX_API_KEY"), os.getenv("DEX_SIMULATION_RPC_URL")
+            )
+            sr.add(
+                "cex_dex",
+                FirmCycle(
+                    bundle.dex_sim_provider,
+                    simulation_routes,
+                    registry,
+                    funding_service.clients if funding_service else {},
+                    private_clients,
+                ),
+            )
+            runtime.enabled["cex_dex"] = True
         return bundle
     except BaseException:
+        if bundle and bundle.dex_provider:
+            await bundle.dex_provider.close()
+        if bundle and bundle.dex_sim_provider:
+            await bundle.dex_sim_provider.close()
         await close(clients)
         raise
