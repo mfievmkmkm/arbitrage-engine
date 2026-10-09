@@ -47,7 +47,13 @@ def _contracts(snapshot, venue, symbol, side, tolerance=1e-12):
 
 
 async def recover_from_private(
-    trade, snapshot, long_executor, short_executor, timeout=8, tolerance=1e-12
+    trade,
+    snapshot,
+    long_executor,
+    short_executor,
+    timeout=8,
+    tolerance=1e-12,
+    market_reader=None,
 ):
     a = _contracts(snapshot, trade.long_venue, trade.symbol, "long", tolerance)
     b = _contracts(snapshot, trade.short_venue, trade.symbol, "short", tolerance)
@@ -77,6 +83,29 @@ async def recover_from_private(
                 SubmitRequest(trade.symbol, "buy", s, "market", None, True, False),
             )
         )
+
+    from .recovery_market import prepare as quote, actual_slippage
+
+    try:
+        prepared = await asyncio.gather(
+            *(
+                quote(
+                    market_reader,
+                    trade.long_venue if leg == "long" else trade.short_venue,
+                    r,
+                    (
+                        trade.long_contract_size
+                        if leg == "long"
+                        else trade.short_contract_size
+                    ),
+                    timeout,
+                )
+                for leg, ex, r in requests
+            )
+        )
+        requests = [(leg, ex, r) for (leg, ex, _), r in zip(requests, prepared)]
+    except Exception as e:
+        return PrivateRecovery(False, "PRIVATE_RECOVERY_QUOTE_BLOCKED:" + str(e))
 
     async def submit(leg, ex, r):
         try:
@@ -111,6 +140,10 @@ async def recover_from_private(
                 False, "PRIVATE_RECOVERY_" + type(r).__name__, out["long"], out["short"]
             )
         out[leg] = r
+        if actual_slippage(req, r):
+            return PrivateRecovery(
+                False, "RECOVERY_ACTUAL_SLIPPAGE_STOP", out["long"], out["short"]
+            )
         if r.filled > req.qty + tolerance:
             return PrivateRecovery(
                 False, "PRIVATE_RECOVERY_OVERFILL", out["long"], out["short"]

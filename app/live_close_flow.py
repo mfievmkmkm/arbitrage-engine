@@ -62,6 +62,7 @@ async def close_verified(
     private_attempts=3,
     private_delay=0.1,
     recovery_timeout=8,
+    recovery_market_reader=None,
     **kwargs
 ):
     result, x, status = await close_trade(
@@ -69,7 +70,12 @@ async def close_verified(
     )
     if status == "EXIT_PARTIAL_REQUIRES_RECOVERY":
         recovery = await recover_close(
-            t, x, long_executor, short_executor, recovery_timeout
+            t,
+            x,
+            long_executor,
+            short_executor,
+            recovery_timeout,
+            market_reader=recovery_market_reader,
         )
         x = recovery.execution
         if not recovery.recovered:
@@ -79,7 +85,12 @@ async def close_verified(
                 )
             snapshot = await _snapshot(private_snapshot)
             pr = await recover_from_private(
-                t, snapshot, long_executor, short_executor, recovery_timeout
+                t,
+                snapshot,
+                long_executor,
+                short_executor,
+                recovery_timeout,
+                market_reader=recovery_market_reader,
             )
             from dataclasses import replace
             from .fill_merge import merge_result

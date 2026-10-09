@@ -13,6 +13,7 @@ class SubmitRequest:
     ioc: bool = False
     client_order_id: str | None = None
     reference_price: float | None = None
+    market_evidence: dict | None = None
 
 
 @dataclass(frozen=True)

@@ -60,6 +60,16 @@ class CCXTExecutor(ExchangeExecutor):
     def validate(self, request):
         from .native_order_plan import validate_request
 
+        if request.market_evidence is not None:
+            from .recovery_market import validate_evidence
+
+            e = validate_evidence(request, self.venue)
+            if not math.isclose(
+                e["contract_size"],
+                float(self.client.market(request.symbol)["contractSize"]),
+                rel_tol=1e-12,
+            ):
+                raise ValueError("RECOVERY_CONTRACT_SIZE_MISMATCH")
         return validate_request(self.client, request)
 
     async def submit(self, r):

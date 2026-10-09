@@ -47,6 +47,7 @@ async def execute(
     trade_id_hint=None,
     durable_store=None,
     hybrid_requote=None,
+    recovery_market_reader=None,
 ):
     if private_snapshot is None:
         return LiveEntryResult(False, "PRIVATE_STATE_REQUIRED", "")
@@ -221,8 +222,15 @@ async def execute(
             timeout,
             trade_id=trade_id,
             short_round=short_round,
+            market_reader=recovery_market_reader,
         )
         if not recovery.completed:
+            if durable_store is not None:
+                await durable_store.phase(
+                    trade_id,
+                    "UNKNOWN",
+                    entry_hold_reason="ENTRY_RECOVERY_FAILED:" + recovery.error,
+                )
             return LiveEntryResult(
                 False,
                 "ENTRY_RECOVERY_FAILED:" + recovery.error,
@@ -308,7 +316,19 @@ async def execute(
             0,
             entry_fees=a.long_fee + a.short_fee,
         )
-        px = await protective_exit(tmp, long_executor, short_executor, timeout)
+        px = await protective_exit(
+            tmp,
+            long_executor,
+            short_executor,
+            timeout,
+            market_reader=recovery_market_reader,
+        )
+        if px.status == "EXIT_ACTUAL_SLIPPAGE_STOP" and durable_store is not None:
+            await durable_store.phase(
+                trade_id,
+                "UNKNOWN",
+                entry_hold_reason="PROTECTIVE_EXIT_ACTUAL_SLIPPAGE_STOP",
+            )
         from .private_residual import verify as verify_flat
 
         try:

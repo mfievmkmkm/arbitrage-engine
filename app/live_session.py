@@ -90,6 +90,7 @@ async def close_trade(
     private_snapshot,
     reason="EXIT",
     durable=None,
+    recovery_market_reader=None,
 ):
     if durable is not None:
         row = await durable.get(trade.trade_id)
@@ -102,10 +103,17 @@ async def close_trade(
             trade.trade_id, "EXIT_SUBMITTING", reason=reason, runtime_trade=trade.row()
         )
     r = await close_execute(
-        trade, long_executor, short_executor, private_snapshot, reason
+        trade,
+        long_executor,
+        short_executor,
+        private_snapshot,
+        reason,
+        recovery_market_reader=recovery_market_reader,
     )
     a = accept_close(r, True, r.closed)
     if not a.accepted:
+        if durable is not None and "SLIPPAGE_STOP" in r.status:
+            await durable.phase(trade.trade_id, "UNKNOWN", exit_hold_reason=r.status)
         return SessionResult(False, "CLOSE_FAILED", a.reason, trade, r)
     if durable is not None:
         await durable.phase(

@@ -14,6 +14,9 @@ class Diary:
         async with aiosqlite.connect(self.path) as d:
             await d.executescript(SCHEMA)
             await d.execute(
+                "CREATE TABLE IF NOT EXISTS order_request_evidence(intent_id TEXT PRIMARY KEY,trade_id TEXT,ts REAL,payload TEXT)"
+            )
+            await d.execute(
                 "CREATE TABLE IF NOT EXISTS signal_decisions(id INTEGER PRIMARY KEY,ts REAL,strategy TEXT,symbol TEXT,buy TEXT,sell TEXT,action TEXT,reason TEXT,payload TEXT)"
             )
             async with d.execute("PRAGMA table_info(paper_positions)") as c:
@@ -294,6 +297,7 @@ class Diary:
 
     async def update_order_intent_reconciled(self, intent_id, state, result=None):
         async with aiosqlite.connect(self.path) as d:
+            await d.execute("BEGIN IMMEDIATE")
             d.row_factory = aiosqlite.Row
             async with d.execute(
                 "SELECT payload FROM order_intents WHERE intent_id=?", (intent_id,)
@@ -306,6 +310,17 @@ class Diary:
             except Exception:
                 p = {}
             p["state"] = state
+            valid_result = True
+            if result is not None:
+                from .order_settlement import valid
+
+                valid_result = valid(
+                    result, p.get("qty"), p.get("filled", 0), p.get("order_id")
+                )
+                if not valid_result:
+                    state = "UNKNOWN"
+                    p["state"] = state
+                    result = None
             if result is not None:
                 p.update(
                     {
@@ -321,7 +336,7 @@ class Diary:
                 (state, time.time(), json.dumps(p), intent_id),
             )
             await d.commit()
-            return True
+            return valid_result
 
     async def replay_trades(self, limit=500):
         async with aiosqlite.connect(self.path) as d:
@@ -372,7 +387,7 @@ class Diary:
             )
             await d.commit()
 
-    async def claim_order_intent(self, intent):
+    async def claim_order_intent(self, intent, request=None):
         row = intent.row()
         row["state"] = "SUBMITTING"
         async with aiosqlite.connect(self.path) as d:
@@ -391,5 +406,27 @@ class Diary:
                     json.dumps(row),
                 ),
             )
+            claimed = c.rowcount == 1
+            if claimed and request is not None:
+                from dataclasses import asdict
+
+                await d.execute(
+                    "INSERT INTO order_request_evidence(intent_id,trade_id,ts,payload) VALUES(?,?,?,?)",
+                    (
+                        intent.intent_id,
+                        intent.trade_id,
+                        time.time(),
+                        json.dumps(asdict(request), allow_nan=False),
+                    ),
+                )
             await d.commit()
-            return c.rowcount == 1
+            return claimed
+
+    async def order_request_evidence(self, intent_id):
+        async with aiosqlite.connect(self.path) as d:
+            async with d.execute(
+                "SELECT payload FROM order_request_evidence WHERE intent_id=?",
+                (intent_id,),
+            ) as c:
+                row = await c.fetchone()
+                return json.loads(row[0]) if row else None

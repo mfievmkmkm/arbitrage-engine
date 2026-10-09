@@ -13,11 +13,39 @@ class PersistedExit:
     status: str
 
 
-async def run(trade, long_executor, short_executor, timeout=8):
+async def run(trade, long_executor, short_executor, timeout=8, market_reader=None):
+    from .recovery_market import prepare as quote, actual_slippage
+
+    try:
+        reqs = await asyncio.gather(
+            quote(
+                market_reader,
+                trade.long_venue,
+                SubmitRequest(
+                    trade.symbol, "sell", trade.long_contracts, "market", None, True
+                ),
+                trade.long_contract_size,
+                timeout,
+            ),
+            quote(
+                market_reader,
+                trade.short_venue,
+                SubmitRequest(
+                    trade.symbol, "buy", trade.short_contracts, "market", None, True
+                ),
+                trade.short_contract_size,
+                timeout,
+            ),
+        )
+    except Exception as e:
+        return PersistedExit(None, "EXIT_QUOTE_BLOCKED:" + str(e))
+
     async def leg(name, venue, side, qty, ex):
         iid = trade.trade_id + ":" + name
         intent = OrderIntent(iid, trade.trade_id, venue, trade.symbol, side, qty, True)
-        req = SubmitRequest(trade.symbol, side, qty, "market", None, True, False, iid)
+        from dataclasses import replace
+
+        req = replace(reqs[0 if side == "sell" else 1], client_order_id=iid)
         try:
             return await asyncio.wait_for(ex.submit_intent(intent, req), timeout)
         except Exception as e:
@@ -50,6 +78,8 @@ async def run(trade, long_executor, short_executor, timeout=8):
         lr.filled >= trade.long_contracts - 1e-12
         and sr.filled >= trade.short_contracts - 1e-12
     )
+    slip = actual_slippage(reqs[0], lr) or actual_slippage(reqs[1], sr)
     return PersistedExit(
-        ExitResult(lr, sr, flat, r.mismatch_pct), "FILLED" if flat else "PARTIAL"
+        ExitResult(lr, sr, flat, r.mismatch_pct),
+        "EXIT_ACTUAL_SLIPPAGE_STOP" if slip else ("FILLED" if flat else "PARTIAL"),
     )

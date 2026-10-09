@@ -25,6 +25,7 @@ class Session:
         short_executor,
         private_snapshot,
         reason="EXIT",
+        recovery_market_reader=None,
     ):
         return await close_trade(
             self.runtime,
@@ -36,4 +37,5 @@ class Session:
             private_snapshot,
             reason,
             durable=self.durable,
+            recovery_market_reader=recovery_market_reader,
         )

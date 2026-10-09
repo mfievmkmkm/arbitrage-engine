@@ -12,6 +12,15 @@ class SafeExecutor(ExchangeExecutor):
         self.exit_gate = exit_gate or gate
 
     async def submit_intent(self, intent, request):
+        if request.market_evidence is not None:
+            from copy import deepcopy
+            from .recovery_market import validate_evidence
+
+            request = deepcopy(request)
+            try:
+                validate_evidence(request, self.venue)
+            except (ValueError, TypeError):
+                return None, "RECOVERY_EVIDENCE_INVALID"
         if (
             intent.venue != self.venue
             or intent.symbol != request.symbol
@@ -31,10 +40,26 @@ class SafeExecutor(ExchangeExecutor):
             except (ValueError, TypeError):
                 return None, "REQUEST_NATIVE_VALIDATION_FAILED"
         if hasattr(self.diary, "claim_order_intent"):
-            if not await self.diary.claim_order_intent(intent):
+            if request.market_evidence is not None:
+                if not hasattr(self.diary, "order_request_evidence"):
+                    return None, "RECOVERY_EVIDENCE_STORAGE_REQUIRED"
+                claimed = await self.diary.claim_order_intent(intent, request=request)
+            else:
+                claimed = await self.diary.claim_order_intent(intent)
+            if not claimed:
                 return None, "DUPLICATE_OR_UNRESOLVED_INTENT"
         else:
+            if request.market_evidence is not None:
+                return None, "RECOVERY_EVIDENCE_STORAGE_REQUIRED"
             await self.diary.save_order_intent(intent, "SUBMITTING")
+        if request.market_evidence is not None:
+            try:
+                validate_evidence(request, self.venue)
+                if not (self.exit_gate() if request.reduce_only else self.gate()):
+                    raise ValueError("LIVE_GATE_LOCKED")
+            except (ValueError, TypeError):
+                await self.diary.save_order_intent(intent, "FAILED")
+                return None, "RECOVERY_PRE_SEND_GUARD_FAILED"
         try:
             result = await self.inner.submit(request)
         except (Exception, asyncio.CancelledError) as error:
@@ -77,11 +102,20 @@ class SafeExecutor(ExchangeExecutor):
                     and meta.get("symbol") == symbol
                     and meta.get("order_id") == order_id
                 ):
-                    await self.diary.update_order_intent_reconciled(
+                    from .order_settlement import valid
+
+                    if not valid(
+                        result, meta.get("qty"), meta.get("filled", 0), order_id
+                    ):
+                        await self.diary.update_order_intent_reconciled(iid, "UNKNOWN")
+                        raise RuntimeError("CANCEL_EVIDENCE_CONFLICT")
+                    updated = await self.diary.update_order_intent_reconciled(
                         iid,
                         normalize(result.status, result.filled, meta.get("qty")),
                         result,
                     )
+                    if not updated:
+                        raise RuntimeError("CANCEL_EVIDENCE_CONFLICT")
         return result
 
     async def order(self, order_id, symbol):

@@ -199,10 +199,9 @@ class Monitor:
         for row in rows:
             tid = row["trade_id"]
             payload = json.loads(row["payload"])
-            if payload.get("entry_hold_reason"):
-                incidents.append(
-                    self._incident(payload["entry_hold_reason"], tid, severity="HIGH")
-                )
+            hold = payload.get("entry_hold_reason") or payload.get("exit_hold_reason")
+            if hold:
+                incidents.append(self._incident(hold, tid, severity="HIGH"))
             lv = row.get("long_venue")
             sv = row.get("short_venue")
             symbol = row.get("symbol")

@@ -29,6 +29,7 @@ TABLES = {
     "Funding Paper state": "funding_paper_state",
     "Execution events": "execution_events",
     "Order intents": "order_intents",
+    "Order request evidence": "order_request_evidence",
     "Live trades": "live_trades",
     "Live marks": "live_marks",
     "Live results": "live_results",
