@@ -3,6 +3,7 @@ from html import escape
 from datetime import datetime, timezone
 
 REASONS = {
+    "EXIT_PRIVATE_SETTLEMENT_PENDING": "Terminal fills подтверждены; REST-позиции ещё не совпали. Ожидание до 30 секунд без повторной заявки и без объявления flat.",
     "UNRESOLVED_ORDER": "Биржа ещё не подтвердила итог заявки. Повторная отправка запрещена.",
     "PRIVATE_SNAPSHOT_UNTRUSTED": "Нет свежих доверенных данных о позициях.",
     "HEDGE_FILL_MISMATCH": "Объёмы исполнений двух ног не совпадают.",

@@ -399,10 +399,26 @@ class Monitor:
                         trade, row, own, snapshot, now, self.max_private_age
                     )
                 except (ValueError, TypeError, AttributeError, KeyError) as error:
+                    completed = payload.get(
+                        "exit_residual_completed_at",
+                        payload.get("exit_dispatch_completed_at"),
+                    )
+                    waiting = (
+                        str(error) == "RESIDUAL_PRIVATE_FILL_MISMATCH"
+                        and not isinstance(completed, bool)
+                        and isinstance(completed, (int, float))
+                        and math.isfinite(completed)
+                        and 0 <= now - completed < 30
+                    )
                     incidents.append(
                         self._incident(
-                            "EXIT_RESIDUAL_REQUIRES_RECOVERY",
+                            (
+                                "EXIT_PRIVATE_SETTLEMENT_PENDING"
+                                if waiting
+                                else "EXIT_RESIDUAL_REQUIRES_RECOVERY"
+                            ),
                             tid,
+                            severity="WARNING" if waiting else "HIGH",
                             reason=(
                                 str(error)
                                 if isinstance(error, ValueError)

@@ -166,6 +166,7 @@ class Coordinator:
                         tid,
                         "EXIT_SUBMITTING",
                         exit_dispatch_status=status,
+                        exit_dispatch_completed_at=self.clock(),
                         **({"exit_hold_reason": status} if hold else {})
                     )
                     if hold:

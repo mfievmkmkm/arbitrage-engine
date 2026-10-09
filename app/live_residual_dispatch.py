@@ -259,7 +259,10 @@ class Coordinator:
                         await self._hold(tid, reason)
                     else:
                         await self.durable.phase(
-                            tid, "EXIT_SUBMITTING", exit_dispatch_status=reason
+                            tid,
+                            "EXIT_SUBMITTING",
+                            exit_dispatch_status=reason,
+                            exit_residual_completed_at=self.clock(),
                         )
                     out.append(dict(trade_id=tid, status=reason, attempted=True))
                 except asyncio.CancelledError:

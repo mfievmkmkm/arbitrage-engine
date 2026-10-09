@@ -46,6 +46,7 @@ def evaluate(trade, row, intents, snapshot, now, max_age=15):
     if payload.get("exit_dispatch_status") not in (
         "EXIT_RESIDUAL_PENDING_RECONCILIATION",
         "RESIDUAL_FILLS_PENDING_PRIVATE",
+        "EXIT_FILLS_PENDING_PRIVATE",
     ):
         raise Unverified("RESIDUAL_INITIAL_DISPATCH_NOT_FINISHED")
     by_id = {x["intent_id"]: x for x in intents}

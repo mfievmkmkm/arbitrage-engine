@@ -448,3 +448,36 @@ def test_initial_both_partial_exit_hands_off_to_private_verified_residual_close(
         assert len(sent) == 4 and len((await m.cycle())["closed"]) == 1
 
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("age", [0, 29, 30])
+def test_private_position_lag_waits_briefly_without_repeat_or_false_flat(tmp_path, age):
+    async def go():
+        m, s, c, sent = await ready(tmp_path)
+        await m.durable.phase(
+            "t", "EXIT_SUBMITTING", exit_dispatch_completed_at=1000 - age
+        )
+        from dataclasses import replace
+
+        p = s["a"]["positions"][0]
+        s["a"]["positions"] = [replace(p, contracts=4, qty=2)]
+        # Explicitly clear the startup operator STOP only in this local test.
+        m.stop.stopped = False
+        summary = await m.cycle()
+        code = (
+            "EXIT_PRIVATE_SETTLEMENT_PENDING"
+            if age < 30
+            else "EXIT_RESIDUAL_REQUIRES_RECOVERY"
+        )
+        assert any(x["code"] == code for x in summary["incidents"])
+        assert m.stop.stopped is (age >= 30)
+        await c.process(summary)
+        assert not sent and not summary["closed"]
+        s["a"]["positions"] = [p]
+        if age < 30:
+            assert (await c.process(await m.cycle()))[0][
+                "status"
+            ] == "RESIDUAL_FILLS_PENDING_PRIVATE"
+            assert len((await m.cycle())["closed"]) == 1
+
+    asyncio.run(go())
