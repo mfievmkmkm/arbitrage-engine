@@ -61,7 +61,7 @@ class CCXTExecutor(ExchangeExecutor):
         from .native_order_plan import validate_request
 
         if request.market_evidence is not None:
-            from .recovery_market import validate_evidence
+            from .quote_order_evidence import validate as validate_evidence
 
             e = validate_evidence(request, self.venue)
             if not math.isclose(

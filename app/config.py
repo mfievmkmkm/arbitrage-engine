@@ -46,6 +46,19 @@ class Config:
     live_exit_venues: tuple[str, ...] = tuple(
         x.strip() for x in os.getenv("LIVE_EXIT_VENUES", "").split(",") if x.strip()
     )
+    private_order_streams: bool = os.getenv(
+        "PRIVATE_ORDER_STREAMS", "false"
+    ).lower() in ("true", "1", "yes", "on")
+    live_entry_enabled: bool = os.getenv("LIVE_ENTRY_ENABLED", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    live_acceptance_path: str = os.getenv(
+        "LIVE_ACCEPTANCE_PATH", "live_acceptance.json"
+    )
+    live_capital: float = float(os.getenv("LIVE_CAPITAL_USD", "50"))
     live_reconcile_interval: float = max(
         5, float(os.getenv("LIVE_RECONCILE_INTERVAL_SEC", "10"))
     )

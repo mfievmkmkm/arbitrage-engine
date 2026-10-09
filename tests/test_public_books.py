@@ -281,4 +281,4 @@ def test_telegram_reports_transport_without_claiming_execution_ready():
     )
     scanner = NS(paused=False, clients={"binance": c}, ids=["binance"], last_scan=None)
     text = render(scanner, NS(counts=lambda: {}))
-    assert "WebSocket" in text and "3 / 2" in text and "LIVE/AUTO заблокированы" in text
+    assert "WebSocket" in text and "3 / 2" in text and "допуск реального исполнения" in text

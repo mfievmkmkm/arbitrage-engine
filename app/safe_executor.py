@@ -14,7 +14,7 @@ class SafeExecutor(ExchangeExecutor):
     async def submit_intent(self, intent, request):
         if request.market_evidence is not None:
             from copy import deepcopy
-            from .recovery_market import validate_evidence
+            from .quote_order_evidence import validate as validate_evidence
 
             request = deepcopy(request)
             try:
@@ -52,14 +52,14 @@ class SafeExecutor(ExchangeExecutor):
             if request.market_evidence is not None:
                 return None, "RECOVERY_EVIDENCE_STORAGE_REQUIRED"
             await self.diary.save_order_intent(intent, "SUBMITTING")
-        if request.market_evidence is not None:
-            try:
+        try:
+            if not (self.exit_gate() if request.reduce_only else self.gate()):
+                raise ValueError("LIVE_GATE_LOCKED")
+            if request.market_evidence is not None:
                 validate_evidence(request, self.venue)
-                if not (self.exit_gate() if request.reduce_only else self.gate()):
-                    raise ValueError("LIVE_GATE_LOCKED")
-            except (ValueError, TypeError):
-                await self.diary.save_order_intent(intent, "FAILED")
-                return None, "RECOVERY_PRE_SEND_GUARD_FAILED"
+        except (ValueError, TypeError):
+            await self.diary.save_order_intent(intent, "FAILED")
+            return None, "RECOVERY_PRE_SEND_GUARD_FAILED"
         try:
             result = await self.inner.submit(request)
         except (Exception, asyncio.CancelledError) as error:

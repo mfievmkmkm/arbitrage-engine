@@ -72,6 +72,32 @@ class Store:
                 row = await c.fetchone()
                 return dict(row) if row else None
 
+    async def reserve_entry(self, trade_id, **meta):
+        """Atomic single-position micro-live capacity, across all processes."""
+        async with aiosqlite.connect(self.path) as d:
+            await d.execute("BEGIN IMMEDIATE")
+            async with d.execute(
+                "SELECT 1 FROM live_trades WHERE trade_id=? OR phase NOT IN ('CLOSED_PRIVATE_VERIFIED','ABORTED') LIMIT 1",
+                (trade_id,),
+            ) as c:
+                if await c.fetchone():
+                    return False
+            await d.execute(
+                "INSERT INTO live_trades(trade_id,phase,symbol,long_venue,short_venue,planned_long,planned_short,updated_at,payload) VALUES(?,'PLANNED',?,?,?,?,?,?,?)",
+                (
+                    trade_id,
+                    meta["symbol"],
+                    meta["long_venue"],
+                    meta["short_venue"],
+                    meta["planned_long"],
+                    meta["planned_short"],
+                    time.time(),
+                    json.dumps(meta),
+                ),
+            )
+            await d.commit()
+            return True
+
     async def claim_exit(self, trade, signal):
         """Reserve one exit before any send; compare the authoritative position.
 

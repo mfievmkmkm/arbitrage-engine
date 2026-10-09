@@ -2,7 +2,9 @@
 
 Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-Последний блок: write-side автовыход Futures/Futures подключён к обновлениям monitor; atomic EXIT_SUBMITTING reservation, fresh book evidence, reduce-only SafeExecutor, известный one-leg residual recovery и сохранение UNKNOWN/partial/interrupted состояния. Итог закрытия остаётся у monitor после terminal/private-flat/funding проверки. Устаревшие marks не возвращают claimed exit в OPEN. Исправлена flat-проверка малых объёмов. Локально: 779 тестов. Явный LIVE_ENABLED + LIVE_EXIT_VENUES + снятый STOP разрешают настроенный выход; новые production-входы ещё не подключены. В этой сессии реальные заявки не отправлялись.
+Последний блок: приватные order streams с durable событиями, REST fallback и пробуждением monitor; production IOC-вход Futures/Futures из сканера; атомарная single-position reservation; account/fees/funding/native/depth/margin проверки; expiring operator acceptance. Quote gate повторяется после claim intent, private-позиции с неверным объёмом не считаются flat. Protective terminal/private-flat цикл учитывается без RuntimeTrade. Локально: 844 теста. Live-ордера не отправлялись. Настройки запуска предусмотрены для входа и выхода после принятой проверки площадок; реализация входа больше не отсутствует.
+
+Предыдущий блок (779 тестов): write-side автовыход Futures/Futures подключён к обновлениям monitor; atomic EXIT_SUBMITTING reservation, fresh book evidence, reduce-only SafeExecutor, известный one-leg residual recovery и сохранение UNKNOWN/partial/interrupted состояния. Итог закрытия остаётся у monitor после terminal/private-flat/funding проверки. Устаревшие marks не возвращают claimed exit в OPEN. Исправлена flat-проверка малых объёмов. Локально: 779 тестов. Явный LIVE_ENABLED + LIVE_EXIT_VENUES + снятый STOP разрешают настроенный выход; новые production-входы ещё не подключены. В этой сессии реальные заявки не отправлялись.
 
 Предыдущий блок (758 тестов): единый проверяемый транспорт публичных стаканов для основных и вторичных сканеров; опциональные bounded CCXT Pro подписки, freshness/identity/depth/order проверки, инвалидация при сбоях и REST fallback; семплированная WS-история между циклами Futures/Futures, источник REST/WS в Replay; диагностика в Telegram и корректное завершение записи при shutdown. Локально: 758 тестов. PUBLIC_BOOK_STREAMS=false по умолчанию; переключение не разрешает LIVE. Private streams, сертификация площадок и автоматический lifecycle ещё не выполнены.
 
@@ -23,7 +25,7 @@
 | Spot ↔ Spot | Подключены сканер, сохраняемый inventory-aware Paper и Replay marks; вход требует виртуальных запасов, borrow/transfer не имитируются |
 | Funding arbitrage | Сканер + сохраняемый Funding Paper: closing VWAP, историческая сверка ставок, pending accounting, Ledger, экспорт и Replay модели |
 | CEX ↔ DEX | Опциональный 0x price-research для заданных контрактов; отсутствует подтверждённый исполнимый CEX/DEX спред |
-| LIVE Futures ↔ Futures | Durable session, ордерные намерения и recovery покрыты тестами; автоматического production-входа из сканера пока нет |
+| LIVE Futures ↔ Futures | IOC-вход из сканера, private streams, durable session и автовыход подключены; реальные аккаунты/исполнение не сертифицированы |
 | Остальные LIVE стратегии | Заблокированы |
 | Восстановление | Непрерывный read-only monitor подключён к main: lookup UNKNOWN, terminal fills, fresh private snapshots, восстановление JSON из SQLite |
 | STOP | Сохраняется; после каждого запуска STOP включён, снятие требует evidence |
@@ -131,8 +133,8 @@
 
 ## До целевого финала ещё требуется
 
-- Production CEX lifecycle: завершить сертификацию площадок и production-entry admission. Опциональный write-side автовыход и известный one-leg exit recovery со свежими reference quotes подключены к main; UNKNOWN и оба частичных остатка требуют дальнейшей сверки. Непрерывный read-only lookup, fresh snapshots, восстановление и exit-наблюдение уже подключены; разрешения на автоматическую торговлю они не дают.
-- Опциональный публичный WS-транспорт подключён; ещё нужны private order streams, certification snapshot/delta/sequence recovery каждой площадки и динамический приоритет подписок на весь меняющийся universe. Текущий sticky cap переводит overflow-пары на REST. Реальные подключения и плотная выборка в этой сессии не проверялись.
+- Production CEX lifecycle: завершить проверку площадок и реального IOC-входа на выбранных аккаунтах. Production-entry admission подключён. Опциональный write-side автовыход и известный one-leg exit recovery со свежими reference quotes подключены к main; UNKNOWN и оба частичных остатка требуют дальнейшей сверки. Непрерывный read-only lookup, fresh snapshots, восстановление и exit-наблюдение уже подключены; разрешения на автоматическую торговлю они не дают.
+- Опциональный публичный WS-транспорт подключён; private order streams подключены; ещё нужны certification snapshot/delta/sequence recovery каждой площадки и динамический приоритет подписок на весь меняющийся universe. Текущий sticky cap переводит overflow-пары на REST. Реальные подключения и плотная выборка в этой сессии не проверялись.
 - Подтвердить полноту приватной funding history на каждой площадке и задержки settlement; завершить fee/slippage attribution и реальные account acceptance. Открытый funding до текущего времени остаётся незрелым и не разрешает target/trailing по подтверждённому NET.
 - Spot/Futures replay уже работает по сохранённым model marks с purged train/test. Ещё нужны полноценная симуляция latency/fills, достаточная выборка, сквозное подтверждение Spot/Spot fills/latency и валидация Funding Paper на длительной записи публичных ставок и стаканов.
 - CEX/DEX сопоставление контрактов, свежие gas-цены и исполнимые маршруты с min-received, tax/network evidence, simulation и отдельным failure acceptance. Индикативная price-заявка не заменяет эти проверки.

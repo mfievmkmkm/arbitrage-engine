@@ -16,7 +16,15 @@ def build_private_readers():
         }
         if auth["password"]:
             params["password"] = auth["password"]
-        client = exchange_class(name)(params)
+        from .config import config
+        if config.private_order_streams:
+            import ccxt.pro as pro
+            from .exchange_names import ALIASES
+            cls = getattr(pro, name, None) or getattr(pro, ALIASES.get(name,name), None) or exchange_class(name)
+            params['newUpdates'] = True
+        else:
+            cls = exchange_class(name)
+        client = cls(params)
         clients[name] = client
         readers[name] = PrivateReader(name, client)
     return readers, clients

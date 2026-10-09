@@ -30,6 +30,7 @@ TABLES = {
     "Execution events": "execution_events",
     "Order intents": "order_intents",
     "Order request evidence": "order_request_evidence",
+    "Private order events": "private_order_events",
     "Live trades": "live_trades",
     "Live marks": "live_marks",
     "Live results": "live_results",

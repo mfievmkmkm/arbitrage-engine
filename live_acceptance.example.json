@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "evidence_id": "",
+  "verified_at": 0,
+  "expires_at": 0,
+  "checks": {
+    "ci": false,
+    "paper": false,
+    "oos": false,
+    "private_streams": false,
+    "withdrawals_disabled": false,
+    "entry_exit_e2e": false,
+    "recovery": false,
+    "restart": false
+  },
+  "venues": {
+    "binance": {
+      "one_way": false,
+      "ioc": false,
+      "reduce_only": false,
+      "client_id": false,
+      "fees": false,
+      "funding": false
+    },
+    "bybit": {
+      "one_way": false,
+      "ioc": false,
+      "reduce_only": false,
+      "client_id": false,
+      "fees": false,
+      "funding": false
+    }
+  }
+}

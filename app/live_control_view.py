@@ -13,18 +13,34 @@ REASONS = {
 }
 
 
-def render(supervisor, trades, realized_net, stop, exit_configured=False):
+def render(
+    supervisor,
+    trades,
+    realized_net,
+    stop,
+    exit_configured=False,
+    entry_configured=False,
+    entry_status=None,
+):
     r = supervisor.readiness()
     rows = [
         "🔐 <b>LIVE-контроль</b>",
         (
-            "Новые реальные входы: <b>заблокированы</b>"
-            if exit_configured
-            else "Реальная торговля: <b>заблокирована</b>"
+            "Новые реальные входы: <b>настроены</b>"
+            if entry_configured
+            else (
+                "Новые реальные входы: <b>заблокированы</b>"
+                if exit_configured
+                else "Реальная торговля: <b>заблокирована</b>"
+            )
         ),
         f"Сохранённых позиций: {len(trades)}",
         f"Подтверждённый NET: <b>{realized_net:+.4f} USD</b>",
     ]
+    if entry_configured and entry_status:
+        rows.append(
+            "Последняя проверка входа: " + escape(str(entry_status.get("status", "—")))
+        )
     if stop.stopped:
         rows.append("STOP: " + escape(stop.reason))
     if exit_configured:
@@ -33,10 +49,12 @@ def render(supervisor, trades, realized_net, stop, exit_configured=False):
         )
     if r.reasons:
         rows.append(
-            "\nБлокировки:\n"
+            ("\nПроверки наблюдателя:\n" if entry_configured else "\nБлокировки:\n")
             + "\n".join("• " + escape(REASONS.get(x, x)) for x in r.reasons)
         )
     rows.append(
-        "\nНовые реальные входы: <b>запрещены</b>. Проверка данных не включает торговлю."
+        "\nДопуск IOC-входа проверяется перед каждой отправкой; STOP и release/venue evidence обязательны."
+        if entry_configured
+        else "\nНовые реальные входы: <b>запрещены</b>. Проверка данных не включает торговлю."
     )
     return "\n".join(rows)

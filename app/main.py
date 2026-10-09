@@ -18,6 +18,7 @@ from .paper import PaperEngine
 from .risk import RiskGuard
 from .private_registry import PrivateRegistry
 from .private_order_reader import Reader as PrivateOrderReader
+from .private_order_stream import Streams as PrivateOrderStreams, StreamReader
 from .private_funding_reader import (
     Reader as PrivateFundingReader,
     PairReader as PairFundingReader,
@@ -25,6 +26,8 @@ from .private_funding_reader import (
 from .live_market_reader import Reader as LiveMarketReader
 from .live_monitor import Monitor as LiveMonitor
 from .live_exit_dispatch import Coordinator as LiveExitCoordinator
+from .live_entry_dispatch import Coordinator as LiveEntryCoordinator
+from .live_acceptance import accepted as live_accepted
 from .safe_executor import SafeExecutor
 from .ccxt_executor import CCXTExecutor
 from .recovery_market import Reader as RecoveryMarketReader
@@ -134,6 +137,7 @@ notification_bot = None
 secondary = None
 live_monitor = None
 live_exit_coordinator = None
+live_entry_coordinator = None
 live_trades = []
 durable = LiveTradeStore(config.db_path)
 strategy_toggles = StrategyToggleStore(config.runtime_state_path + ".strategies.json")
@@ -271,7 +275,7 @@ async def text_for(s):
         return render_venues(scanner)
     if s == "risk":
         rs = risk.state
-        return f"🛡 RISK CENTER\nСтатус: {'🛑 HALT' if rs.halted else '🟢 NORMAL'}\nПричина: {rs.reason or '—'}\nОшибок подряд: {rs.consecutive_errors}/{risk.max_errors}\nPaper PnL сегодня: {rs.paper_daily_pnl:+.4f} USD\nDaily stop: -{risk.bankroll*risk.daily_stop_pct/100:.2f} USD\nLIVE: заблокирован до private reconciliation"
+        return f"🛡 RISK CENTER\nСтатус: {'🛑 HALT' if rs.halted else '🟢 NORMAL'}\nПричина: {rs.reason or '—'}\nОшибок подряд: {rs.consecutive_errors}/{risk.max_errors}\nPaper PnL сегодня: {rs.paper_daily_pnl:+.4f} USD\nDaily stop: -{risk.bankroll*risk.daily_stop_pct/100:.2f} USD\nLIVE: текущий STOP и допуск — в LIVE-контроле"
     if s == "startup":
         return startup_text
     if s == "campaign":
@@ -286,6 +290,12 @@ async def text_for(s):
                 realized,
                 live_stop,
                 exit_configured=bool(config.live_enabled and config.live_exit_venues),
+                entry_configured=bool(
+                    config.live_enabled and config.live_entry_enabled
+                ),
+                entry_status=(
+                    live_entry_coordinator.latest if live_entry_coordinator else None
+                ),
             )
             + "\n\n"
             + monitor_status(summary)
@@ -626,6 +636,15 @@ async def scanning():
             )
             risk.on_success()
             await diary.record(quotes)
+            if (
+                live_entry_coordinator
+                and config.live_entry_enabled
+                and not scanner.paused
+                and strategy_runtime.enabled["futures_futures"]
+            ):
+                async with live_monitor.lock:
+                    await live_entry_coordinator.process(latest)
+                live_monitor.request_cycle()
             closed = await paper.mark_and_exit(quotes)
             for p in closed:
                 risk.on_paper_close(p.current_net_usd)
@@ -673,7 +692,7 @@ async def scanning():
 
 
 async def main():
-    global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor, live_exit_coordinator
+    global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor, live_exit_coordinator, live_entry_coordinator
     live_stop = Stop(config.runtime_state_path + ".stop.json")
     pf = preflight_check(config)
     if not pf.ok:
@@ -683,10 +702,12 @@ async def main():
     secondary = None
     live_monitor = None
     live_exit_coordinator = None
+    live_entry_coordinator = None
     private_clients = {}
     bot = None
     task = None
     stream_recorder = None
+    order_streams = None
     try:
         Path(config.db_path).parent.mkdir(parents=True, exist_ok=True)
         await diary.init()
@@ -847,6 +868,56 @@ async def main():
             on_update=monitor_update,
         )
         await live_monitor.init()
+        if config.private_order_streams:
+            order_streams = PrivateOrderStreams(
+                private_clients, config.db_path, live_monitor.request_cycle
+            )
+            await order_streams.init()
+            for venue, client in private_clients.items():
+                order_readers[venue] = StreamReader(venue, client, order_streams)
+            order_streams.start()
+
+        def entry_authority(symbol, long_venue, short_venue):
+            venues = (long_venue, short_venue)
+            return bool(
+                config.live_enabled
+                and config.live_entry_enabled
+                and not live_stop.stopped
+                and all(
+                    v in config.live_exit_venues and venue_controller.get(v)["scan"]
+                    for v in venues
+                )
+                and config.live_no_withdraw_attested
+                and not live_supervisor.kill.check(
+                    symbol, long_venue, short_venue
+                ).blocked
+                and order_streams is not None
+                and all(
+                    v in order_streams.tasks
+                    and not order_streams.tasks[v].done()
+                    and v in order_streams.observed
+                    and v not in order_streams.errors
+                    for v in venues
+                )
+                and live_accepted(config.live_acceptance_path, venues)
+            )
+
+        live_entry_coordinator = LiveEntryCoordinator(
+            durable,
+            runtime_store,
+            diary,
+            scanner.clients,
+            private_clients,
+            registry.snapshot,
+            scanner.funding,
+            entry_authority,
+            bankroll=config.live_capital,
+            notional=config.notional,
+            minimum_net=config.live_min_net_edge_usd,
+            safety_pct=config.safety_buffer_pct,
+            max_seconds=config.paper_max_seconds,
+        )
+        live_entry_coordinator.halt = live_stop.stop
         secondary = await build_bundle(
             config.exchanges,
             config.notional,
@@ -984,6 +1055,8 @@ async def main():
             await asyncio.gather(task, return_exceptions=True)
         if live_monitor:
             await live_monitor.stop_task()
+        if order_streams:
+            await order_streams.close()
         if secondary:
             await secondary.close()
         await scanner.close()

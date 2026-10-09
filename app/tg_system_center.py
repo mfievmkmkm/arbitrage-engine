@@ -40,5 +40,5 @@ def render(scanner, runtime):
             f"История WS: {stats['recorded']} снимков • объединено: {stats['coalesced']} • потеряно: {stats['dropped']}"
         )
         out.append(f"Ошибки записи: {stats['failures']}")
-    out.append("\n<i>LIVE/AUTO заблокированы до финальной проверки исполнения.</i>")
+    out.append("\n<i>Настройки и допуск реального исполнения — в LIVE-контроле.</i>")
     return "\n".join(out)

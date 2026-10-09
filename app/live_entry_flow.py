@@ -49,6 +49,7 @@ async def execute(
     hybrid_requote=None,
     recovery_market_reader=None,
     recovery_assessor=None,
+    prepared_requests=None,
 ):
     if private_snapshot is None:
         return LiveEntryResult(False, "PRIVATE_STATE_REQUIRED", "")
@@ -80,7 +81,13 @@ async def execute(
             long_contract_size=plan.long.contract_size,
             short_contract_size=plan.short.contract_size,
         )
-        await durable_store.phase(trade_id, "PLANNED", **meta)
+        if hasattr(durable_store, "reserve_entry"):
+            if not await durable_store.reserve_entry(trade_id, **meta):
+                return LiveEntryResult(
+                    False, "DURABLE_CAPACITY_RESERVED", trade_id, admission=adm
+                )
+        else:
+            await durable_store.phase(trade_id, "PLANNED", **meta)
         await durable_store.phase(trade_id, "ENTRY_SUBMITTING")
 
     async def leg(name, leg, ex, price, order_policy=None):
@@ -96,6 +103,29 @@ async def execute(
             trade_id + ":" + name,
             price if order_policy.order_type == "market" else None,
         )
+        if prepared_requests is not None and name in ("entry-long", "entry-short"):
+            from dataclasses import replace
+
+            template = prepared_requests[leg.venue]
+            if (
+                template.symbol,
+                template.side,
+                template.qty,
+                template.order_type,
+                template.reduce_only,
+                template.ioc,
+                template.price,
+            ) != (
+                req.symbol,
+                req.side,
+                req.qty,
+                req.order_type,
+                req.reduce_only,
+                req.ioc,
+                req.price,
+            ):
+                return None, "ENTRY_PREPARED_REQUEST_MISMATCH"
+            req = replace(template, client_order_id=req.client_order_id)
         intent = OrderIntent(
             trade_id + ":" + name,
             trade_id,
@@ -371,6 +401,13 @@ async def execute(
         private_attempts,
         private_delay,
     )
+    if prepared_requests is not None and (
+        a.long_price > prepared_requests[plan.long.venue].price * (1 + 1e-10)
+        or a.short_price < prepared_requests[plan.short.venue].price * (1 - 1e-10)
+    ):
+        from dataclasses import replace
+
+        pv = replace(pv, verified=False, reason="IOC_ACTUAL_LIMIT_VIOLATION")
     if not pv.verified:
         tmp = RuntimeTrade(
             trade_id,

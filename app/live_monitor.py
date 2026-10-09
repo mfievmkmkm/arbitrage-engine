@@ -61,6 +61,7 @@ class Monitor:
         self.task = None
         self.latest = None
         self.stopping = asyncio.Event()
+        self.wake = asyncio.Event()
 
     async def init(self):
         await self.store.init()
@@ -314,7 +315,11 @@ class Monitor:
                     incidents.append(self._incident("REDUCED_EVIDENCE_MISSING", tid))
                     continue
             if flat:
-                if trade is None and not reduced:
+                protective_cycle = trade is None and any(
+                    bool(x["reduce_only"]) and float(x.get("filled") or 0) > 0
+                    for x in own
+                )
+                if trade is None and not reduced and not protective_cycle:
                     incidents.append(
                         self._incident(
                             "FLAT_ENTRY_ACCOUNTING_REQUIRED", tid, severity="HIGH"
@@ -322,7 +327,7 @@ class Monitor:
                     )
                     continue
                 try:
-                    if reduced:
+                    if reduced or protective_cycle:
                         trade, calculate = cycle(row, payload, own)
                     else:
                         calculate = exit_accounting(trade, own)
@@ -549,6 +554,7 @@ class Monitor:
 
     async def _run(self):
         while not self.stopping.is_set():
+            self.wake.clear()
             try:
                 await asyncio.wait_for(self.cycle(), timeout=max(30, self.interval * 3))
             except asyncio.CancelledError:
@@ -580,9 +586,12 @@ class Monitor:
                     pass
                 logging.getLogger("arbitrage").exception("Live monitor failed")
             try:
-                await asyncio.wait_for(self.stopping.wait(), timeout=self.interval)
+                await asyncio.wait_for(self.wake.wait(), timeout=self.interval)
             except asyncio.TimeoutError:
                 pass
+
+    def request_cycle(self):
+        self.wake.set()
 
     async def start(self):
         if self.task is None:
@@ -592,6 +601,7 @@ class Monitor:
     async def stop_task(self):
         if self.task:
             self.stopping.set()
+            self.wake.set()
             try:
                 await asyncio.wait_for(
                     asyncio.shield(self.task), timeout=max(35, self.interval * 3 + 5)
