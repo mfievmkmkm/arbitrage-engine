@@ -87,6 +87,7 @@ from .tg_position_console import paper as render_positions
 from .spot_spot_view import render as render_spot_inventory
 from .funding_paper_view import render as render_funding_paper
 from .book_history import Store as BookHistory
+from .stream_book_recorder import Recorder as StreamBookRecorder
 from .execution_book_replay import (
     build as build_execution_replay,
     render as render_execution_replay,
@@ -673,6 +674,7 @@ async def main():
     private_clients = {}
     bot = None
     task = None
+    stream_recorder = None
     try:
         Path(config.db_path).parent.mkdir(parents=True, exist_ok=True)
         await diary.init()
@@ -720,6 +722,17 @@ async def main():
         )
         log.info("%s", startup_text.replace("\n", " | "))
         await scanner.start()
+        if config.record_books:
+            stream_recorder = StreamBookRecorder(
+                book_history, scanner.specs, config.public_stream_record_interval
+            )
+            scanner.book_recorder = stream_recorder
+            for venue, client in scanner.clients.items():
+                if hasattr(client, "book_status"):
+                    client.on_book = lambda book, venue=venue: stream_recorder.offer(
+                        venue, book
+                    )
+            stream_recorder.start()
         registry = PrivateRegistry()
         for name, reader in readers.items():
             registry.add(name, reader)
@@ -919,6 +932,8 @@ async def main():
         if secondary:
             await secondary.close()
         await scanner.close()
+        if stream_recorder is not None:
+            await stream_recorder.close()
         await close_clients(private_clients)
         notification_bot = None
         if bot:

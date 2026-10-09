@@ -2,6 +2,7 @@ import asyncio, time, math
 from .contract_book import to_base_levels
 from .spot_future_symbols import normalize
 from .spot_future_scanner import evaluate
+from .public_books import normalize as normalize_book
 
 
 class SpotFutureSource:
@@ -34,6 +35,14 @@ class SpotFutureSource:
                 async def fetch(symbol):
                     started = time.time()
                     book = await asyncio.wait_for(c.fetch_order_book(symbol), 8)
+                    book = normalize_book(
+                        book,
+                        symbol,
+                        started,
+                        time.time(),
+                        12,
+                        book.get("data_source", "REST"),
+                    )
                     stamp = book.get("timestamp")
                     if stamp is not None and not math.isfinite(float(stamp)):
                         raise ValueError("INVALID_BOOK_TIMESTAMP")
@@ -60,7 +69,7 @@ class SpotFutureSource:
                     "asks": to_base_levels(f["asks"], float(cs)),
                 }
                 position = self.watch_positions.get((venue, pair.base))
-                return evaluate(
+                row = evaluate(
                     venue,
                     pair.base,
                     pair.spot_symbol,
@@ -74,6 +83,12 @@ class SpotFutureSource:
                     now=min(st, ft),
                     base_qty=position.base_qty if position else None,
                 )
+                if row is not None:
+                    row["book_sources"] = {
+                        pair.spot_symbol: s["data_source"],
+                        pair.future_symbol: f["data_source"],
+                    }
+                return row
             except Exception:
                 return None
 

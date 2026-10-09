@@ -13,6 +13,23 @@ class Config:
     interval: int = max(15, int(os.getenv("SCAN_INTERVAL", "30")))
     notional: float = max(1, float(os.getenv("NOTIONAL_USD", "5")))
     max_age: float = max(2, float(os.getenv("MAX_BOOK_AGE_SEC", "12")))
+    public_streams: bool = os.getenv(
+        "PUBLIC_BOOK_STREAMS", "false"
+    ).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    public_stream_max_symbols: int = min(
+        200, max(1, int(os.getenv("PUBLIC_STREAM_MAX_SYMBOLS", "40")))
+    )
+    public_stream_max_age: float = min(
+        1.5, max(0.1, float(os.getenv("PUBLIC_STREAM_MAX_AGE_SEC", "1.5")))
+    )
+    public_stream_record_interval: float = min(
+        60, max(0.1, float(os.getenv("PUBLIC_STREAM_RECORD_INTERVAL_SEC", "1")))
+    )
     universe_size: int = max(20, int(os.getenv("UNIVERSE_SIZE", "120")))
     scan_batch_size: int = max(10, int(os.getenv("SCAN_BATCH_SIZE", "30")))
     scan_concurrency: int = max(2, int(os.getenv("SCAN_CONCURRENCY", "8")))

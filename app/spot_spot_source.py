@@ -1,6 +1,7 @@
 import asyncio, time, math
 from .spot_spot_directional import best
 from .spot_future_vwap import vwap
+from .public_books import normalize
 
 
 class Source:
@@ -22,6 +23,14 @@ class Source:
             try:
                 started = time.time()
                 book = await asyncio.wait_for(c.fetch_order_book(symbol), 8)
+                book = normalize(
+                    book,
+                    symbol,
+                    started,
+                    time.time(),
+                    12,
+                    book.get("data_source", "REST"),
+                )
                 stamp = (
                     float(book["timestamp"]) / 1000
                     if book.get("timestamp") is not None
@@ -74,6 +83,7 @@ class Source:
                 ts=min(stamps[a], stamps[b]),
                 watch_only=watch_only,
                 evidence_mode="PAPER_MODEL",
+                book_sources={a: books[a]["data_source"], b: books[b]["data_source"]},
             )
 
         out = []

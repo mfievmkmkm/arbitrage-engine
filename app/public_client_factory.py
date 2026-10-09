@@ -1,4 +1,5 @@
-from .exchange_names import exchange_class
+from .exchange_names import public_exchange_class as exchange_class
+from .public_books import wrap
 import asyncio
 
 
@@ -12,7 +13,7 @@ async def build(ids, default_type=None):
                 opts["options"] = {"defaultType": default_type}
             c = exchange_class(name)(opts)
             await asyncio.wait_for(c.load_markets(), 20)
-            out[name] = c
+            out[name] = wrap(c)
         except Exception:
             try:
                 await c.close()

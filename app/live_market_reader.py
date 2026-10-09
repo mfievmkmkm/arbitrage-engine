@@ -3,6 +3,7 @@
 import asyncio, math, time
 from .engine import vwap
 from .contract_book import to_base_levels
+from .public_books import normalize
 
 
 class Reader:
@@ -28,6 +29,7 @@ class Reader:
         book = await asyncio.wait_for(
             client.fetch_order_book(symbol, limit=20), self.timeout
         )
+        book = normalize(book, symbol, started, self.clock(), self.max_age, book.get("data_source", "REST"))
         stamp = book.get("timestamp")
         stamp = float(stamp) / 1000 if stamp is not None else started
         if not math.isfinite(stamp):

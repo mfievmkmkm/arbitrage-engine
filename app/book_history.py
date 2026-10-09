@@ -1,4 +1,4 @@
-"""Bounded public REST snapshots, in base units, for offline execution research."""
+"""Bounded public REST/WS snapshots, in base units, for offline research."""
 
 import json
 import math
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS execution_replay_results(id INTEGER PRIMARY KEY,run_i
 
 def valid_book(book):
     try:
-        if book["mode"] != "PUBLIC_REST_BASE_UNITS":
+        if book["mode"] not in ("PUBLIC_REST_BASE_UNITS", "PUBLIC_WS_BASE_UNITS"):
             return False
         if (
             not all(math.isfinite(float(book[k])) for k in ("book_ts", "received_at"))
@@ -79,7 +79,7 @@ class Store:
         for q in quotes:
             received = q.received_at if q.received_at is not None else self.clock()
             book = dict(
-                mode="PUBLIC_REST_BASE_UNITS",
+                mode="PUBLIC_WS_BASE_UNITS" if getattr(q, "data_source", "REST") == "WS" else "PUBLIC_REST_BASE_UNITS",
                 venue=q.exchange,
                 symbol=q.symbol,
                 book_ts=q.fetched,

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .contract_book import to_base_levels
 from .spot_future_vwap import vwap
 from .instruments import from_market, compatible, min_notional_ok
+from .public_books import normalize
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,14 @@ class Source:
                 start = self.clock()
                 b = await asyncio.wait_for(
                     self.clients[venue].fetch_order_book(symbol, limit=20), 8
+                )
+                b = normalize(
+                    b,
+                    symbol,
+                    start,
+                    self.clock(),
+                    self.max_age,
+                    b.get("data_source", "REST"),
                 )
                 stamp = (
                     float(b["timestamp"]) / 1000

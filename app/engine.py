@@ -2,7 +2,8 @@
 
 import asyncio, time, math
 from dataclasses import dataclass
-from .exchange_names import exchange_class
+from .exchange_names import public_exchange_class as exchange_class
+from .public_books import wrap, normalize
 from .discovery import RotatingUniverse
 from .health import VenueHealth
 from .instruments import from_market, min_notional_ok
@@ -33,6 +34,7 @@ class Quote:
     asks: list
     fetched: float
     received_at: float | None = None
+    data_source: str = "REST"
 
 
 def evaluate(buy, sell, notional, max_age, now=None, base_qty=None):
@@ -76,6 +78,7 @@ def evaluate(buy, sell, notional, max_age, now=None, base_qty=None):
         exit_spread=exit_spread,
         age_buy=now - buy.fetched,
         age_sell=now - sell.fetched,
+        book_sources={buy.exchange: buy.data_source, sell.exchange: sell.data_source},
     )
 
 
@@ -141,7 +144,7 @@ class Scanner:
                 valid = checked
                 self.symbols[name] = {m["symbol"] for m in valid}
                 self.specs[name] = {m["symbol"]: from_market(name, m) for m in valid}
-                self.clients[name] = c
+                self.clients[name] = wrap(c)
             except Exception as e:
                 self.errors[name] = type(e).__name__
                 await c.close()
@@ -178,6 +181,11 @@ class Scanner:
                     b = await asyncio.wait_for(
                         self.clients[name].fetch_order_book(symbol, limit=20), timeout=8
                     )
+                    received_at = b.get("received_at", time.time())
+                    source = b.get("data_source", "REST")
+                    b = normalize(
+                        b, symbol, requested_at, time.time(), self.max_age, source
+                    )
                     stamp = (
                         float(b["timestamp"]) / 1000
                         if b.get("timestamp") is not None
@@ -198,7 +206,8 @@ class Scanner:
                         to_base_levels(b["bids"], spec.contract_size),
                         to_base_levels(b["asks"], spec.contract_size),
                         stamp,
-                        time.time(),
+                        received_at,
+                        source,
                     )
                 except Exception as e:
                     self.errors[name] = type(e).__name__

@@ -244,6 +244,7 @@ def test_main_wires_secondary_runtime_and_cleans_up_without_network(
 
         class FakeScanner:
             clients = {}
+            specs = {}
             funding = None
             universe = SimpleNamespace(symbols=[])
 
@@ -307,6 +308,8 @@ def test_main_wires_secondary_runtime_and_cleans_up_without_network(
         )
         monkeypatch.setattr(main.dp, "start_polling", poll)
         await main.main()
+        assert main.scanner.book_recorder.closed
+        assert main.scanner.book_recorder.task is None
         assert events == [
             "scanner-start",
             "secondary-build",

@@ -12,3 +12,12 @@ def exchange_class(name):
     if cls is None:
         raise ValueError("EXCHANGE_UNSUPPORTED:" + name)
     return cls
+
+
+def public_exchange_class(name):
+    from .config import config
+    if not config.public_streams:
+        return exchange_class(name)
+    import ccxt.pro as pro
+    cls = getattr(pro, name, None) or getattr(pro, ALIASES.get(name, name), None)
+    return cls or exchange_class(name)

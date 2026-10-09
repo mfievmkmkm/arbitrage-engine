@@ -243,7 +243,7 @@ async def build(path, scenarios=SCENARIOS, limit=100, persist=True, clock=time.t
         scenarios=[],
         fee_rates={v: rate / 10000 for v, rate in FEE_BPS.items()},
         assumptions=[
-            "Public REST snapshots; no intrabook queue or liquidity guarantee",
+            "Public REST/WS snapshots; no intrabook queue or liquidity guarantee",
             "IOC/taker only; supplied/model fees, funding excluded",
             "Original Paper entry and exit times; no parameter selection or Ledger credit",
             "Quantity in base units; precision/limits/queue and competing liquidity are not exchange-certified",
@@ -436,6 +436,6 @@ def render(report):
             )
         )
     out.append(
-        "\n<i>Funding исключён, комиссии модельные. REST не доказывает fills и очередь. Результат не меняет капитал, настройки или допуск к LIVE.</i>"
+        "\n<i>Funding исключён, комиссии модельные. REST/WS не доказывают fills и очередь. Результат не меняет капитал, настройки или допуск к LIVE.</i>"
     )
     return "\n".join(out)
