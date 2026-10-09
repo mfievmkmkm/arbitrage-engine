@@ -13,6 +13,8 @@ REASONS = {
     "UNMANAGED_WORKING_ORDER": "Обнаружена работающая заявка вне журнала бота.",
     "EXIT_MARKET_UNVERIFIED": "Нет свежего стакана или подтверждённых данных для оценки выхода.",
     "ORDER_EVIDENCE_MISSING": "Нет ордерных доказательств происхождения позиции.",
+    "ENTRY_REDUCTION_REQUIRES_PRIVATE_ACCOUNTING": "Лишний объём сокращён по fills. Остаток и итоговый учёт требуют private-сверки; новый вход заблокирован.",
+    "ENTRY_WITH_CLOSE_FILLS_REQUIRES_ACCOUNTING": "В незавершённом входе есть закрывающие fills. Учёт расходов и остатка нельзя восстанавливать как обычный вход.",
 }
 
 
@@ -44,6 +46,18 @@ def positions(summary):
         )
         if x.get("private_flat"):
             out.append("Экспозиция: ноль; ожидается окончательный учёт.")
+        effects = x.get("recovery_effects")
+        if effects:
+            out.append(
+                f"Сокращено по fills: {effects['reduced_base']:.8g} BASE\nРезультат сокращения без funding: {effects['net_excluding_funding']:+.4f} USD\nОстаток по fills: LONG {effects['remaining_long_base']:.8g} / SHORT {effects['remaining_short_base']:.8g} BASE\nИтог сделки ещё не подтверждён."
+            )
+        assessment = x.get("recovery_assessment")
+        if assessment:
+            out.append(
+                "Сценарий восстановления: <code>"
+                + escape(str(assessment["action"]))
+                + "</code> • модель, без разрешения на ордер"
+            )
         if x.get("estimated_net") is not None:
             out.append(
                 f"Оценка выхода: {x['estimated_net']:+.4f} USD\nFunding: {'подтверждён' if x.get('funding_known') else 'не полностью подтверждён'}"

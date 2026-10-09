@@ -48,6 +48,7 @@ async def execute(
     durable_store=None,
     hybrid_requote=None,
     recovery_market_reader=None,
+    recovery_assessor=None,
 ):
     if private_snapshot is None:
         return LiveEntryResult(False, "PRIVATE_STATE_REQUIRED", "")
@@ -205,6 +206,46 @@ async def execute(
     if not initial.hedged:
         lb = lr.filled * plan.long.contract_size
         sb = sr.filled * plan.short.contract_size
+        if recovery_assessor is not None:
+            try:
+                assessment = await asyncio.wait_for(
+                    recovery_assessor(plan, lr, sr), timeout
+                )
+                if durable_store is not None:
+                    await durable_store.phase(
+                        trade_id,
+                        "ENTRY_SUBMITTING",
+                        recovery_assessment=assessment.row(),
+                    )
+                if assessment.action == "BLOCKED":
+                    if durable_store is not None:
+                        await durable_store.phase(
+                            trade_id,
+                            "UNKNOWN",
+                            entry_hold_reason="RECOVERY_ASSESSMENT_BLOCKED:"
+                            + assessment.reason,
+                        )
+                    return LiveEntryResult(
+                        False,
+                        "RECOVERY_ASSESSMENT_BLOCKED:" + assessment.reason,
+                        trade_id,
+                        initial,
+                        admission=adm,
+                    )
+            except Exception:
+                if durable_store is not None:
+                    await durable_store.phase(
+                        trade_id,
+                        "UNKNOWN",
+                        entry_hold_reason="RECOVERY_ASSESSMENT_UNKNOWN",
+                    )
+                return LiveEntryResult(
+                    False,
+                    "RECOVERY_ASSESSMENT_UNKNOWN",
+                    trade_id,
+                    initial,
+                    admission=adm,
+                )
         recovery = await recover(
             symbol,
             plan.long.venue,
@@ -215,7 +256,7 @@ async def execute(
             plan.short.contract_size,
             long_executor,
             short_executor,
-            edge_pct,
+            0 if recovery_market_reader is not None else edge_pct,
             0,
             max(edge_pct, 0) + 1e-12,
             long_round or (lambda x: x),
@@ -224,6 +265,36 @@ async def execute(
             short_round=short_round,
             market_reader=recovery_market_reader,
         )
+        from .recovery_assessment import reduction_effects
+
+        try:
+            effects = reduction_effects(plan, initial, recovery)
+        except (ValueError, TypeError):
+            if durable_store is not None:
+                await durable_store.phase(
+                    trade_id,
+                    "UNKNOWN",
+                    entry_hold_reason="RECOVERY_REDUCTION_ACCOUNTING_UNKNOWN",
+                )
+            return LiveEntryResult(
+                False,
+                "RECOVERY_REDUCTION_ACCOUNTING_UNKNOWN",
+                trade_id,
+                initial,
+                None,
+                recovery,
+                adm,
+            )
+        if effects is not None and durable_store is not None:
+            from dataclasses import asdict
+
+            await durable_store.phase(
+                trade_id,
+                "UNKNOWN",
+                recovery_effects=effects,
+                recovery_result=asdict(recovery.result),
+                entry_hold_reason="ENTRY_REDUCTION_REQUIRES_PRIVATE_ACCOUNTING",
+            )
         if not recovery.completed:
             if durable_store is not None:
                 await durable_store.phase(

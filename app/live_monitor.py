@@ -212,6 +212,8 @@ class Monitor:
                 "long_venue": lv,
                 "short_venue": sv,
                 "private_verified": False,
+                "recovery_effects": payload.get("recovery_effects"),
+                "recovery_assessment": payload.get("recovery_assessment"),
             }
             positions.append(info)
             if not lv or not sv or not symbol or lv == sv:

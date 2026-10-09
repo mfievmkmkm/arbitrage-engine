@@ -2,7 +2,9 @@
 
 Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-Последний блок: опциональные свежие recovery quotes с native limits, полной контрактной глубиной и worst-level slippage; атомарное сохранение request/book evidence вместе с intent; повторная проверка gate/свежести после записи; export evidence; durable hold при actual slippage; транзакционная защита накопленных fills от запоздалого ответа отмены. Локально: 658 тестов. Reader не подключён к main, LIVE не включён. Quote-backed COMPLETE заблокирован до повторного расчёта NET; account/position-mode/reduceOnly проверки остаются обязательным следующим этапом.
+Последний блок: read-only сравнение FLATTEN/COMPLETE по общему и дополнительному NET; paid entry fees, taker entry/exit costs, funding allowance, slippage reserve, safety и break-even capture. Quote-backed incomplete entry теперь использует reduce-only сокращение лишнего объёма, сохраняет фактический результат сокращения и остаток обеих ног. Assessment не разрешает дооткрытие; сокращённая позиция не выдаётся за подтверждённый новый runtime-вход. Диагностика подключена к read-only карточкам Telegram. Локально: 688 тестов. LIVE, reader и новый assessor в main не включены; account/position-mode/reduceOnly проверки и подтверждённый учёт уменьшенной пары остаются следующими этапами.
+
+Предыдущий блок (658 тестов): опциональные свежие recovery quotes с native limits, полной контрактной глубиной и worst-level slippage; атомарное сохранение request/book evidence вместе с intent; повторная проверка gate/свежести после записи; export evidence; durable hold при actual slippage; транзакционная защита накопленных fills от запоздалого ответа отмены.
 
 Предыдущий блок: terminal-проверка recovery orders, сохранение частичных аварийных fills/цен/комиссий, блокировка увеличения количества при округлении, проверка известных единиц приватной позиции и durable intents при приватном закрытии (611 тестов). Market requests без свежей reference price по-прежнему блокируются native-guard.
 
