@@ -348,3 +348,19 @@ def test_rpc_adapter_forbids_write_methods():
             await p.rpc("eth_sendRawTransaction", ["signed"])
 
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_standard_zerox_tax_schema_requires_separate_transfer_review(reviewed):
+    async def go():
+        row, reg = raw(), registry()
+        for side in ("buyToken", "sellToken"):
+            row["tokenMetadata"][side].pop("transferTaxBps", None)
+        for token in (SELL, BUY):
+            reg["chains"]["1"]["tokens"][token]["transfer_tax_verified_zero"] = reviewed
+        result = await firm(Sim(row), reg)
+        assert result["ok"] is reviewed, result
+        if not reviewed:
+            assert result["reason"] == "DEX_TRANSFER_TAX_EVIDENCE_REQUIRED"
+
+    asyncio.run(go())

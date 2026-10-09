@@ -1,5 +1,6 @@
 import os, json
 import aiosqlite
+import aiohttp
 from pathlib import Path
 from .dex_firm_simulation import Provider as FirmProvider, Cycle as FirmCycle
 from .zerox_research import Provider as DexProvider, Cycle as DexCycle
@@ -18,6 +19,9 @@ from .funding_paper import Engine as FundingPaper
 from .funding_paper_source import Source as FundingPaperSource
 from .cex_dex_paper_source import Source as DexPaperSource
 from .cex_dex_paper import Engine as DexPaper, Cycle as DexPaperCycle
+from .dex_execution_stress import History as DexHistory
+from .dex_wallet import Journal as WalletJournal, RPC as WalletRPC
+from .dex_wallet_observer import Observer as WalletObserver
 
 
 class Bundle:
@@ -30,6 +34,7 @@ class Bundle:
         self.ss_paper = None
         self.funding_paper = None
         self.dex_paper = None
+        self.wallet_session = None
 
     async def close(self):
         await self.runtime.stop()
@@ -38,6 +43,8 @@ class Bundle:
             await self.dex_provider.close()
         if self.dex_sim_provider:
             await self.dex_sim_provider.close()
+        if self.wallet_session:
+            await self.wallet_session.close()
 
 
 async def build_bundle(
@@ -100,6 +107,32 @@ async def build_bundle(
                 ),
             )
         bundle = Bundle(clients, sr, paper)
+        wallet = WalletJournal(db_path)
+        await wallet.init()
+        rpc_a, rpc_b = os.getenv("DEX_WALLET_RPC_PRIMARY"), os.getenv(
+            "DEX_WALLET_RPC_SECONDARY"
+        )
+        if rpc_a or rpc_b:
+            if not rpc_a or not rpc_b or rpc_a == rpc_b:
+                raise ValueError("DEX_WALLET_DUAL_RPC_REQUIRED")
+            bundle.wallet_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=8)
+            )
+            sr.add(
+                "wallet_receipts",
+                WalletObserver(
+                    wallet,
+                    WalletRPC(rpc_a, bundle.wallet_session),
+                    WalletRPC(rpc_b, bundle.wallet_session),
+                ),
+            )
+        else:
+            async with aiosqlite.connect(db_path) as d:
+                async with d.execute(
+                    "SELECT COUNT(*) FROM wallet_tx_intents WHERE phase NOT IN ('FINALIZED_SUCCESS','FINALIZED_REVERT')"
+                ) as c:
+                    if (await c.fetchone())[0]:
+                        raise ValueError("DEX_PENDING_WALLET_REQUIRES_DUAL_RPC")
         bundle.ss_paper = ss_paper
         bundle.funding_paper = fp
         routes = json.loads(os.getenv("DEX_RESEARCH_ROUTES_JSON", "[]"))
@@ -154,9 +187,11 @@ async def build_bundle(
                 funding_service.clients if funding_service else {},
                 private_clients,
             )
+            dex_history = DexHistory(db_path)
+            await dex_history.init()
             bundle.dex_paper = DexPaper(
                 db_path,
-                DexPaperSource(firm_cycle, funding_service),
+                DexPaperSource(firm_cycle, funding_service, history=dex_history),
                 capital=float(os.getenv("PAPER_CAPITAL_USD", "50")),
                 max_seconds=float(os.getenv("DEX_PAPER_HOLD_SECONDS", "900")),
             )
@@ -169,5 +204,7 @@ async def build_bundle(
             await bundle.dex_provider.close()
         if bundle and bundle.dex_sim_provider:
             await bundle.dex_sim_provider.close()
+        if bundle and bundle.wallet_session:
+            await bundle.wallet_session.close()
         await close(clients)
         raise

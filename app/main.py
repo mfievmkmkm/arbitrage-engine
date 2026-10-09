@@ -113,6 +113,9 @@ from .tg_position_console import paper as render_positions
 from .spot_spot_view import render as render_spot_inventory
 from .funding_paper_view import render as render_funding_paper
 from .cex_dex_paper_view import render as render_dex_paper
+from .dex_execution_stress import build as build_dex_stress, render as render_dex_stress
+from .dex_wallet_observer import render as render_wallet
+from .project_readiness import build as build_readiness, render as render_readiness
 from .book_history import Store as BookHistory
 from .stream_book_recorder import Recorder as StreamBookRecorder
 from .execution_book_replay import (
@@ -271,6 +274,16 @@ async def text_for(s):
         return text
     if s == "dex_paper":
         return render_dex_paper(secondary.dex_paper if secondary else None)
+    if s == "dex_stress":
+        return render_dex_stress(await build_dex_stress(config.db_path))
+    if s == "dex_wallet":
+        return await render_wallet(config.db_path)
+    if s == "readiness":
+        return render_readiness(
+            await build_readiness(
+                config.db_path, config.live_acceptance_path, config.live_exit_venues
+            )
+        )
     if s == "dex_replay":
         return render_sf_replay(
             await build_sf_replay(
@@ -453,6 +466,9 @@ async def start(m: Message):
         "ss_replay",
         "fund_replay",
         "dex_replay",
+        "dex_stress",
+        "dex_wallet",
+        "readiness",
         "execution_replay",
         "funding_paper",
         "dex_paper",
@@ -539,6 +555,9 @@ async def commands(m: Message):
             "ss_replay",
             "fund_replay",
             "dex_replay",
+            "dex_stress",
+            "dex_wallet",
+            "readiness",
             "execution_replay",
             "funding_paper",
             "dex_paper",
@@ -769,7 +788,43 @@ def keyboard_for(screen):
                 ],
             ]
         )
-    if screen in ("dex_paper", "funding_paper"):
+    if screen in ("dex", "dex_paper", "dex_wallet", "dex_stress"):
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="⛓ Paper",
+                        callback_data="dex_paper",
+                        style="primary" if screen == "dex_paper" else None,
+                    ),
+                    InlineKeyboardButton(text="🧪 Replay", callback_data="dex_replay"),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="⏱ Задержки / fills",
+                        callback_data="dex_stress",
+                        style="primary" if screen == "dex_stress" else None,
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="Кошелёк · receipts",
+                        callback_data="dex_wallet",
+                        style="primary" if screen == "dex_wallet" else None,
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🏁 Готовность проекта", callback_data="readiness"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(text="↻ Обновить", callback_data=screen),
+                    InlineKeyboardButton(text="‹ Главное меню", callback_data="home"),
+                ],
+            ]
+        )
+    if screen == "funding_paper":
         return back_menu(screen, "paper")
     if screen == "ss_inventory":
         return back_menu(screen, "paper")

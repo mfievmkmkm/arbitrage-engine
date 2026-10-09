@@ -12,6 +12,7 @@ https://docs.0x.org/docs/introduction/api-issues
 
 import asyncio
 import hashlib
+from dataclasses import dataclass, field
 import json
 import math
 import re
@@ -105,6 +106,15 @@ def registry_scope(registry, chain, sell, buy, now):
     return scope, tokens, asset, stable[0]
 
 
+@dataclass(frozen=True)
+class Envelope:
+    """Ephemeral signing material, intentionally not a JSON journal payload."""
+
+    proof: dict
+    transaction: dict = field(repr=False)
+    taker: str = field(repr=False)
+
+
 class Provider(ResearchProvider):
     def __init__(self, api_key, rpc_url, session=None, clock=time.time):
         super().__init__(api_key, session)
@@ -152,12 +162,13 @@ class Provider(ResearchProvider):
         slippage_bps=20,
         *,
         exact_out=False,
+        execution_envelope=False,
     ):
         started = self.clock()
         try:
             chain = integer(chain, "DEX_CHAIN")
             amount = integer(amount, "DEX_AMOUNT")
-            if type(exact_out) is not bool:
+            if type(exact_out) is not bool or type(execution_envelope) is not bool:
                 raise ValueError("DEX_QUOTE_MODE_INVALID")
             sell, buy, taker = address(sell), address(buy), address(taker)
             scope, tokens, asset, stable = registry_scope(
@@ -224,9 +235,25 @@ class Provider(ResearchProvider):
             metadata = raw.get("tokenMetadata") or {}
             for side in ("sellToken", "buyToken"):
                 row = metadata.get(side) or {}
-                for field in ("buyTaxBps", "sellTaxBps", "transferTaxBps"):
+                for field in ("buyTaxBps", "sellTaxBps"):
                     if integer(row.get(field), "DEX_TAX", positive=False) != 0:
                         raise ValueError("DEX_TOKEN_TAX_UNSUPPORTED")
+                # 0x v2 buy/sell metadata does not require transferTaxBps.
+                if "transferTaxBps" in row:
+                    if (
+                        integer(
+                            row["transferTaxBps"], "DEX_TRANSFER_TAX", positive=False
+                        )
+                        != 0
+                    ):
+                        raise ValueError("DEX_TOKEN_TAX_UNSUPPORTED")
+                elif (
+                    tokens[sell if side == "sellToken" else buy].get(
+                        "transfer_tax_verified_zero"
+                    )
+                    is not True
+                ):
+                    raise ValueError("DEX_TRANSFER_TAX_EVIDENCE_REQUIRED")
             tx = raw.get("transaction")
             if not isinstance(tx, dict):
                 raise ValueError("DEX_TRANSACTION_MISSING")
@@ -352,7 +379,7 @@ class Provider(ResearchProvider):
                     sort_keys=True,
                 ).encode()
             ).hexdigest()
-            return dict(
+            proof = dict(
                 ok=True,
                 chain_id=chain,
                 sell_token=sell,
@@ -362,6 +389,7 @@ class Provider(ResearchProvider):
                 min_buy_amount_raw=str(minimum),
                 max_sell_amount_raw=str(amount) if exact_out else None,
                 quote_mode="exact_out" if exact_out else "exact_in",
+                requested_amount_raw=str(requested),
                 network_fee_raw=str(fee),
                 block_number=block,
                 block_hash=block_hash,
@@ -375,6 +403,20 @@ class Provider(ResearchProvider):
                 live_allowed=False,
                 paper_allowed=False,
             )
+            if execution_envelope:
+                return Envelope(
+                    proof,
+                    dict(
+                        to=target,
+                        data=data,
+                        value=0,
+                        gas=gas,
+                        gasPrice=price,
+                        chainId=chain,
+                    ),
+                    taker,
+                )
+            return proof
         except asyncio.CancelledError:
             raise
         except Exception as e:

@@ -12,7 +12,7 @@ def strategies(runtime):
         mode = (
             "Paper"
             if name in ("futures_futures", "spot_futures", "spot_spot", "funding_arb")
-            else "Исследование"
+            else "Firm Paper / исследование"
         )
         out.append(
             f"<b>{label}</b>\n{'🟢 Включена' if enabled else '⚫ Выключена'} • {mode} • REAL 🔒\nНаблюдений сейчас: {runtime.counts().get(name,0)}"

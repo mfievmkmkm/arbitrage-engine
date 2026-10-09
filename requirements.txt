@@ -4,3 +4,4 @@ python-dotenv>=1,<2
 aiosqlite>=0.20,<1
 
 openpyxl>=3.1,<4
+eth-account>=0.14,<0.15

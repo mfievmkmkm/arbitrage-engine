@@ -2,7 +2,19 @@
 
 Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: двусторонний CEX/DEX Paper и Replay
+## Текущий блок: wallet boundary, receipts и DEX execution stress
+
+Локальная проверка текущего блока: **1190 тестов passed**, `compileall`, импорт `app.main` и `git diff --check` успешны. Это проверка программного кода и моков, не сертификация реальных площадок или кошелька.
+
+Добавлены isolated-wallet signer и проверка signed transaction, общий LIVE-owner/nonce claim, durable hash-before-broadcast и read-only dual-RPC finalized receipt accounting. Ethereum mainnet/ERC20/legacy gasPrice only; missing evidence остаётся HOLD, timeout не повторяется. Подписи и raw capability не входят в SQLite/экспорт. Полный автоматический CEX/DEX LIVE-координатор ещё не подключён, поэтому wallet receipt не означает закрытую двухстороннюю сделку.
+
+Добавлены sequential DEX→CEX stress-сценарии, задержки, partial IOC, bounded recovery, revert и UNKNOWN. Будущие котировки не используются; уже потреблённая глубина не повторяется; неизвестный остаток не равен нулю. Результаты сценарные, funding исключён, Ledger не меняется. Quote history, runs/results и wallet intents/events доступны в audit export. Команды `/dex_stress`, `/dex_wallet`, `/readiness`; кнопки с выделением активного раздела.
+
+Исправлена несовместимость с обычной 0x tax schema: отсутствующий transferTaxBps требует отдельного expiring transfer_tax_verified_zero evidence, не выдуманного нуля. Экспорт сохраняет валидные публичные token addresses/deltas, но редактирует signing capabilities и финансовые секреты.
+
+Граница финала: **software_complete=false, production_ready=false**. Не завершены общий CEX/DEX LIVE hedge/exit/recovery/PnL bridge, реальные account/wallet certification и длительная Paper/OOS/micro-canary. В этой сессии реальные ключи и транзакции не использовались. Подробно: [DEX_WALLET_AND_STRESS_RUNBOOK_RU.md](DEX_WALLET_AND_STRESS_RUNBOOK_RU.md).
+
+## Предыдущий блок: двусторонний CEX/DEX Paper и Replay
 
 В main зарегистрированы LIVE Spot/Spot и Funding, strategy-scoped acceptance, общая capacity и монитор, Telegram read-only checks, close/recovery controls. Spot/Spot восстанавливает предварительно размещённые запасы по terminal/private cashflow, не использует transfers/borrow. Остаточные allocation deltas сохраняются отдельно; их наличие не считается flat. Funding прогноз не кредитуется; известные расходы каждой ноги резервируются отдельно, hold сохраняется до отправки, вывод результата требует mature private income. Цена/fee NET_STOP может работать без предполагаемого funding income.
 

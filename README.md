@@ -118,4 +118,6 @@ Funding-прогноз не считается полученной прибыл
 
 ## История этапов
 
+Wallet signing/nonce/receipt backend и сценарный CEX/DEX execution stress добавлены; `/dex_stress`, `/dex_wallet`, `/readiness`. Main подключает только read-only receipt observer, не автоматический swap→CEX LIVE bridge. Текущие ограничения, параметры и незавершённые блоки: [DEX_WALLET_AND_STRESS_RUNBOOK_RU.md](DEX_WALLET_AND_STRESS_RUNBOOK_RU.md).
+
 Предыдущие документы сохраняются как история реализации. Их формулировки «complete/ready» не являются текущим допуском к LIVE. Текущее состояние — в `RELEASE_STATUS_RU.md`.

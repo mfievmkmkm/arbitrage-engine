@@ -32,8 +32,9 @@ def calendar(p, until):
 
 
 class Source:
-    def __init__(self, cycle, funding_service, clock=time.time):
+    def __init__(self, cycle, funding_service, clock=time.time, history=None):
         self.cycle, self.fs, self.clock = cycle, funding_service, clock
+        self.history = history
         self.reader = Reader(cycle.public, clock=clock)
 
     def route(self, p):
@@ -228,7 +229,16 @@ class Source:
                 or self.clock() - exit_quote["dex"]["ts"] > 15
             ):
                 raise ValueError("DEX_ENTRY_STALE_AFTER_REVERSE_PREFLIGHT")
+            if self.history:
+                await self.history.record(
+                    p["entry_dex"],
+                    p["entry_gas"],
+                    p["entry_gas_book"],
+                    p["native_decimals"],
+                )
             p["opened_at"] = self.clock()
+            if p["opened_at"] - p["entry_cex"]["book_ts"] > 1.5:
+                raise ValueError("DEX_ENTRY_STALE_AFTER_HISTORY_WRITE")
             calendar(p, p["opened_at"])
             return dict(ok=True, position=p, exit_quote=exit_quote)
         except asyncio.CancelledError:
@@ -342,7 +352,7 @@ class Source:
             ):
                 raise ValueError("DEX_EXIT_PAIRED_EVIDENCE_STALE")
             cash = float(Decimal(cash_raw) / Decimal(10 ** p["stable_decimals"]))
-            return dict(
+            result = dict(
                 ok=True,
                 ts=now,
                 dex=q,
@@ -354,6 +364,16 @@ class Source:
                 gas_book=b,
                 fee_rate=fee,
             )
+            if self.history:
+                await self.history.record(q, gas, b, decimals)
+            result["ts"] = self.clock()
+            if (
+                result["ts"] - native.market_evidence["book_ts"] > 1.5
+                or result["ts"] - q["ts"] > 15
+                or result["ts"] - b["timestamp"] / 1000 > 1.5
+            ):
+                raise ValueError("DEX_EXIT_STALE_AFTER_HISTORY_WRITE")
+            return result
         except asyncio.CancelledError:
             raise
         except Exception as e:

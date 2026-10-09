@@ -43,4 +43,6 @@ def evaluate(
             live,
             "FUNDING_ACCOUNT_ACCEPTANCE" if live else "FUNDING_ACCEPTANCE_REQUIRED",
         )
-    return Gate(False, False, False, "DEDICATED_DEX_ACCEPTANCE_REQUIRED")
+    if strategy == "cex_dex":
+        return Gate(True, True, False, "DEX_LIVE_COORDINATOR_AND_ACCEPTANCE_REQUIRED")
+    return Gate(False, False, False, "UNKNOWN_STRATEGY")
