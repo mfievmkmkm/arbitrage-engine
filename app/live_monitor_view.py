@@ -44,6 +44,19 @@ def positions(summary):
     if not summary or not summary["trades"]:
         return "\n".join(out + ["Незавершённых LIVE-сделок нет."])
     for x in summary["trades"]:
+        if x.get("strategy") == "spot_futures":
+            out.append(
+                f"\n<b>{escape(x.get('spot_symbol', x['symbol']))}</b> • Spot/Futures\n<code>{escape(x['trade_id'])}</code>\nСпот LONG / Фьючерсы SHORT\nЭтап: <code>{escape(x['phase'])}</code>\nPrivate: {'сверено' if x.get('private_verified') else 'не подтверждено'}"
+            )
+            if x.get("cashflow"):
+                f = x["cashflow"]
+                out.append(
+                    f"Спот: {f['spot_base']:.8g} BASE • Future: {f['future_base']:.8g} BASE"
+                )
+            if x.get("estimated_net") is not None:
+                out.append(f"Оценка NET выхода: {x['estimated_net']:+.4f} USD")
+            out.append("Управление: /sf_live")
+            continue
         out.append(
             f"\n<b>{escape(str(x.get('symbol','—')))}</b>\n<code>{escape(x['trade_id'])}</code>\n"
             f"{escape(str(x['long_venue']))} LONG / {escape(str(x['short_venue']))} SHORT\n"

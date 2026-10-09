@@ -55,6 +55,9 @@ class Config:
         "yes",
         "on",
     )
+    live_spot_futures_enabled: bool = os.getenv(
+        "LIVE_SPOT_FUTURES_ENABLED", "true"
+    ).strip().lower() in ("true", "1", "yes", "on")
     live_acceptance_path: str = os.getenv(
         "LIVE_ACCEPTANCE_PATH", "live_acceptance.json"
     )

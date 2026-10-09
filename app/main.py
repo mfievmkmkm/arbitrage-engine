@@ -29,7 +29,12 @@ from .live_monitor import Monitor as LiveMonitor
 from .live_exit_dispatch import Coordinator as LiveExitCoordinator
 from .live_residual_dispatch import Coordinator as LiveResidualCoordinator
 from .live_entry_dispatch import Coordinator as LiveEntryCoordinator
-from .live_acceptance import accepted as live_accepted
+from .live_acceptance import accepted as live_accepted, spot_accepted
+from .spot_future_live_preflight import Admission as SpotFutureAdmission
+from .spot_future_live_session import Session as SpotFutureSession
+from .live_spot_future_dispatch import Coordinator as SpotFutureCoordinator
+from .spot_executor import SpotOrderReader
+from .tg_spot_future_live import render as render_sf_live, menu as sf_live_menu
 from .safe_executor import SafeExecutor
 from .ccxt_executor import CCXTExecutor
 from .recovery_market import Reader as RecoveryMarketReader
@@ -39,7 +44,7 @@ from .live_monitor_view import (
     incidents as monitor_incidents,
 )
 from .runtime_state import RuntimeTrade
-from .private_factory import build_private_readers, close_clients
+from .private_factory import build_private_readers, build_spot_clients, close_clients
 from .live_bootstrap import bootstrap
 from .startup_runtime import evaluate as evaluate_runtime_startup
 from .runtime_store import RuntimeStore
@@ -62,6 +67,7 @@ from .tg_venue_detail import render as venue_detail
 from .live_control_view import render as render_live_control
 from .live_preflight_view import render as render_live_preflight
 from .live_commands import stop as command_stop, resume as command_resume
+from .live_commands import clear_monitor_kill
 from .resume_evidence import collect_current as collect_resume_current
 from types import SimpleNamespace
 from .strategy_runtime import StrategyRuntime
@@ -131,6 +137,8 @@ latest = []
 dp = Dispatcher()
 startup_text = "🚦 Startup ещё не выполнен"
 private_clients = {}
+spot_private_clients = {}
+spot_future_live = None
 live_supervisor = LiveSupervisor(config.max_engine_errors)
 live_stop = None
 strategy_runtime = StrategyRuntime()
@@ -310,6 +318,25 @@ async def text_for(s):
             else None
         )
         return render_live_preflight(result)
+    if s in ("sf_live", "sf_checks"):
+        preview = None
+        offers = strategy_runtime.top("spot_futures", 1)
+        if s == "sf_checks":
+            preview = (
+                await spot_future_live.session.admission.preview(offers[0])
+                if spot_future_live and offers
+                else dict(status="NO_OPPORTUNITY")
+            )
+        return render_sf_live(
+            live_monitor.latest if live_monitor else None,
+            spot_future_live,
+            bool(
+                config.live_enabled
+                and config.live_entry_enabled
+                and config.live_spot_futures_enabled
+            ),
+            preview,
+        )
     if s == "live_positions":
         return monitor_positions(live_monitor.latest if live_monitor else None)
     if s == "incidents":
@@ -363,7 +390,10 @@ async def start(m: Message):
         "live",
         "live_stop",
         "live_resume",
+        "live_clear",
         "live_checks",
+        "sf_live",
+        "sf_checks",
         "live_positions",
         "incidents",
         "strategies",
@@ -400,6 +430,17 @@ async def commands(m: Message):
             else "🛑 STOP остаётся: " + escape(result.reason)
         )
         s = "live"
+    if s == "live_clear":
+        async with live_monitor.lock:
+            result = clear_monitor_kill(
+                live_supervisor, live_monitor.latest, time.time()
+            )
+        notice = (
+            "Блокировка снята. STOP остаётся; снимите его отдельно."
+            if result.allowed
+            else "Блокировка остаётся: " + escape(result.reason)
+        )
+        s = "live"
     await m.answer(
         (notice + "\n\n" if notice else "") + await text_for(s),
         reply_markup=keyboard_for(s),
@@ -429,7 +470,10 @@ async def commands(m: Message):
             "live",
             "live_stop",
             "live_resume",
+            "live_clear",
             "live_checks",
+            "sf_live",
+            "sf_checks",
             "live_positions",
             "incidents",
             "strategies",
@@ -470,10 +514,46 @@ async def callbacks(q: CallbackQuery):
             else "🛑 STOP остаётся: " + escape(result.reason)
         )
         s = "live"
+    if s == "live_clear":
+        async with live_monitor.lock:
+            result = clear_monitor_kill(
+                live_supervisor, live_monitor.latest, time.time()
+            )
+        notice = (
+            "Блокировка снята. STOP остаётся; снимите его отдельно."
+            if result.allowed
+            else "Блокировка остаётся: " + escape(result.reason)
+        )
+        s = "live"
     await safe_edit(
         q.message,
         (notice + "\n\n" if notice else "") + await text_for(s),
         keyboard_for(s),
+    )
+
+
+@dp.callback_query(F.data.startswith("sf_close:") | F.data.startswith("sf_recover:"))
+async def spot_live_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        await q.answer("Нет доступа", show_alert=True)
+        return
+    await q.answer("Проверяю исполнение")
+    if not spot_future_live or not live_monitor:
+        return
+    action, tid = q.data.split(":", 1)
+    async with live_monitor.lock:
+        if action == "sf_close":
+            result = await spot_future_live.session.close(tid)
+        else:
+            result = await spot_future_live.session.recover(tid)
+    await live_monitor.cycle()
+    await safe_edit(
+        q.message,
+        "Результат действия: <code>"
+        + escape(str(result.get("status", "UNKNOWN")))
+        + "</code>\n\n"
+        + await text_for("sf_live"),
+        keyboard_for("sf_live"),
     )
 
 
@@ -493,7 +573,9 @@ def keyboard_for(screen):
     if screen == "home":
         return menu()
     if screen == "live":
-        return live_menu(live_stop.stopped)
+        return live_menu(live_stop.stopped, bool(live_supervisor.kill.global_reason))
+    if screen in ("sf_live", "sf_checks"):
+        return sf_live_menu(live_monitor.latest if live_monitor else None)
     if screen == "top":
         return market_keyboard(merged_market(strategy_runtime))
     if screen == "exchanges":
@@ -718,6 +800,7 @@ async def scanning():
 
 async def main():
     global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor, live_exit_coordinator, live_entry_coordinator, live_residual_coordinator
+    global spot_private_clients, spot_future_live
     live_stop = Stop(config.runtime_state_path + ".stop.json")
     pf = preflight_check(config)
     if not pf.ok:
@@ -730,6 +813,8 @@ async def main():
     live_entry_coordinator = None
     live_residual_coordinator = None
     private_clients = {}
+    spot_private_clients = {}
+    spot_future_live = None
     bot = None
     task = None
     stream_recorder = None
@@ -752,6 +837,17 @@ async def main():
         await paper.restore()
         await restore_ledger(config.db_path, bankroll, risk)
         readers, private_clients = build_private_readers()
+        spot_private_clients = build_spot_clients()
+
+        async def load_spot(venue, client):
+            try:
+                await asyncio.wait_for(client.load_markets(), 10)
+            except Exception:
+                log.warning("Spot private metadata unavailable: %s", venue)
+
+        await asyncio.gather(
+            *(load_spot(v, c) for v, c in spot_private_clients.items())
+        )
         boot = await bootstrap(readers)
         runtime_store = RuntimeStore(config.runtime_state_path)
         recovery = await durable_recover(durable, runtime_store, diary, boot.ready)
@@ -799,6 +895,12 @@ async def main():
             name: PrivateOrderReader(name, client)
             for name, client in private_clients.items()
         }
+        order_readers.update(
+            {
+                v + ":spot": SpotOrderReader(v + ":spot", c)
+                for v, c in spot_private_clients.items()
+            }
+        )
         funding_readers = {
             name: PrivateFundingReader(name, client)
             for name, client in private_clients.items()
@@ -826,6 +928,57 @@ async def main():
                 and not live_supervisor.kill.pairs
                 and not live_supervisor.kill.check("", venue, venue).blocked
             )
+
+        def spot_entry_authority(venue):
+            summary = live_monitor.latest if live_monitor else {}
+            return bool(
+                config.live_enabled
+                and config.live_entry_enabled
+                and config.live_spot_futures_enabled
+                and strategy_runtime.enabled.get("spot_futures", False)
+                and not scanner.paused
+                and not live_stop.stopped
+                and venue in config.live_exit_venues
+                and venue_controller.get(venue)["scan"]
+                and config.live_no_withdraw_attested
+                and not live_supervisor.kill.pairs
+                and not live_supervisor.kill.check("", venue, venue).blocked
+                and summary
+                and summary.get("private_verified") is True
+                and summary.get("reconciled") is True
+                and summary.get("unknown_orders") == 0
+                and 0 <= time.time() - summary.get("ts", 0) <= 15
+                and order_streams is not None
+                and venue in order_streams.tasks
+                and not order_streams.tasks[venue].done()
+                and venue in order_streams.observed
+                and venue not in order_streams.errors
+                and spot_accepted(config.live_acceptance_path, venue)
+            )
+
+        spot_admission = SpotFutureAdmission(
+            spot_private_clients,
+            private_clients,
+            scanner.funding,
+            bankroll=config.live_capital,
+            notional=config.notional,
+            minimum_net=config.live_min_net_edge_usd,
+            safety_pct=config.safety_buffer_pct,
+            hold_seconds=config.paper_max_seconds,
+        )
+        spot_future_live = SpotFutureCoordinator(
+            SpotFutureSession(
+                durable,
+                diary,
+                spot_admission,
+                spot_entry_authority,
+                venue_exit_authority,
+                halt=live_stop.stop,
+            ),
+            max_seconds=config.paper_max_seconds,
+            target=config.paper_target_convergence,
+            trailing=config.paper_trailing_drawdown,
+        )
 
         exit_executors = {
             venue: SafeExecutor(
@@ -861,6 +1014,8 @@ async def main():
             live_trades = [RuntimeTrade(**row) for row in summary["runtime_trades"]]
             await live_exit_coordinator.process(summary)
             await live_residual_coordinator.process(summary)
+            summary["closed"].extend(await spot_future_live.process(summary))
+            summary["realized"] = await live_monitor.store.totals()
             if notification_bot:
                 for item in new_incidents:
                     if item["severity"] in ("CRITICAL", "HIGH"):
@@ -880,7 +1035,12 @@ async def main():
                     try:
                         await notification_bot.send_message(
                             config.admin_id,
-                            f"✅ Закрытие подтверждено private API\n{escape(result['trade_id'])}\nФактический NET: {result['net']:+.4f} USD",
+                            f"✅ Итог подтверждён private API\n{escape(result['trade_id'])}\nФактический NET: {result['net']:+.4f} USD"
+                            + (
+                                f"\nОстался актив: {result['held_inventory_base']:.8g} BASE • учтён отдельно, не flat."
+                                if result.get("held_inventory_base")
+                                else ""
+                            ),
                             parse_mode="HTML",
                         )
                     except Exception:
@@ -903,6 +1063,7 @@ async def main():
             target_capture=config.paper_target_convergence,
             trailing=config.paper_trailing_drawdown,
             on_update=monitor_update,
+            cash_observer=spot_future_live,
         )
         await live_monitor.init()
         if config.private_order_streams:
@@ -970,6 +1131,14 @@ async def main():
             scanner.universe.symbols if scanner.universe else (),
         )
         secondary.runtime.paused = lambda: scanner.paused
+
+        async def secondary_rows(name, rows, entry_enabled):
+            if name == "spot_futures" and entry_enabled and spot_future_live:
+                async with live_monitor.lock:
+                    await spot_future_live.process_rows(rows)
+                live_monitor.request_cycle()
+
+        secondary.runtime.on_rows = secondary_rows
         sf_cycle = secondary.runtime.services["spot_futures"]
         sf_cycle.allow_open = (
             lambda x: not scanner.paused
@@ -1103,6 +1272,7 @@ async def main():
         if stream_recorder is not None:
             await stream_recorder.close()
         await close_clients(private_clients)
+        await close_clients(spot_private_clients)
         notification_bot = None
         if bot:
             await bot.session.close()

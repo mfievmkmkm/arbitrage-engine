@@ -13,6 +13,22 @@
     "recovery": false,
     "restart": false
   },
+  "strategies": {
+    "spot_futures": {
+      "venues": {
+        "binance": {
+          "spot_account": false,
+          "spot_ioc": false,
+          "spot_lookup": false,
+          "base_fee_units": false,
+          "spot_balances": false,
+          "cash_entry_exit": false,
+          "cash_recovery": false,
+          "held_inventory": false
+        }
+      }
+    }
+  },
   "venues": {
     "binance": {
       "one_way": false,

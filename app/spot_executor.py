@@ -58,7 +58,7 @@ class SpotExecutor(CCXTExecutor):
     def validate(self, request):
         from .spot_quote_evidence import validate
 
-        validate(request, self.venue)
+        validate(request, self.venue, self.clock() if self.clock else None)
         return validate_request(self.client, request)
 
     def _result(self, row):

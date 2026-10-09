@@ -11,6 +11,7 @@ class SecondaryRuntime:
         self.tasks = []
         self.running = False
         self.paused = lambda: False
+        self.on_rows = None
 
     def add(self, name, service):
         self.services[name] = service
@@ -49,6 +50,8 @@ class SecondaryRuntime:
                         }
                     )
                 await self.record(self.db_path, obs)
+                if self.on_rows:
+                    await self.on_rows(name, rows, service.entry_enabled)
             except asyncio.CancelledError:
                 raise
             except Exception:

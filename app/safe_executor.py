@@ -4,12 +4,13 @@ from .order_lifecycle import transition
 
 
 class SafeExecutor(ExchangeExecutor):
-    def __init__(self, venue, inner, diary, gate, exit_gate=None):
+    def __init__(self, venue, inner, diary, gate, exit_gate=None, clock=None):
         self.venue = venue
         self.inner = inner
         self.diary = diary
         self.gate = gate
         self.exit_gate = exit_gate or gate
+        self.clock = clock
 
     async def submit_intent(self, intent, request):
         if request.market_evidence is not None:
@@ -18,7 +19,9 @@ class SafeExecutor(ExchangeExecutor):
 
             request = deepcopy(request)
             try:
-                validate_evidence(request, self.venue)
+                validate_evidence(
+                    request, self.venue, self.clock() if self.clock else None
+                )
             except (ValueError, TypeError):
                 return None, "RECOVERY_EVIDENCE_INVALID"
         if (
@@ -56,7 +59,9 @@ class SafeExecutor(ExchangeExecutor):
             if not (self.exit_gate() if request.reduce_only else self.gate()):
                 raise ValueError("LIVE_GATE_LOCKED")
             if request.market_evidence is not None:
-                validate_evidence(request, self.venue)
+                validate_evidence(
+                    request, self.venue, self.clock() if self.clock else None
+                )
         except (ValueError, TypeError):
             await self.diary.save_order_intent(intent, "FAILED")
             return None, "RECOVERY_PRE_SEND_GUARD_FAILED"

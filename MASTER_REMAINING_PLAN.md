@@ -8,11 +8,13 @@ Historical A–F below is a design checklist, not an assertion that already
 integrated Paper/Replay/UI pieces are still missing. Use RELEASE_STATUS_RU.md
 for the actual implementation matrix.
 
-Next concrete integration: register the tested Spot/Futures Admission + Session
-with explicit spot private clients and strategy-scoped acceptance; teach the
-common monitor different leg symbols/account scopes and held spot inventory;
-wire entry/exit/explicit recovery/control and notifications into main. Do not
-reinterpret a cash trade as a same-symbol Futures/Futures RuntimeTrade.
+Spot/Futures Admission + Session are now registered with explicit spot private
+clients and strategy-scoped acceptance. The common monitor owns different
+leg symbols/account scopes; scanner entry, dynamic exit, explicit recovery,
+funding/result finalization, Telegram control and notifications are wired.
+Held spot inventory remains separate from derivative flat proof. Next: account
+certification of fee units, IOC/lookup, private history completeness and canary;
+extend dense execution stress evidence to the cash strategy.
 
 Then complete live Spot/Spot inventory and Funding lifecycles; CEX/DEX remains
 quote/simulation/security work, not an assumed executable route. Finish with

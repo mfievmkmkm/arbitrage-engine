@@ -16,9 +16,19 @@ CHECKS = (
     "restart",
 )
 VENUE_CHECKS = ("one_way", "ioc", "reduce_only", "client_id", "fees", "funding")
+SPOT_CHECKS = (
+    "spot_account",
+    "spot_ioc",
+    "spot_lookup",
+    "base_fee_units",
+    "spot_balances",
+    "cash_entry_exit",
+    "cash_recovery",
+    "held_inventory",
+)
 
 
-def accepted(path, venues, now=None):
+def accepted(path, venues, now=None, strategy=None):
     try:
         d = json.loads(Path(path).read_text())
         now = time.time() if now is None else now
@@ -49,9 +59,24 @@ def accepted(path, venues, now=None):
             or expires - created > 86400
         ):
             return False
-        return all(d.get("checks", {}).get(k) is True for k in CHECKS) and all(
+        standard = all(d.get("checks", {}).get(k) is True for k in CHECKS) and all(
             all(d.get("venues", {}).get(v, {}).get(k) is True for k in VENUE_CHECKS)
             for v in venues
         )
+        if strategy is None:
+            return standard
+        if strategy != "spot_futures" or len(venues) != 1:
+            return False
+        scope = (
+            d.get("strategies", {})
+            .get(strategy, {})
+            .get("venues", {})
+            .get(venues[0], {})
+        )
+        return standard and all(scope.get(k) is True for k in SPOT_CHECKS)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
+
+
+def spot_accepted(path, venue, now=None):
+    return accepted(path, (venue,), now, strategy="spot_futures")

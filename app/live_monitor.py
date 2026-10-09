@@ -39,6 +39,7 @@ class Monitor:
         trailing=0.2,
         clock=time.time,
         on_update=None,
+        cash_observer=None,
     ):
         self.durable = durable
         self.runtime = runtime
@@ -56,6 +57,7 @@ class Monitor:
         self.trailing = trailing
         self.clock = clock
         self.on_update = on_update
+        self.cash_observer = cash_observer
         self.store = MonitorStore(durable.path)
         self.lock = asyncio.Lock()
         self.task = None
@@ -135,6 +137,12 @@ class Monitor:
         states, unresolved = await reconcile_and_persist(self.diary, self.order_readers)
         intents = await self.diary.order_intents()
         rows = await self.durable.active()
+        cash_rows = [
+            r
+            for r in rows
+            if json.loads(r["payload"]).get("strategy") == "spot_futures"
+        ]
+        rows = [r for r in rows if r not in cash_rows]
         snapshot = await self.snapshot_source()
         now = self.clock()
         incidents = []
@@ -166,6 +174,12 @@ class Monitor:
                 )
             )
         owners = {}
+        for row in cash_rows:
+            plan = json.loads(row["payload"]).get("cash_plan") or {}
+            if plan.get("venue") and plan.get("future_symbol"):
+                owners.setdefault((plan["venue"], plan["future_symbol"]), []).append(
+                    row["trade_id"]
+                )
         for row in rows:
             for venue in (row.get("long_venue"), row.get("short_venue")):
                 if venue:
@@ -555,6 +569,53 @@ class Monitor:
                 tid, best_net=best, last_exit_signal=signal, last_mark=mark
             )
         # Rebuild JSON from authoritative rows; do not erase legacy positions without DB ownership.
+        for row in cash_rows:
+            tid = row["trade_id"]
+            try:
+                if self.cash_observer is None:
+                    raise ValueError("CASH_MONITOR_REQUIRED")
+                info = await self.cash_observer.observe(row)
+            except Exception as error:
+                info = dict(
+                    trade_id=tid,
+                    symbol=row["symbol"],
+                    strategy="spot_futures",
+                    phase=row["phase"],
+                    long_venue=row["long_venue"],
+                    short_venue=row["short_venue"],
+                    private_verified=False,
+                    cash_error=str(error),
+                )
+            positions.append(info)
+            if not info.get("private_verified"):
+                private_ok = False
+                incidents.append(
+                    self._incident(
+                        "CASH_PRIVATE_UNVERIFIED",
+                        tid,
+                        reason=info.get("cash_error", "UNKNOWN"),
+                    )
+                )
+            elif row["phase"] != "CASH_OPEN":
+                incidents.append(
+                    self._incident(
+                        "CASH_RECONCILED_PENDING",
+                        tid,
+                        severity="WARNING",
+                        reason=row["phase"],
+                    )
+                )
+            if info.get("cash_market_error"):
+                incidents.append(
+                    self._incident(
+                        "CASH_EXIT_MARKET_UNVERIFIED",
+                        tid,
+                        severity="WARNING",
+                        reason=info["cash_market_error"],
+                    )
+                )
+            if info.get("market_ts") is not None:
+                marks.append(info)
         active = await self.durable.active()
         restored = await self.durable.runtime_trades()
         try:
@@ -581,13 +642,17 @@ class Monitor:
             "trades": [
                 x
                 for x in positions
-                if x["phase"] not in ("ABORTED", "CLOSED_PRIVATE_VERIFIED")
+                if x["phase"]
+                not in ("ABORTED", "CLOSED_PRIVATE_VERIFIED", "CLOSED_WITH_INVENTORY")
             ],
             "marks": marks,
             "incidents": incidents,
             "closed": closed,
             "realized": await self.store.totals(),
             "runtime_trades": [x.row() for x in restored],
+            "cash_inventory": (
+                await self.cash_observer.inventory() if self.cash_observer else []
+            ),
         }
         new = await self.store.publish(summary, incidents, marks)
         self.latest = summary

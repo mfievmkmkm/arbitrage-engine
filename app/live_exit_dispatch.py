@@ -95,6 +95,8 @@ class Coordinator:
             rows = {t["trade_id"]: t for t in summary.get("runtime_trades", [])}
             seen = set()
             for mark in summary.get("trades", []):
+                if mark.get("strategy") == "spot_futures":
+                    continue
                 tid = mark.get("trade_id")
                 if tid in seen or mark.get("exit_signal") not in SIGNALS:
                     continue

@@ -16,10 +16,11 @@ def client_id(value):
 
 
 class CCXTExecutor(ExchangeExecutor):
-    def __init__(self, venue, client, timeout=8):
+    def __init__(self, venue, client, timeout=8, clock=None):
         self.venue = venue
         self.client = client
         self.timeout = timeout
+        self.clock = clock
 
     def _result(self, row):
         if isinstance(row.get("filled"), bool) or isinstance(row.get("amount"), bool):
@@ -67,7 +68,9 @@ class CCXTExecutor(ExchangeExecutor):
 
             if request.market_evidence.get("source") == "PUBLIC_SPOT_IOC_V1":
                 raise ValueError("DERIVATIVE_SPOT_PROOF_REJECTED")
-            e = validate_evidence(request, self.venue)
+            e = validate_evidence(
+                request, self.venue, self.clock() if self.clock else None
+            )
             if not math.isclose(
                 e["contract_size"],
                 float(self.client.market(request.symbol)["contractSize"]),

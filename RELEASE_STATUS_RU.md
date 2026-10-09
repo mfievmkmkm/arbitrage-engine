@@ -2,7 +2,17 @@
 
 Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Новый блок: Spot/Futures cash-and-carry
+## Текущий блок: Spot/Futures подключён к основному боту
+
+Market-scoped spot private clients создаются отдельно от swap clients. Secondary scanner вызывает cash entry после сохранения observations и под общим monitor lock. Admission/gates требуют общих LIVE/ENTRY флагов, отдельного SF feature flag, свежей общей сверки, derivative private stream и дополнительных strategy/venue acceptance checks. Уже существующая конфигурация Futures/Futures не переписывается; его acceptance не разрешает SF.
+
+Общий monitor владеет cash future по его реальному symbol/venue; спотовая нога не преобразуется в RuntimeTrade Futures/Futures. Cash observer сверяет terminal intents, фактический net credited asset и приватные позиции, затем строит свежий NET с актуальными account fees, worst spot limit и future closing VWAP. TARGET/TRAILING/NET_STOP требуют зрелого funding и отсутствия неподтверждённого settlement в последних 30 секундах; TIME_STOP не придумывает funding income. On-update диспетчер выполняет отдельно разрешённый выход, mature cash-result и уведомление ровно один раз.
+
+Добавлены `/sf_live`, `/sf_checks`, залитые кнопки закрытия/явного bounded recovery и учёт остаточного актива. Новый SF-вход блокируется, если текущий spot balance не покрывает сохранённый inventory ledger. `/live_clear` снимает только monitor kill по свежей чистой сверке; STOP остаётся отдельным. UNKNOWN, stale/private mismatch, активный HIGH-инцидент и сторонний kill запрещают clear.
+
+Проверено **1042 тестами**, compileall и diff check. В том числе сквозной scanner-dispatch → общая БД → общий monitor → dynamic exit → funding/result → inventory, scope/expiry acceptance, независимый защитный выход при истечении entry authority, factory scope, secondary hook, UI controls и запрет ложного Futures/Futures rebuild. Реальные аккаунты и сделки не использовались; certification/canary остаются невыполненными.
+
+## Предыдущий блок (1010 тестов): cash-and-carry engine
 
 Добавлены account preflight и durable sequential session для LONG_SPOT_SHORT_FUTURE: strict spot native/IOC quotes, реальные fee units, spot-first вход, свежий хедж по net credited asset, защита при partial/zero fill, отдельная exit authority, read-only restart и явно вызываемый recovery до 3 раундов. Общая SQLite reservation исключает одновременную сделку Futures/Futures. Actual market slippage, UNKNOWN, сторонняя fee currency, несогласованные private balances/контракты и недостаточная точность баланса удерживают цикл без слепой повторной заявки.
 
@@ -10,7 +20,7 @@ Spot/Futures public native-план **подключён к scanner, сохра�
 
 Финальный cash-result требует terminal journal, private proof и зрелого private funding. Cash NET не переоценивает оставшийся актив; `CLOSED_WITH_INVENTORY` и отдельная таблица inventory сохраняют его количество/стоимость без false-flat. Base-комиссия оценивается для attribution по фактической цене fill и не списывается дважды. Общие дневник/экспорт включают эти данные. Транзакция итог+inventory+funding+events защищена от повторного зачисления и смены журнала.
 
-**Граница:** новая Session проверена на offline fake-account сценариях с настоящими CCXT formatter, но **ещё не вызывается из `app.main`**. До подключения нужны отдельные market-scoped spot private clients, spot acceptance, общий ownership-aware monitor и Telegram control/уведомления. Не заявляем готовность AUTO или проверку реальных площадок. Неизвестный/partial остаток нельзя устранить количеством unit-тестов. Тесты и CI не являются доказательством доходности.
+На этапе 1010 тестов Session ещё не вызывалась из main; эта связь реализована текущим блоком выше. Offline fake accounts и настоящие CCXT formatter не подтверждают реальное исполнение или доходность. Не заявляем завершённую сертификацию площадок.
 
 Локально после блока: **1010 тестов**, compileall, diff check. API-ключи, реальные заявки и live-активация не использовались.
 
@@ -42,7 +52,7 @@ Spot/Futures public native-план **подключён к scanner, сохра�
 | Funding arbitrage | Сканер + сохраняемый Funding Paper: closing VWAP, историческая сверка ставок, pending accounting, Ledger, экспорт и Replay модели |
 | CEX ↔ DEX | Опциональный 0x price-research для заданных контрактов; отсутствует подтверждённый исполнимый CEX/DEX спред |
 | LIVE Futures ↔ Futures | IOC-вход из сканера, private streams, durable session и автовыход подключены; реальные аккаунты/исполнение не сертифицированы |
-| LIVE Spot ↔ Futures | Account preflight, sequential durable session, выход/recovery и atomic cash-result реализованы и offline-проверены; main/spot acceptance/ownership-monitor ещё не подключены |
+| LIVE Spot ↔ Futures | Account preflight, scanner entry, sequential session, общий monitor, dynamic exit, explicit recovery, atomic cash-result, Telegram и уведомления подключены; реальное исполнение не сертифицировано |
 | Остальные LIVE стратегии | В основном боте не реализовано исполнение Spot/Spot, Funding и CEX/DEX |
 | Восстановление | Непрерывный read-only monitor подключён к main: lookup UNKNOWN, terminal fills, fresh private snapshots, восстановление JSON из SQLite |
 | STOP | Сохраняется; после каждого запуска STOP включён, снятие требует evidence |

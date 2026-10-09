@@ -37,7 +37,7 @@ def exchange(clock, spot, state):
     async def book(symbol, limit=20):
         return dict(
             symbol=symbol,
-            timestamp=clock() * 1000,
+            timestamp=int(clock() * 1000),
             bids=[[c.sell_price, 10000]],
             asks=[[c.buy_price, 10000]],
         )

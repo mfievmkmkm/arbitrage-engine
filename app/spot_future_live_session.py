@@ -1,7 +1,7 @@
 """Durable sequential forward cash-and-carry lifecycle.
 
-Not registered in main yet: a separate spot-account acceptance and monitor
-ownership integration are required. Injected authority never defaults to True.
+Registered through main's market-scoped account acceptance and shared monitor.
+Injected authority never defaults to True.
 Every stage is claimed before send; restart observes, never blindly replays.
 """
 
@@ -72,10 +72,15 @@ class Session:
         gate = self.exit_authority if closing else self.entry_authority
         executor = SafeExecutor(
             venue,
-            SpotExecutor(venue, client) if spot else CCXTExecutor(venue, client),
+            (
+                SpotExecutor(venue, client, clock=self.clock)
+                if spot
+                else CCXTExecutor(venue, client, clock=self.clock)
+            ),
             self.diary,
             lambda: gate(venue.split(":")[0]),
             lambda: self.exit_authority(venue.split(":")[0]),
+            clock=self.clock,
         )
         iid = tid + ":cash:" + stage
         r = replace(request, client_order_id=iid)
@@ -225,6 +230,10 @@ class Session:
                         "CASH_SPOT_TERMINAL",
                         "ENTRY_HEDGE_PREFLIGHT_FAILED",
                     )
+                if not self.entry_authority(v):
+                    return await self._close(
+                        trade_id, p, "CASH_SPOT_TERMINAL", "ENTRY_AUTHORITY_EXPIRED"
+                    )
                 if not await self._claim(
                     trade_id, "CASH_SPOT_TERMINAL", "CASH_FUTURE_SUBMITTING"
                 ):
@@ -241,7 +250,22 @@ class Session:
                         trade_id, p, "CASH_ENTRY_PARTIAL", "ENTRY_PARTIAL_HEDGE"
                     )
                 await self.store.phase(
-                    trade_id, "CASH_OPEN", cashflow=flow.row(), cash_private=proof
+                    trade_id,
+                    "CASH_OPEN",
+                    cashflow=flow.row(),
+                    cash_private=proof,
+                    cash_entry_edge=max(
+                        p.minimum_net,
+                        flow.future_base * flow.future_entry_price
+                        + flow.spot_cash
+                        - flow.quote_fees
+                        - 2
+                        * flow.future_base
+                        * flow.future_entry_price
+                        * p.future_fee_rate
+                        - flow.spot_base * spot.avg_price * p.spot_fee_rate
+                        - p.loss_allowance,
+                    ),
                 )
                 return dict(status="OPEN", trade_id=trade_id, cashflow=flow.row())
             except (Exception, asyncio.CancelledError) as error:
@@ -281,6 +305,12 @@ class Session:
                 if flow.future_base > 0:
                     return await self._hold(tid, "CASH_FUTURE_EXIT_RESIDUAL")
             if flow.spot_base > 0:
+                from .spot_future_native_plan import rate
+
+                fee = await asyncio.wait_for(s.fetch_trading_fee(p.spot_symbol), 8)
+                if fee.get("symbol") != p.spot_symbol:
+                    raise ValueError("CASH_EXIT_FEE_SCOPE_MISMATCH")
+                closing_fee_rate = float(rate(fee.get("taker")))
                 # Reference here is only used to construct native sizing; quote refetches.
                 raw = await asyncio.wait_for(
                     s.fetch_order_book(p.spot_symbol, limit=20), 8
@@ -291,7 +321,7 @@ class Session:
                         p.spot_symbol,
                         flow.spot_base,
                         raw["bids"][0][0],
-                        p.spot_fee_rate,
+                        closing_fee_rate,
                     )
                 except ValueError as error:
                     if (

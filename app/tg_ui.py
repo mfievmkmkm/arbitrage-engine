@@ -56,10 +56,16 @@ def back_menu(screen=None, parent="home"):
     return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
-def live_menu(stopped):
+def live_menu(stopped, kill_active=False):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [button("🧪 Проверка аккаунтов и NET", "live_checks", "primary")],
+            [button("📊 Spot/Futures LIVE", "sf_live", "primary")],
+            *(
+                [[button("Снять блокировку после сверки", "live_clear", "success")]]
+                if kill_active
+                else []
+            ),
             [
                 button("📈 LIVE-позиции", "live_positions"),
                 button("🛡 Инциденты", "incidents"),

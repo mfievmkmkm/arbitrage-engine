@@ -22,6 +22,7 @@ class Cashflow:
     base_fees: float
     spot_cost_basis: float
     base_fee_usd: float = 0
+    future_entry_price: float | None = None
 
     def row(self):
         return asdict(self)
@@ -149,7 +150,7 @@ def rebuild(
                     future_qty -= q
                 else:
                     raise ValueError("CASH_FUTURE_DIRECTION_INVALID")
-        return Cashflow(
+        flow = Cashflow(
             *map(
                 float,
                 (
@@ -163,6 +164,14 @@ def rebuild(
                     base_fee_usd,
                 ),
             )
+        )
+        from dataclasses import replace
+
+        return replace(
+            flow,
+            future_entry_price=(
+                float(future_cost / future_qty) if future_qty > 0 else None
+            ),
         )
 
 
