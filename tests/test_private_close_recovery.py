@@ -27,6 +27,7 @@ def test_dual_partial_recovers_from_private_positions():
    return {"a":{"health":H(),"positions":[]},"b":{"health":H(),"positions":[]}}
   x=await close_verified(t,le,se,snapshot,104,106,private_attempts=2,private_delay=0)
   assert x.status=="CLOSED_RECOVERED_PRIVATE"
+  assert x.execution.long_result.filled==2 and x.execution.short_result.filled==2
   assert le.calls==2 and se.calls==2
  asyncio.run(go())
 

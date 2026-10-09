@@ -4,6 +4,7 @@ from .close_recovery import plan
 from .exchange_executor import SubmitRequest
 from .fill_reconcile import reconcile
 from .fill_merge import merge_result
+from .order_settlement import settle
 
 
 @dataclass(frozen=True)
@@ -50,8 +51,9 @@ async def recover_close(
             r = await asyncio.wait_for(executor.submit(req), timeout)
     except Exception as e:
         return RecoveryOutcome(exit_result, False, "RECOVERY_" + type(e).__name__)
-    if r.filled < p.contracts - tolerance:
-        return RecoveryOutcome(exit_result, False, "RECOVERY_PARTIAL", r)
+    r, evidence = await settle(executor, r, trade.symbol, p.contracts, timeout)
+    if r is None:
+        return RecoveryOutcome(exit_result, False, "RECOVERY_" + evidence)
     if p.venue == trade.long_venue:
         lr = merge_result(exit_result.long_result, r)
         sr = exit_result.short_result
@@ -72,6 +74,4 @@ async def recover_close(
         flat=flat,
         mismatch_pct=rec.mismatch_pct,
     )
-    return RecoveryOutcome(
-        merged, flat, "RECOVERED" if flat else "RECOVERY_NOT_FLAT", r
-    )
+    return RecoveryOutcome(merged, flat, "RECOVERED" if flat else "RECOVERY_PARTIAL", r)
