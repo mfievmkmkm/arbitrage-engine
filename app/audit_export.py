@@ -37,6 +37,8 @@ TABLES = {
     "DEX stress results": "dex_stress_results",
     "Wallet tx intents": "wallet_tx_intents",
     "Wallet tx events": "wallet_tx_events",
+    "DEX Live stages": "dex_live_stages",
+    "DEX Live events": "dex_live_events",
     "Execution events": "execution_events",
     "Order intents": "order_intents",
     "Order request evidence": "order_request_evidence",

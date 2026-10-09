@@ -147,7 +147,8 @@ class Monitor:
         cash_rows = [
             r
             for r in rows
-            if json.loads(r["payload"]).get("strategy") in ("spot_futures", "spot_spot")
+            if json.loads(r["payload"]).get("strategy")
+            in ("spot_futures", "spot_spot", "cex_dex")
         ]
         rows = [r for r in rows if r not in cash_rows]
         snapshot = await self.snapshot_source()
@@ -182,7 +183,15 @@ class Monitor:
             )
         owners = {}
         for row in cash_rows:
-            plan = json.loads(row["payload"]).get("cash_plan") or {}
+            meta = json.loads(row["payload"])
+            if meta.get("strategy") == "cex_dex":
+                plan = meta.get("dex_live_plan") or {}
+                if plan.get("venue") and plan.get("symbol"):
+                    owners.setdefault((plan["venue"], plan["symbol"]), []).append(
+                        row["trade_id"]
+                    )
+                continue
+            plan = meta.get("cash_plan") or {}
             if plan.get("venue") and plan.get("future_symbol"):
                 owners.setdefault((plan["venue"], plan["future_symbol"]), []).append(
                     row["trade_id"]
@@ -633,7 +642,7 @@ class Monitor:
                         reason=info.get("cash_error", "UNKNOWN"),
                     )
                 )
-            elif row["phase"] not in ("CASH_OPEN", "SS_OPEN"):
+            elif row["phase"] not in ("CASH_OPEN", "SS_OPEN", "DEX_OPEN"):
                 incidents.append(
                     self._incident(
                         "CASH_RECONCILED_PENDING",

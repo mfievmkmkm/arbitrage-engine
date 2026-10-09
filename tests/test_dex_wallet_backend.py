@@ -216,6 +216,52 @@ def test_real_signature_claim_broadcast_and_finalized_cashflow(tmp_path):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(
+    "fault",
+    ["none", "pending_nonce", "chain", "block_conflict", "token_encoding", "reorg"],
+)
+def test_current_inventory_dual_rpc_snapshot(tmp_path, fault):
+    async def run():
+        _, policy, _, a, b, _, reader = await setup(tmp_path)
+        for index, node in enumerate((a, b)):
+            original = node.call
+
+            async def call(method, params, original=original, index=index):
+                if method == "eth_getBlockByNumber":
+                    return dict(
+                        number=hex(101),
+                        hash=(
+                            HASH
+                            if index == 1
+                            and fault == "block_conflict"
+                            or fault == "reorg"
+                            and params[0] != "latest"
+                            else BLOCK_HASH
+                        ),
+                    )
+                if method == "eth_getTransactionCount":
+                    return hex(
+                        9 if fault == "pending_nonce" and params[1] == "pending" else 8
+                    )
+                if method == "eth_chainId":
+                    return "0x2" if fault == "chain" else "0x1"
+                if method == "eth_call" and fault == "token_encoding":
+                    return "0x1"
+                return await original(method, params)
+
+            node.call = call
+        if fault != "none":
+            with pytest.raises(ValueError):
+                await reader.inventory(policy.wallet, (SELL, BUY))
+        else:
+            proof = await reader.inventory(policy.wallet, (SELL, BUY))
+            assert proof["verified"] is True and proof["nonce"] == 8
+            assert proof["balances"][SELL] == "6000000"
+            assert proof["native_raw"] == str(10**18 - 21000 * 10**9)
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("fault", ["chain", "pending", "delegated", "gas"])
 def test_preflight_failure_never_signs_or_broadcasts(tmp_path, fault):
     async def run():

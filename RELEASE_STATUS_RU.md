@@ -2,7 +2,17 @@
 
 Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: wallet boundary, receipts и DEX execution stress
+## Текущий блок: durable CEX/DEX bridge API и общий read-only monitor
+
+Проверка текущего блока: 1234 теста, compileall/import и diff-check. Только offline fixtures/моки, без реальных финансовых ключей или отправки сделок.
+
+Реализованы `dex_live_bridge.Session` для обоих направлений, DEX receipt → actual-native CEX hedge, независимый reduce-only CEX exit → точное восстановление ERC20 inventory, максимум 3 явно запрошенных recovery rounds. Общая LIVE capacity сохраняется до private-flat и атомарного результата. Stage claim без terminal intent не считается нулевым исполнением; UNKNOWN не переотправляется. Добавлены конкретный SafeExecutor/CCXT backend, read-only admission с account/identity/margin/daily-loss/post-receipt NET проверками и final costs с mature private funding.
+
+Результат пересобирается по двум durable journals; hash/receipt/CEX proof changes во время расчёта не допускают credit. Реальные ETH gas units сохраняются отдельно; USDT gas cost — явно отмеченная текущая executable replacement valuation, не выдуманный fill. Quote identity в конкретном costs/admission adapter ограничен mainnet USDT. Текущее dual-RPC inventory сверяется с последним receipt, включая nonce/native balance. Старые receipt payload без native balance proof требуют повторной операторской проверки и остаются HOLD.
+
+Runtime read-only bridge observer зарегистрирован в secondary bootstrap и передан общему LIVE monitor. CEX leg получает своего exposure-owner, не трактуется как Futures/Futures; wallet leg не объявляется flat по одному CEX snapshot. Stage/event history входит в audit export. **Write-bootstrap и автоматический paired NET exit coordinator ещё не подключены**: main не создаёт DEX signer и не вызывает Session write methods. Поэтому software_complete/production_ready остаются false; реальные account/wallet certification и длительная Paper/OOS/micro-canary также впереди.
+
+## Предыдущий блок: wallet boundary, receipts и DEX execution stress
 
 Локальная проверка текущего блока: **1190 тестов passed**, `compileall`, импорт `app.main` и `git diff --check` успешны. Это проверка программного кода и моков, не сертификация реальных площадок или кошелька.
 

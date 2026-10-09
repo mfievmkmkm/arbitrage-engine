@@ -22,6 +22,7 @@ from .cex_dex_paper import Engine as DexPaper, Cycle as DexPaperCycle
 from .dex_execution_stress import History as DexHistory
 from .dex_wallet import Journal as WalletJournal, RPC as WalletRPC
 from .dex_wallet_observer import Observer as WalletObserver
+from .dex_live_observer import build as dex_bridge_observer
 
 
 class Bundle:
@@ -118,12 +119,21 @@ async def build_bundle(
             bundle.wallet_session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=8)
             )
+            primary, secondary_rpc = WalletRPC(rpc_a, bundle.wallet_session), WalletRPC(
+                rpc_b, bundle.wallet_session
+            )
             sr.add(
                 "wallet_receipts",
                 WalletObserver(
                     wallet,
-                    WalletRPC(rpc_a, bundle.wallet_session),
-                    WalletRPC(rpc_b, bundle.wallet_session),
+                    primary,
+                    secondary_rpc,
+                ),
+            )
+            sr.add(
+                "dex_live_observation",
+                await dex_bridge_observer(
+                    db_path, wallet, primary, secondary_rpc, private_clients or {}
                 ),
             )
         else:

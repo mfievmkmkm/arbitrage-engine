@@ -1411,6 +1411,7 @@ async def main():
             private_clients=private_clients,
         )
         secondary.runtime.paused = lambda: scanner.paused
+        live_monitor.cash_observer.dex = secondary.runtime.services.get("dex_live_observation")
 
         async def secondary_rows(name, rows, entry_enabled):
             coordinator = {

@@ -72,7 +72,7 @@ async def build(path, acceptance_path, venues=(), now=None):
             )
         )
     missing = [
-        "DEX_LIVE_COORDINATOR_NOT_CONNECTED",
+        "DEX_WRITE_BOOTSTRAP_AND_PAIRED_EXIT_MONITOR_NOT_CONNECTED",
         "REAL_ACCOUNT_AND_WALLET_CERTIFICATION",
         "LONG_RUNNING_PAPER_OOS_AND_MICRO_CANARY",
     ]
@@ -93,6 +93,8 @@ async def build(path, acceptance_path, venues=(), now=None):
             "DEX_SEQUENTIAL_EXECUTION_STRESS",
             "ISOLATED_WALLET_SIGNING_AND_NONCE_JOURNAL",
             "DUAL_RPC_FINALIZED_RECEIPT_CASHFLOW",
+            "DEX_DURABLE_BRIDGE_SESSION_AND_CEX_BACKEND",
+            "DEX_READ_ONLY_BRIDGE_RUNTIME_OBSERVER",
             "TELEGRAM_DIARY_EXPORT",
         ],
         live_allowed=False,
@@ -110,8 +112,8 @@ def render(report):
     out = [
         "🏁 <b>Проверка готовности проекта</b>",
         "<i>Отчёт не разрешает торговлю и не меняет настройки. Прохождение тестов не является проверкой аккаунта.</i>",
-        "\n<b>Реализовано</b>\nCEX lifecycles, DEX Paper/Replay, stress задержек/частичных fills, wallet signer/nonce journal, dual-RPC receipts, дневник и экспорт.",
-        "\n<b>До окончательного завершения</b>\n• Подключить wallet backend к общему CEX/DEX LIVE-координатору: hedge, выход, recovery и фактический итог двух площадок.\n• Проверить выбранные аккаунты, изолированный кошелёк и scope разрешений.\n• Собрать длительную Paper/OOS-историю, затем отдельно провести micro-canary.",
+        "\n<b>Реализовано</b>\nCEX lifecycles, DEX Paper/Replay, stress задержек/частичных fills, wallet signer/nonce journal, dual-RPC receipts, durable bridge session/CEX backend, дневник и экспорт.",
+        "\n<b>До окончательного завершения</b>\n• Подключить write-bootstrap CEX/DEX к scanner/shared monitor и динамическим NET-выходам. Durable session API уже реализован; runtime observer только читает.\n• Проверить выбранные аккаунты, изолированный кошелёк и scope разрешений.\n• Собрать длительную Paper/OOS-историю, затем отдельно провести micro-canary.",
         f"\nНезавершённых LIVE: {report['active_live']} · wallet intents: {report['wallet_pending']}",
         "\n<b>Сохранённая модельная история</b>",
     ]

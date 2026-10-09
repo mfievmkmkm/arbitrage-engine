@@ -2,6 +2,20 @@
 
 Дата: 9 октября 2026. Этот документ описывает реализованные компоненты, не production-допуск.
 
+## Следующий реализованный блок: durable bridge session API
+
+`app/dex_live_bridge.py` связывает реальный receipt с CEX native sizing, terminal/private hedge, закрытием derivative и обратным swap. Forward: exact-out покупка токена → short CEX → reduce-only buy → exact-in продажа всего actual asset. Reverse: exact-in продажа заранее принадлежащего токена → long CEX → reduce-only sell → exact-out восстановление точного raw amount. Каждый CEX/exit stage сохраняется до send; claimed stage без durable terminal intent остаётся HOLD. Recovery — отдельный явно вызванный API, максимум 3 раунда, свежая private/receipt сверка перед каждым. UNKNOWN не повторяется.
+
+`app/dex_cex_backend.py` использует существующие SafeExecutor, IOC quote evidence, reduce-only recovery evidence, client IDs, durable private order reconciliation и точные contractSize units. Если точный токеновый объём не представим native quantity, вход блокируется — пыль не скрывается.
+
+`app/dex_live_admission.py` сверяет expiring token/CEX registry и CEX account acceptance, one-way/flat isolated account, margin, equity/daily loss, fee, funding calendar, обратную firm simulation и свежие книги. `hedge_admission=admission.hedge` обязательно заново проверяет границы после wallet confirmation. Положительный full-convergence ceiling — модельный допуск, не реализованный NET и не обещание схождения.
+
+`app/dex_live_costs.py` собирает mature private funding и оценивает фактически оплаченный ETH gas в USDT по свежей исполнимой ETH/USDT ask depth. Это replacement valuation, не фактический обмен ETH на USDT и не USD-курс. Допускается только проверенный mainnet USDT quote contract/6 decimals; funding/gas/quote evidence хранится с результатом.
+
+`Session.finalize` требует нулевой asset delta, private CEX flat, неизменные обе durable journals, fresh dual-RPC current wallet state и покрытые costs. Result, единственный LIVE_NET ledger event и освобождение общего owner коммитятся атомарно. Конкурентный finalize не начисляет повторный итог. Новые receipts сохраняют native before/after balance: старый неполный proof не мигрируется в доверенный автоматически.
+
+В secondary bootstrap добавлен `dex_live_observation`; общему LIVE monitor передан read-only observer. Main не создаёт signer и не вызывает enter/hedge/close/finalize этого Session API. Ещё требуется production write-bootstrap/scanner admission integration и paired executable dynamic NET exit monitor; затем реальная приёмка и длительная Paper/OOS история. Не включайте DEX LIVE по факту unit-тестов.
+
 ## Что подключено
 
 `/dex_stress` моделирует последовательный DEX → CEX цикл по записанным firm quotes и публичным native стаканам. Сценарии: quote-bound baseline, задержка DEX 2/15 секунд плюс CEX 0.5/1 секунда, известный entry/exit revert и UNKNOWN receipt. DEX-fill атомарен и **предполагается** на min-out/max-in границе; это не исторический фактический fill. CEX IOC может исполниться частично. Незакрытые позиции остаются с `net=None`, без фиктивного flat. Повторная recovery-заявка не использует уже потреблённую глубину того же snapshot. Источник, параметры и использованные данные сохраняются для воспроизведения.

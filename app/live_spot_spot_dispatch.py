@@ -161,11 +161,16 @@ class Coordinator:
 
 
 class CashObserver:
-    def __init__(self, spot_future, spot_spot):
+    def __init__(self, spot_future, spot_spot, dex=None):
         self.spot_future, self.spot_spot = spot_future, spot_spot
+        self.dex = dex
 
     async def observe(self, row):
         strategy = json.loads(row["payload"])["strategy"]
+        if strategy == "cex_dex":
+            if self.dex is None:
+                raise ValueError("DEX_RUNTIME_OBSERVER_REQUIRED")
+            return await self.dex.observe(row)
         return await (
             self.spot_spot if strategy == "spot_spot" else self.spot_future
         ).observe(row)

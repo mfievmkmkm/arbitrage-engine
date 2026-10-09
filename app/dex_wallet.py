@@ -646,7 +646,70 @@ class Reader:
             token_deltas={k: str(v) for k, v in deltas.items()},
             before={k: str(v) for k, v in before[0].items()},
             after={k: str(v) for k, v in after[0].items()},
+            native_before_raw=str(before[1]),
+            native_after_raw=str(after[1]),
         )
+
+    async def inventory(self, wallet, tokens):
+        """Fresh dual-RPC latest state; prevents post-receipt external movements."""
+        wallet = address(wallet)
+        tokens = tuple(sorted(map(address, tokens)))
+        if len(tokens) != 2 or len(set(tokens)) != 2:
+            raise ValueError("WALLET_INVENTORY_SCOPE_INVALID")
+        started = self.clock()
+        headers = await asyncio.gather(
+            *(
+                r.call("eth_getBlockByNumber", ["latest", False])
+                for r in (self.primary, self.secondary)
+            )
+        )
+        if headers[0] != headers[1] or not HASH.fullmatch(headers[0].get("hash", "")):
+            raise ValueError("WALLET_INVENTORY_BLOCK_CONFLICT")
+        tag = hex(quantity(headers[0]["number"]))
+
+        async def read(rpc):
+            chain, native, nonce, pending, *balances = await asyncio.gather(
+                rpc.call("eth_chainId", []),
+                rpc.call("eth_getBalance", [wallet, tag]),
+                rpc.call("eth_getTransactionCount", [wallet, tag]),
+                rpc.call("eth_getTransactionCount", [wallet, "pending"]),
+                *(
+                    rpc.call(
+                        "eth_call",
+                        [
+                            dict(to=t, data="0x70a08231" + wallet[2:].rjust(64, "0")),
+                            tag,
+                        ],
+                    )
+                    for t in tokens
+                )
+            )
+            if (
+                quantity(chain) != 1
+                or quantity(nonce) != quantity(pending)
+                or any(
+                    not isinstance(b, str) or not HASH.fullmatch(b) for b in balances
+                )
+            ):
+                raise ValueError("WALLET_INVENTORY_NONCE_OR_BALANCE_UNKNOWN")
+            if (await rpc.call("eth_getBlockByNumber", [tag, False]))[
+                "hash"
+            ] != headers[0]["hash"]:
+                raise ValueError("WALLET_INVENTORY_REORG")
+            return dict(
+                wallet=wallet,
+                chain_id=1,
+                native_raw=str(quantity(native)),
+                nonce=quantity(nonce),
+                balances={t: str(int(b, 16)) for t, b in zip(tokens, balances)},
+                block_hash=headers[0]["hash"],
+                block_number=quantity(headers[0]["number"]),
+            )
+
+        proofs = await asyncio.gather(read(self.primary), read(self.secondary))
+        if proofs[0] != proofs[1] or not 0 <= self.clock() - started <= 15:
+            raise ValueError("WALLET_INVENTORY_CONFLICT_OR_STALE")
+        return dict(proofs[0], verified=True, ts=started)
 
     async def reconcile(self, iid):
         row = await self.journal.get(iid)
