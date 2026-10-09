@@ -65,6 +65,8 @@ class CCXTExecutor(ExchangeExecutor):
         if request.market_evidence is not None:
             from .quote_order_evidence import validate as validate_evidence
 
+            if request.market_evidence.get("source") == "PUBLIC_SPOT_IOC_V1":
+                raise ValueError("DERIVATIVE_SPOT_PROOF_REJECTED")
             e = validate_evidence(request, self.venue)
             if not math.isclose(
                 e["contract_size"],

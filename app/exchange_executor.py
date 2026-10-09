@@ -23,6 +23,9 @@ class SubmitResult:
     filled: float = 0.0
     avg_price: float | None = None
     fee: float = 0.0
+    # fee is quote cash only. Spot base fees change inventory, not USD cash.
+    base_fee: float = 0.0
+    base_currency: str | None = None
 
 
 class ExchangeExecutor(ABC):

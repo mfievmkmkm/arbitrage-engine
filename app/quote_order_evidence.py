@@ -8,6 +8,10 @@ from .native_order_plan import number
 
 def validate(request, venue, now=None):
     e = request.market_evidence
+    if isinstance(e, dict) and e.get("source") == "PUBLIC_SPOT_IOC_V1":
+        from .spot_quote_evidence import validate as spot
+
+        return spot(request, venue, now)
     if not isinstance(e, dict) or e.get("source") != "PUBLIC_IOC_ENTRY_V1":
         return recovery(request, venue, now)
     if (

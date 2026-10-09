@@ -34,6 +34,7 @@ TABLES = {
     "Live trades": "live_trades",
     "Live marks": "live_marks",
     "Live results": "live_results",
+    "Live cash inventory": "live_cash_inventory",
     "Live incidents": "live_incidents",
     "Monitor state": "live_monitor_state",
     "Funding settlements": "funding_settlements",

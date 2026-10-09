@@ -39,12 +39,20 @@ def render(strategy, x):
     if x.get("native_plan"):
         p = x["native_plan"]
         if p.get("valid") is True:
-            out.append(
-                "Параметры контракта и округление: проверены по публичным метаданным."
-            )
-            out.append(
-                f"Контракты LONG / SHORT: {p['long']['qty']:.8g} / {p['short']['qty']:.8g}"
-            )
+            if strategy == "spot_futures":
+                out.append(
+                    f"Спот gross: {p['spot']['qty']:.8g} BASE • Фьючерсы: {p['future']['qty']:.8g} контрактов"
+                )
+                out.append(
+                    f"Хедж после резерва base-комиссии: {p['hedged_base']:.8g} BASE\nНезахеджированный остаток: {p['unhedged_base']:.8g} BASE"
+                )
+            else:
+                out.append(
+                    "Параметры контракта и округление: проверены по публичным метаданным."
+                )
+                out.append(
+                    f"Контракты LONG / SHORT: {p['long']['qty']:.8g} / {p['short']['qty']:.8g}"
+                )
         else:
             out.append(
                 "План заявок заблокирован: " + escape(p.get("reason", "UNKNOWN"))

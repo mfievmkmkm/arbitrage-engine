@@ -8,7 +8,12 @@ TERMINAL = {"FILLED", "CANCELED", "CANCELLED", "REJECTED"}
 
 def accounting_missing(meta):
     return float(meta.get("filled") or 0) > 0 and (
-        meta.get("fee") is None or meta.get("avg_price") is None
+        meta.get("fee") is None
+        or meta.get("avg_price") is None
+        or (
+            str(meta.get("venue", "")).endswith(":spot")
+            and (meta.get("base_fee") is None or meta.get("base_currency") is None)
+        )
     )
 
 
@@ -23,14 +28,14 @@ async def reconcile_and_persist(diary, executors, trade_id=None, max_queries=50)
         if state in TERMINAL and not accounting_missing(meta):
             continue
         if queries >= max_queries:
-            if state not in TERMINAL:
+            if state not in TERMINAL or accounting_missing(meta):
                 unresolved.append(iid)
             continue
         ex = executors.get(meta.get("venue"))
         symbol = meta.get("symbol")
         oid = meta.get("order_id")
         if not ex or not symbol:
-            if state not in TERMINAL:
+            if state not in TERMINAL or accounting_missing(meta):
                 unresolved.append(iid)
             continue
         queries += 1
@@ -46,7 +51,7 @@ async def reconcile_and_persist(diary, executors, trade_id=None, max_queries=50)
             except Exception:
                 result = None
         if result is None:
-            if state not in TERMINAL:
+            if state not in TERMINAL or accounting_missing(meta):
                 unresolved.append(iid)
             continue
         filled = float(result.filled)
@@ -63,7 +68,11 @@ async def reconcile_and_persist(diary, executors, trade_id=None, max_queries=50)
             continue
         n = normalize(result.status, result.filled, meta.get("qty"))
         resolved[iid] = n
-        await diary.update_order_intent_reconciled(iid, n, result)
+        accepted = await diary.update_order_intent_reconciled(iid, n, result)
+        if accepted is False:
+            resolved[iid] = "UNKNOWN"
+            unresolved.append(iid)
+            continue
         if n not in TERMINAL:
             unresolved.append(iid)
     return resolved, tuple(unresolved)

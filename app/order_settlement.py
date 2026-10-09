@@ -31,6 +31,14 @@ def valid(result, requested, minimum=0, order_id=None):
             or not math.isfinite(float(result.fee))
         ):
             return False
+        base_fee = getattr(result, "base_fee", 0)
+        if (
+            isinstance(base_fee, bool)
+            or not math.isfinite(float(base_fee))
+            or abs(float(base_fee)) > q
+            or (base_fee != 0 and not getattr(result, "base_currency", None))
+        ):
+            return False
         return True
     except (AttributeError, ValueError, TypeError):
         return False

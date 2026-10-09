@@ -245,6 +245,8 @@ class Diary:
                 "filled": result.filled,
                 "avg_price": result.avg_price,
                 "fee": result.fee,
+                "base_fee": result.base_fee,
+                "base_currency": result.base_currency,
             }
         )
         async with aiosqlite.connect(self.path) as d:
@@ -278,7 +280,7 @@ class Diary:
     async def order_intents(self, trade_id=None):
         async with aiosqlite.connect(self.path) as d:
             d.row_factory = aiosqlite.Row
-            q = "SELECT * FROM order_intents"
+            q = "SELECT rowid AS _journal_sequence,* FROM order_intents"
             args = ()
             if trade_id is not None:
                 q += " WHERE trade_id=?"
@@ -287,11 +289,13 @@ class Diary:
                 rows = [dict(x) for x in await c.fetchall()]
         out = {}
         for x in rows:
+            sequence = x["_journal_sequence"]
             try:
                 p = json.loads(x.get("payload") or "{}")
             except Exception:
                 p = {}
             x.update(p)
+            x["_journal_sequence"] = sequence
             out[x["intent_id"]] = x
         return out
 
@@ -317,6 +321,13 @@ class Diary:
                 valid_result = valid(
                     result, p.get("qty"), p.get("filled", 0), p.get("order_id")
                 )
+                if valid_result and p.get("base_currency") is not None:
+                    valid_result = result.base_currency == p["base_currency"]
+                    if result.filled == p.get("filled"):
+                        valid_result = valid_result and (
+                            result.base_fee == p.get("base_fee")
+                            and result.fee == p.get("fee")
+                        )
                 if not valid_result:
                     state = "UNKNOWN"
                     p["state"] = state
@@ -329,6 +340,8 @@ class Diary:
                         "filled": result.filled,
                         "avg_price": result.avg_price,
                         "fee": result.fee,
+                        "base_fee": result.base_fee,
+                        "base_currency": result.base_currency,
                     }
                 )
             await d.execute(

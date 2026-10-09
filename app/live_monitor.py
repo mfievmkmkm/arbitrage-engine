@@ -147,6 +147,17 @@ class Monitor:
         venues.discard(None)
         private_ok = self._fresh(snapshot, venues)
         for iid in unresolved:
+            from .durable_order_reconcile import accounting_missing
+
+            meta = intents.get(iid) or {}
+            if meta.get("state") in TERMINAL and accounting_missing(meta):
+                incidents.append(
+                    self._incident(
+                        "FILL_ACCOUNTING_MISSING",
+                        meta.get("trade_id", ""),
+                        intent_id=iid,
+                    )
+                )
             incidents.append(
                 self._incident(
                     "UNRESOLVED_ORDER",

@@ -19,7 +19,7 @@ async def recover(durable, runtime, diary, private_trusted):
     terminal = set()
     for trade in cached:
         known_row = await durable.get(trade.trade_id)
-        if known_row and known_row["phase"] in ("CLOSED_PRIVATE_VERIFIED", "ABORTED"):
+        if known_row and known_row["phase"] in ("CLOSED_PRIVATE_VERIFIED", "CLOSED_WITH_INVENTORY", "ABORTED"):
             terminal.add(trade.trade_id)
     cached = [trade for trade in cached if trade.trade_id not in terminal]
     actions = plan(rows, cached)

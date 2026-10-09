@@ -10,7 +10,7 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS live_trades(
  short_venue TEXT,planned_long REAL,planned_short REAL,actual_long REAL DEFAULT 0,
  actual_short REAL DEFAULT 0,long_price REAL,short_price REAL,fees REAL DEFAULT 0,
  updated_at REAL NOT NULL,payload TEXT NOT NULL DEFAULT '{}')"""
-TERMINAL = {"CLOSED_PRIVATE_VERIFIED", "ABORTED"}
+TERMINAL = {"CLOSED_PRIVATE_VERIFIED", "CLOSED_WITH_INVENTORY", "ABORTED"}
 
 
 class Store:
@@ -77,7 +77,7 @@ class Store:
         async with aiosqlite.connect(self.path) as d:
             await d.execute("BEGIN IMMEDIATE")
             async with d.execute(
-                "SELECT 1 FROM live_trades WHERE trade_id=? OR phase NOT IN ('CLOSED_PRIVATE_VERIFIED','ABORTED') LIMIT 1",
+                "SELECT 1 FROM live_trades WHERE trade_id=? OR phase NOT IN ('CLOSED_PRIVATE_VERIFIED','CLOSED_WITH_INVENTORY','ABORTED') LIMIT 1",
                 (trade_id,),
             ) as c:
                 if await c.fetchone():
@@ -135,7 +135,7 @@ class Store:
         async with aiosqlite.connect(self.path) as d:
             d.row_factory = aiosqlite.Row
             async with d.execute(
-                "SELECT * FROM live_trades WHERE phase NOT IN ('CLOSED_PRIVATE_VERIFIED','ABORTED') ORDER BY updated_at"
+                "SELECT * FROM live_trades WHERE phase NOT IN ('CLOSED_PRIVATE_VERIFIED','CLOSED_WITH_INVENTORY','ABORTED') ORDER BY updated_at"
             ) as c:
                 return [dict(x) for x in await c.fetchall()]
 

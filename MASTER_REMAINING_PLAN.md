@@ -2,6 +2,23 @@
 
 This is the authoritative order for the rest of the build.
 
+## Current checkpoint — 2026-10-09
+
+Historical A–F below is a design checklist, not an assertion that already
+integrated Paper/Replay/UI pieces are still missing. Use RELEASE_STATUS_RU.md
+for the actual implementation matrix.
+
+Next concrete integration: register the tested Spot/Futures Admission + Session
+with explicit spot private clients and strategy-scoped acceptance; teach the
+common monitor different leg symbols/account scopes and held spot inventory;
+wire entry/exit/explicit recovery/control and notifications into main. Do not
+reinterpret a cash trade as a same-symbol Futures/Futures RuntimeTrade.
+
+Then complete live Spot/Spot inventory and Funding lifecycles; CEX/DEX remains
+quote/simulation/security work, not an assumed executable route. Finish with
+per-venue account certification, dense Paper/OOS evidence and separately
+accepted canary. No percentage or file-count substitutes for these checks.
+
 ## A. Finish integration, not architecture
 - wire StrategyRuntime into Telegram and scan loop
 - persist Spot/Futures Paper positions and marks
