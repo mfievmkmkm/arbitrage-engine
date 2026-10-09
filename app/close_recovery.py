@@ -30,6 +30,7 @@ def plan(trade, exit_result, tolerance=1e-12):
             raise ValueError()
     except (TypeError, ValueError):
         return CloseRecovery(True, None, None, 0, "INVALID_CLOSE_FILL_EVIDENCE")
+    tolerance = min(tolerance, min(trade.long_contracts, trade.short_contracts) * 1e-10)
     lr = max(0, trade.long_contracts - exit_result.long_result.filled)
     sr = max(0, trade.short_contracts - exit_result.short_result.filled)
     if lr <= tolerance and sr <= tolerance:

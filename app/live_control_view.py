@@ -13,16 +13,24 @@ REASONS = {
 }
 
 
-def render(supervisor, trades, realized_net, stop):
+def render(supervisor, trades, realized_net, stop, exit_configured=False):
     r = supervisor.readiness()
     rows = [
         "🔐 <b>LIVE-контроль</b>",
-        "Реальная торговля: <b>заблокирована</b>",
+        (
+            "Новые реальные входы: <b>заблокированы</b>"
+            if exit_configured
+            else "Реальная торговля: <b>заблокирована</b>"
+        ),
         f"Сохранённых позиций: {len(trades)}",
         f"Подтверждённый NET: <b>{realized_net:+.4f} USD</b>",
     ]
     if stop.stopped:
         rows.append("STOP: " + escape(stop.reason))
+    if exit_configured:
+        rows.append(
+            "Автовыход: <b>настроен</b>; исполнение требует снятого STOP и свежей сверки."
+        )
     if r.reasons:
         rows.append(
             "\nБлокировки:\n"

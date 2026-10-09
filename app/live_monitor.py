@@ -1,5 +1,6 @@
 """Continuous read-only reconciliation and exit observation.
-No exchange submit, cancel, approval or signing method is called by this service.
+The reconciliation core does not submit orders. Its optional on_update hook
+may invoke a separately authorized write-side coordinator in main.
 """
 
 import asyncio, json, math, time, logging
@@ -402,7 +403,7 @@ class Monitor:
                 )
                 continue
             if row["phase"] == "HEDGED_PRIVATE_VERIFIED":
-                await self.durable.phase(tid, "OPEN", reason="PRIVATE_RECONCILED")
+                await self.durable.mark_open(tid, reason="PRIVATE_RECONCILED")
                 info["phase"] = "OPEN"
             market = (
                 await self.market.mark(trade)
@@ -484,8 +485,8 @@ class Monitor:
             }
             marks.append(mark)
             info.update(mark)
-            await self.durable.phase(
-                tid, "OPEN", best_net=best, last_exit_signal=signal, last_mark=mark
+            await self.durable.mark_open(
+                tid, best_net=best, last_exit_signal=signal, last_mark=mark
             )
         # Rebuild JSON from authoritative rows; do not erase legacy positions without DB ownership.
         active = await self.durable.active()

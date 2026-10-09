@@ -5,6 +5,7 @@ from .exit_runner import ExitResult
 from .fill_reconcile import reconcile
 from .order_settlement import settle
 import asyncio
+import math
 
 
 @dataclass(frozen=True)
@@ -75,8 +76,8 @@ async def run(trade, long_executor, short_executor, timeout=8, market_reader=Non
         lr.filled, trade.long_contract_size, sr.filled, trade.short_contract_size
     )
     flat = (
-        lr.filled >= trade.long_contracts - 1e-12
-        and sr.filled >= trade.short_contracts - 1e-12
+        math.isclose(lr.filled, trade.long_contracts, rel_tol=1e-10, abs_tol=0)
+        and math.isclose(sr.filled, trade.short_contracts, rel_tol=1e-10, abs_tol=0)
     )
     slip = actual_slippage(reqs[0], lr) or actual_slippage(reqs[1], sr)
     return PersistedExit(

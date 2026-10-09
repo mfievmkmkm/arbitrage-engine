@@ -43,6 +43,9 @@ class Config:
         "yes",
         "on",
     )
+    live_exit_venues: tuple[str, ...] = tuple(
+        x.strip() for x in os.getenv("LIVE_EXIT_VENUES", "").split(",") if x.strip()
+    )
     live_reconcile_interval: float = max(
         5, float(os.getenv("LIVE_RECONCILE_INTERVAL_SEC", "10"))
     )

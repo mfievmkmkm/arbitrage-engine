@@ -24,6 +24,10 @@ from .private_funding_reader import (
 )
 from .live_market_reader import Reader as LiveMarketReader
 from .live_monitor import Monitor as LiveMonitor
+from .live_exit_dispatch import Coordinator as LiveExitCoordinator
+from .safe_executor import SafeExecutor
+from .ccxt_executor import CCXTExecutor
+from .recovery_market import Reader as RecoveryMarketReader
 from .live_monitor_view import (
     status as monitor_status,
     positions as monitor_positions,
@@ -129,6 +133,7 @@ bankroll = Ledger(config.paper_capital)
 notification_bot = None
 secondary = None
 live_monitor = None
+live_exit_coordinator = None
 live_trades = []
 durable = LiveTradeStore(config.db_path)
 strategy_toggles = StrategyToggleStore(config.runtime_state_path + ".strategies.json")
@@ -275,7 +280,13 @@ async def text_for(s):
         summary = live_monitor.latest if live_monitor else None
         realized = (summary or {}).get("realized", {}).get("net", 0)
         return (
-            render_live_control(live_supervisor, live_trades, realized, live_stop)
+            render_live_control(
+                live_supervisor,
+                live_trades,
+                realized,
+                live_stop,
+                exit_configured=bool(config.live_enabled and config.live_exit_venues),
+            )
             + "\n\n"
             + monitor_status(summary)
         )
@@ -662,7 +673,7 @@ async def scanning():
 
 
 async def main():
-    global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor
+    global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor, live_exit_coordinator
     live_stop = Stop(config.runtime_state_path + ".stop.json")
     pf = preflight_check(config)
     if not pf.ok:
@@ -671,6 +682,7 @@ async def main():
         log.warning("%s", render_preflight(pf).replace("\\n", " | "))
     secondary = None
     live_monitor = None
+    live_exit_coordinator = None
     private_clients = {}
     bot = None
     task = None
@@ -745,9 +757,52 @@ async def main():
             for name, client in private_clients.items()
         }
 
+        def exit_authority(trade):
+            return bool(
+                config.live_enabled
+                and not live_stop.stopped
+                and all(
+                    v in config.live_exit_venues
+                    for v in (trade.long_venue, trade.short_venue)
+                )
+                and not live_supervisor.kill.check(
+                    trade.symbol, trade.long_venue, trade.short_venue
+                ).blocked
+            )
+
+        def venue_exit_authority(venue):
+            # SafeExecutor checks again immediately before sending each leg.
+            return bool(
+                config.live_enabled
+                and venue in config.live_exit_venues
+                and not live_stop.stopped
+                and not live_supervisor.kill.pairs
+                and not live_supervisor.kill.check("", venue, venue).blocked
+            )
+
+        exit_executors = {
+            venue: SafeExecutor(
+                venue,
+                CCXTExecutor(venue, client),
+                diary,
+                lambda: False,
+                exit_gate=lambda venue=venue: venue_exit_authority(venue),
+            )
+            for venue, client in private_clients.items()
+        }
+        live_exit_coordinator = LiveExitCoordinator(
+            durable,
+            exit_executors,
+            RecoveryMarketReader(scanner.clients),
+            exit_authority,
+            live_stop,
+            max_age=config.live_max_book_age_ms / 1000,
+        )
+
         async def monitor_update(summary, new_incidents):
             global live_trades
             live_trades = [RuntimeTrade(**row) for row in summary["runtime_trades"]]
+            await live_exit_coordinator.process(summary)
             if notification_bot:
                 for item in new_incidents:
                     if item["severity"] in ("CRITICAL", "HIGH"):

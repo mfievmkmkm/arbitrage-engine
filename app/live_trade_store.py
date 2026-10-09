@@ -72,6 +72,39 @@ class Store:
                 row = await c.fetchone()
                 return dict(row) if row else None
 
+    async def claim_exit(self, trade, signal):
+        """Reserve one exit before any send; compare the authoritative position.
+
+        Concurrent processes cannot both reserve. A crash after reservation
+        requires reconciliation, never an automatic repeat of the exit.
+        """
+        async with aiosqlite.connect(self.path) as d:
+            await d.execute("BEGIN IMMEDIATE")
+            async with d.execute(
+                "SELECT phase,payload,symbol,long_venue,short_venue FROM live_trades WHERE trade_id=?",
+                (trade.trade_id,),
+            ) as c:
+                row = await c.fetchone()
+            if row is None or row[0] not in ("OPEN", "HEDGED_PRIVATE_VERIFIED"):
+                return False
+            payload = json.loads(row[1])
+            if (
+                payload.get("runtime_trade") != trade.row()
+                or tuple(row[2:]) != (trade.symbol, trade.long_venue, trade.short_venue)
+                or payload.get("entry_hold_reason")
+                or payload.get("exit_hold_reason")
+            ):
+                return False
+            payload.update(
+                exit_dispatch_signal=signal, exit_dispatch_started_at=time.time()
+            )
+            await d.execute(
+                "UPDATE live_trades SET phase='EXIT_SUBMITTING',updated_at=?,payload=? WHERE trade_id=?",
+                (time.time(), json.dumps(payload), trade.trade_id),
+            )
+            await d.commit()
+            return True
+
     async def active(self):
         async with aiosqlite.connect(self.path) as d:
             d.row_factory = aiosqlite.Row
@@ -79,6 +112,25 @@ class Store:
                 "SELECT * FROM live_trades WHERE phase NOT IN ('CLOSED_PRIVATE_VERIFIED','ABORTED') ORDER BY updated_at"
             ) as c:
                 return [dict(x) for x in await c.fetchall()]
+
+    async def mark_open(self, trade_id, **meta):
+        """A stale observer cannot overwrite a concurrently claimed exit."""
+        async with aiosqlite.connect(self.path) as d:
+            await d.execute("BEGIN IMMEDIATE")
+            async with d.execute(
+                "SELECT phase,payload FROM live_trades WHERE trade_id=?", (trade_id,)
+            ) as c:
+                row = await c.fetchone()
+            if row is None or row[0] not in ("OPEN", "HEDGED_PRIVATE_VERIFIED"):
+                return False
+            payload = json.loads(row[1])
+            payload.update(meta)
+            await d.execute(
+                "UPDATE live_trades SET phase='OPEN',updated_at=?,payload=? WHERE trade_id=?",
+                (time.time(), json.dumps(payload), trade_id),
+            )
+            await d.commit()
+            return True
 
     async def runtime_trades(self):
         trades = []

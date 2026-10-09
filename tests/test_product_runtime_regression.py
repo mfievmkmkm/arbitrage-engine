@@ -310,6 +310,8 @@ def test_main_wires_secondary_runtime_and_cleans_up_without_network(
         await main.main()
         assert main.scanner.book_recorder.closed
         assert main.scanner.book_recorder.task is None
+        assert main.live_exit_coordinator is not None
+        assert main.live_exit_coordinator.latest == []
         assert events == [
             "scanner-start",
             "secondary-build",

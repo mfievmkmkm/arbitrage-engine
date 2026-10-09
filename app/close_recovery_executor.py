@@ -1,4 +1,5 @@
 import asyncio
+import math
 from dataclasses import dataclass, replace
 from .close_recovery import plan
 from .exchange_executor import SubmitRequest
@@ -69,8 +70,8 @@ async def recover_close(
         lr.filled, trade.long_contract_size, sr.filled, trade.short_contract_size
     )
     flat = (
-        lr.filled >= trade.long_contracts - tolerance
-        and sr.filled >= trade.short_contracts - tolerance
+        math.isclose(lr.filled, trade.long_contracts, rel_tol=1e-10, abs_tol=0)
+        and math.isclose(sr.filled, trade.short_contracts, rel_tol=1e-10, abs_tol=0)
     )
     merged = replace(
         exit_result,
