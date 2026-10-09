@@ -12,19 +12,27 @@ from .spot_future_replay import metrics
 
 
 async def dataset(path, max_gap=120, strategy="spot_futures"):
-    if strategy not in ("futures_futures", "spot_futures", "spot_spot", "funding_arb"):
+    if strategy not in (
+        "futures_futures",
+        "spot_futures",
+        "spot_spot",
+        "funding_arb",
+        "cex_dex",
+    ):
         raise ValueError("REPLAY_STRATEGY_INVALID")
     trade_table = {
         "futures_futures": "paper_positions",
         "spot_futures": "spot_future_paper",
         "spot_spot": "spot_spot_paper",
         "funding_arb": "funding_paper",
+        "cex_dex": "cex_dex_paper",
     }[strategy]
     mark_table = {
         "futures_futures": "paper_marks",
         "spot_futures": "spot_future_marks",
         "spot_spot": "spot_spot_marks",
         "funding_arb": "funding_paper_marks",
+        "cex_dex": "cex_dex_paper_marks",
     }[strategy]
     trades = []
     excluded = {}
@@ -49,7 +57,7 @@ async def dataset(path, max_gap=120, strategy="spot_futures"):
             + trade_table
             + (
                 " WHERE status='CLOSED' ORDER BY opened_at,id"
-                if strategy in ("funding_arb", "futures_futures")
+                if strategy in ("funding_arb", "futures_futures", "cex_dex")
                 else " WHERE status!='OPEN' ORDER BY opened_at,id"
             )
         ) as c:
@@ -101,13 +109,21 @@ async def dataset(path, max_gap=120, strategy="spot_futures"):
                         if strategy == "futures_futures"
                         else mark["net"]
                     )
-                    if strategy == "funding_arb" and p.get("funding_known") is not True:
+                    if (
+                        strategy in ("funding_arb", "cex_dex")
+                        and p.get("funding_known") is not True
+                    ):
                         continue
                     if p.get("mode") not in (
                         "PAPER_MODEL",
                         "FUNDING_PUBLIC_HISTORY_MODEL",
+                        "DEX_FIRM_PUBLIC_HISTORY_MODEL",
                     ):
                         raise ValueError("MARK_MODE_INVALID")
+                    if strategy == "cex_dex":
+                        from .cex_dex_replay_lineage import validate as validate_dex
+
+                        validate_dex(position, p, ts)
                     if not all(
                         math.isfinite(float(p[k]))
                         for k in (
@@ -330,8 +346,13 @@ def render(report):
             "Фьючерсы ↔ Фьючерсы"
             if report.get("strategy") == "futures_futures"
             else (
-                "Funding · модель истории ставок"
-                if report.get("strategy") in ("funding_arb", "futures_futures")
+                (
+                    "CEX ↔ DEX · firm-модель"
+                    if report.get("strategy") == "cex_dex"
+                    else "Funding · модель истории ставок"
+                )
+                if report.get("strategy")
+                in ("funding_arb", "futures_futures", "cex_dex")
                 else (
                     "Спот ↔ Спот"
                     if report.get("strategy") == "spot_spot"

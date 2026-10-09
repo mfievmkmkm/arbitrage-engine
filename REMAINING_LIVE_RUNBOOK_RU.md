@@ -44,6 +44,21 @@ Provider проверяет exact-in amount, `minBuyAmount`, отсутстви�
 
 CEX сопоставление использует native linear USDT contract sizing, свежую executable IOC depth и реальные account taker fees. Газ оценён по свежему CEX ask native asset. Допускается до $5 notional, не более $0.05 несогласованного объёма и $0.25 gas. NET — **модель потолка полного схождения**, с двойным gas/exit fee reserve. Это не исполненный цикл, не гарантированная прибыль и не результат Paper/LIVE Ledger. `simulation_allowed` отделён от `paper_allowed`/`live_allowed`.
 
-До полноценного CEX/DEX Paper/Replay и wallet LIVE остаются двухсторонний exit route, реальная DEX/CEX latency/partial-leg модель, allowance/signing boundary, private receipt/event accounting и отдельная chain/wallet certification. Требования не считаются пройденными по числу тестов.
+Двусторонний CEX/DEX Paper/Replay теперь подключён. До wallet LIVE остаются реальная DEX/CEX latency/partial-leg модель, allowance/signing boundary, private receipt/event accounting и отдельная chain/wallet certification. Требования не считаются пройденными по числу тестов.
 
 Официальные API-контракты: [firm quote](https://docs.0x.org/api-reference/evm-ap-is/swap/allowanceholder-getquote), [issues](https://docs.0x.org/docs/introduction/api-issues).
+
+
+## CEX/DEX Paper: полный модельный цикл
+
+Те же simulation routes теперь подключают сохраняемый Paper вместо отдельного ceiling-only сервиса. Нужны доступные CEX futures markets, аккаунтные taker fees и известный funding calendar. `DEX_PAPER_HOLD_SECONDS=900` ограничивает модельный hold. Наблюдение открытых позиций продолжается при отключении стратегии.
+
+При USDT → asset обратный маршрут продаёт все min-out raw units. При asset → USDT исходный инвентарь восстанавливается запросом exact-out `buyAmount`, с учётом `maxSellAmount`. Оба маршрута должны пройти read-only simulation на существующем балансе и разрешениях кошелька. Paper не создаёт approvals или виртуальный баланс в реальном кошельке. Чтобы моделировать оба направления, нужны заранее размещённые token/USDT/native inventories для обеих проверок.
+
+NET рассчитывается из разницы DEX quote cash, CEX price PnL, двух CEX комиссий, раздельного газа, safety и проверенной исторической ставки × entry reference notional. Ставки имеют знак единственной LONG/SHORT CEX-ноги. Прогноз не зачисляется. Модель предполагает полный CEX fill и DEX fill по консервативной границе; исполнения, задержки и receipt не подтверждены.
+
+SQLite сохраняет позиции и raw/contract identity, marks, события, решения и Ledger атомарно. Нехватка funding evidence оставляет `EXIT_ACCOUNTING_PENDING` и $12 reserve. Ошибка exit quote не превращает позицию в flat. Перезапуск восстанавливает reserve и закрытый результат; исчезновение route config при незавершённой позиции блокирует startup. Изменение token/CEX identity запрещает дальнейшие model marks.
+
+Команды `/dex_paper` и `/dex_replay`; данные доступны в audit export. Replay проверяет lineage и purged train/test, но изучает только time/trailing на имеющихся NET marks. CEX/DEX execution latency stress пока отсутствует.
+
+Официальный exact-out API-контракт: https://docs.0x.org/evm/0x-swap-api/additional-topics/exact-buy

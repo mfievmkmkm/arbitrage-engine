@@ -13,5 +13,6 @@ def test_strategy_console_exposes_lock_state():
 
 def test_dex_console_never_implies_live():
     assert (
-        "on-chain сделки заблокированы" in dex() and "сквозного подтверждения" in dex()
+        "firm" in dex().lower()
+        and "Реальные транзакции кошелька пока не подключены" in dex()
     )

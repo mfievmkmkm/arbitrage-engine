@@ -61,7 +61,10 @@ def live_menu(stopped, kill_active=False):
         inline_keyboard=[
             [button("🧪 Проверка аккаунтов и NET", "live_checks", "primary")],
             [button("📊 Spot/Futures LIVE", "sf_live", "primary")],
-            [button("🔄 Spot/Spot LIVE", "ss_live", "primary"), button("🕒 Funding LIVE", "funding_live", "primary")],
+            [
+                button("🔄 Spot/Spot LIVE", "ss_live", "primary"),
+                button("🕒 Funding LIVE", "funding_live", "primary"),
+            ],
             *(
                 [[button("Снять блокировку после сверки", "live_clear", "success")]]
                 if kill_active
@@ -112,6 +115,13 @@ def replay_menu(screen="replay"):
                     "Funding · история ставок",
                     "fund_replay",
                     "primary" if screen == "fund_replay" else None,
+                )
+            ],
+            [
+                button(
+                    "⛓ CEX ↔ DEX",
+                    "dex_replay",
+                    "primary" if screen == "dex_replay" else None,
                 )
             ],
             [

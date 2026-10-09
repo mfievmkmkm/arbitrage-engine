@@ -112,6 +112,7 @@ from .tg_system_center import render as render_system_center
 from .tg_position_console import paper as render_positions
 from .spot_spot_view import render as render_spot_inventory
 from .funding_paper_view import render as render_funding_paper
+from .cex_dex_paper_view import render as render_dex_paper
 from .book_history import Store as BookHistory
 from .stream_book_recorder import Recorder as StreamBookRecorder
 from .execution_book_replay import (
@@ -222,6 +223,8 @@ async def text_for(s):
     if s == "capital":
         return render_capital(bankroll)
     if s == "dex":
+        if secondary and secondary.dex_paper:
+            return render_dex_paper(secondary.dex_paper)
         rows = strategy_runtime.top("cex_dex")
         if not rows:
             return (
@@ -264,7 +267,18 @@ async def text_for(s):
         if secondary:
             text += render_spot_inventory(secondary.ss_paper, positions_only=True)
             text += render_funding_paper(secondary.funding_paper)
+            text += render_dex_paper(secondary.dex_paper)
         return text
+    if s == "dex_paper":
+        return render_dex_paper(secondary.dex_paper if secondary else None)
+    if s == "dex_replay":
+        return render_sf_replay(
+            await build_sf_replay(
+                config.db_path,
+                max_gap=max(120, config.interval * 3),
+                strategy="cex_dex",
+            )
+        )
     if s == "funding_paper":
         return render_funding_paper(secondary.funding_paper if secondary else None)
     if s == "fund_replay":
@@ -438,8 +452,10 @@ async def start(m: Message):
         "sf_replay",
         "ss_replay",
         "fund_replay",
+        "dex_replay",
         "execution_replay",
         "funding_paper",
+        "dex_paper",
         "ss_inventory",
         "exchanges",
         "status",
@@ -522,8 +538,10 @@ async def commands(m: Message):
             "sf_replay",
             "ss_replay",
             "fund_replay",
+            "dex_replay",
             "execution_replay",
             "funding_paper",
+            "dex_paper",
             "ss_inventory",
             "exchanges",
             "status",
@@ -723,12 +741,18 @@ def keyboard_for(screen):
         "sf_replay",
         "ss_replay",
         "fund_replay",
+        "dex_replay",
         "execution_replay",
     ):
         return replay_menu(screen)
     if screen == "paper":
         return InlineKeyboardMarkup(
             inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="⛓ CEX/DEX Paper", callback_data="dex_paper"
+                    )
+                ],
                 [
                     InlineKeyboardButton(
                         text="🕒 Funding Paper", callback_data="funding_paper"
@@ -745,7 +769,7 @@ def keyboard_for(screen):
                 ],
             ]
         )
-    if screen == "funding_paper":
+    if screen in ("dex_paper", "funding_paper"):
         return back_menu(screen, "paper")
     if screen == "ss_inventory":
         return back_menu(screen, "paper")
@@ -1363,14 +1387,17 @@ async def main():
         ss.max_age = config.paper_max_seconds
         ss.trailing = config.paper_trailing_drawdown
         fp = secondary.funding_paper
-        for module in (paper, secondary.sf_paper, ss, fp):
+        dpaper = getattr(secondary, "dex_paper", None)
+        for module in (paper, secondary.sf_paper, ss, fp, dpaper):
             if module is not None:
                 module.budget = lambda: bankroll.equity
         funding_reserved = lambda: fp.used_capital if fp else 0
+        dex_reserved = lambda: dpaper.used_capital if dpaper else 0
         ss.external_reserved = (
             lambda: paper.used_capital
             + secondary.sf_paper.used_capital
             + funding_reserved()
+            + dex_reserved()
         )
         if (
             getattr(ss, "allocated_capital", ss.used_capital) + ss.external_reserved()
@@ -1386,12 +1413,16 @@ async def main():
             )
         )
         secondary.sf_paper.reserved = (
-            lambda: paper.used_capital + ss.used_capital + funding_reserved()
+            lambda: paper.used_capital
+            + ss.used_capital
+            + funding_reserved()
+            + dex_reserved()
         )
         paper.external_reserved = (
             lambda: secondary.sf_paper.used_capital
             + ss.used_capital
             + funding_reserved()
+            + dex_reserved()
         )
         secondary.runtime.services["spot_spot"].source.allowed_venue = (
             lambda v: not scanner.paused and venue_controller.get(v)["scan"]
@@ -1436,6 +1467,7 @@ async def main():
                 lambda: paper.used_capital
                 + secondary.sf_paper.used_capital
                 + ss.used_capital
+                + dex_reserved()
             )
             fp.allow_open = ss.allow_open
 
@@ -1457,6 +1489,31 @@ async def main():
                 )
 
             fp.on_closed = funding_closed
+        if dpaper:
+            dpaper.external_reserved = (
+                lambda: paper.used_capital
+                + secondary.sf_paper.used_capital
+                + ss.used_capital
+                + funding_reserved()
+            )
+            dpaper.allow_open = (
+                lambda p: not scanner.paused
+                and risk.can_open_paper()
+                and all(
+                    venue_controller.get(p["cex_venue"])[k] for k in ("paper", "scan")
+                )
+            )
+
+            async def dex_closed(position):
+                risk.on_paper_close(position["net"])
+                bankroll.apply(position["net"])
+                await notify_paper_close(
+                    position["symbol"],
+                    position["net"],
+                    "CEX/DEX Paper: firm quote, газ и история funding",
+                )
+
+            dpaper.on_closed = dex_closed
         sf_cycle.on_closed = sf_closed
         await secondary.runtime.start()
         bot = Bot(token=config.token)

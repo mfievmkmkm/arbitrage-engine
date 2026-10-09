@@ -141,11 +141,24 @@ class Provider(ResearchProvider):
             raise ValueError("DEX_RPC_RESPONSE_UNVERIFIED")
         return raw["result"]
 
-    async def firm(self, chain, sell, buy, amount, taker, registry, slippage_bps=20):
+    async def firm(
+        self,
+        chain,
+        sell,
+        buy,
+        amount,
+        taker,
+        registry,
+        slippage_bps=20,
+        *,
+        exact_out=False,
+    ):
         started = self.clock()
         try:
             chain = integer(chain, "DEX_CHAIN")
             amount = integer(amount, "DEX_AMOUNT")
+            if type(exact_out) is not bool:
+                raise ValueError("DEX_QUOTE_MODE_INVALID")
             sell, buy, taker = address(sell), address(buy), address(taker)
             scope, tokens, asset, stable = registry_scope(
                 registry, chain, sell, buy, self.clock()
@@ -159,10 +172,10 @@ class Provider(ResearchProvider):
                 chainId=str(chain),
                 sellToken=sell,
                 buyToken=buy,
-                sellAmount=str(amount),
                 taker=taker,
                 slippageBps=slippage_bps,
             )
+            params["buyAmount" if exact_out else "sellAmount"] = str(amount)
             async with self.session.get(
                 "https://api.0x.org/swap/allowance-holder/quote",
                 params=params,
@@ -176,13 +189,29 @@ class Provider(ResearchProvider):
             if (
                 address(raw.get("sellToken")) != sell
                 or address(raw.get("buyToken")) != buy
-                or integer(raw.get("sellAmount"), "DEX_SELL_AMOUNT") != amount
             ):
                 raise ValueError("DEX_QUOTE_SCOPE_MISMATCH")
             bought = integer(raw.get("buyAmount"), "DEX_BUY_AMOUNT")
-            minimum = integer(raw.get("minBuyAmount"), "DEX_MIN_BUY")
-            if minimum > bought or minimum < bought * (10000 - slippage_bps) // 10000:
-                raise ValueError("DEX_MIN_RECEIVED_CONFLICT")
+            requested = amount
+            if exact_out:
+                if bought != requested or raw.get("minBuyAmount") is not None:
+                    raise ValueError("DEX_EXACT_OUT_SCOPE_MISMATCH")
+                amount = integer(raw.get("maxSellAmount"), "DEX_MAX_SELL")
+                if (
+                    raw.get("sellAmount") is not None
+                    and integer(raw["sellAmount"], "DEX_SELL_AMOUNT") > amount
+                ):
+                    raise ValueError("DEX_MAX_SELL_CONFLICT")
+                minimum = bought
+            else:
+                if integer(raw.get("sellAmount"), "DEX_SELL_AMOUNT") != amount:
+                    raise ValueError("DEX_QUOTE_SCOPE_MISMATCH")
+                minimum = integer(raw.get("minBuyAmount"), "DEX_MIN_BUY")
+                if (
+                    minimum > bought
+                    or minimum < bought * (10000 - slippage_bps) // 10000
+                ):
+                    raise ValueError("DEX_MIN_RECEIVED_CONFLICT")
             issues = raw.get("issues")
             if (
                 not isinstance(issues, dict)
@@ -317,6 +346,8 @@ class Provider(ResearchProvider):
                         buy=buy,
                         amount=amount,
                         minimum=minimum,
+                        quote_mode="exact_out" if exact_out else "exact_in",
+                        requested=requested,
                     ),
                     sort_keys=True,
                 ).encode()
@@ -329,6 +360,8 @@ class Provider(ResearchProvider):
                 sell_amount_raw=str(amount),
                 buy_amount_raw=str(bought),
                 min_buy_amount_raw=str(minimum),
+                max_sell_amount_raw=str(amount) if exact_out else None,
+                quote_mode="exact_out" if exact_out else "exact_in",
                 network_fee_raw=str(fee),
                 block_number=block,
                 block_hash=block_hash,
@@ -377,6 +410,9 @@ class Cycle:
             return []
         route = self.routes[self.index % len(self.routes)]
         self.index += 1
+        return [await self.observe(route)]
+
+    async def observe(self, route):
         q = await self.provider.firm(
             route["chain_id"],
             route["sell_token"],
@@ -395,7 +431,7 @@ class Cycle:
             paper_allowed=False,
         )
         if not q["ok"]:
-            return [row]
+            return row
         try:
             scope, tokens, asset, stable = registry_scope(
                 self.registry,
@@ -420,7 +456,9 @@ class Cycle:
             fee = float(rate(fee.get("taker")))
             # Native-gas valuation uses a separate fresh executable CEX ask.
             start = self.clock()
-            raw = await c.fetch_order_book(scope["native_symbol"], limit=20)
+            raw = await asyncio.wait_for(
+                c.fetch_order_book(scope["native_symbol"], limit=20), 8
+            )
             gas_book = normalize(raw, scope["native_symbol"], start, self.clock(), 1.5)
             native_price = float(number(gas_book["asks"][0][0], "DEX_NATIVE_PRICE"))
             decimals = integer(scope["native_decimals"], "DEX_NATIVE_DECIMALS", False)
@@ -436,7 +474,7 @@ class Cycle:
             forward = q["sell_token"] == stable
             base_raw = q["min_buy_amount_raw"] if forward else q["sell_amount_raw"]
             base = float(Decimal(base_raw) / Decimal(10 ** tokens[asset]["decimals"]))
-            raw = await c.fetch_order_book(symbol, limit=20)
+            raw = await asyncio.wait_for(c.fetch_order_book(symbol, limit=20), 8)
             reference = raw["bids" if forward else "asks"][0][0]
             native, hedged = hedge(c, symbol, base, reference, reduce_only=not forward)
             if not forward:
@@ -469,11 +507,23 @@ class Cycle:
                 net_ceiling_model=ceiling,
                 notional=notional,
                 gas_usd=gas_usd,
+                gas_price=native_price,
+                gas_book=gas_book,
+                native_decimals=decimals,
                 cex_venue=v,
                 cex_symbol=symbol,
                 cex_side=native.side,
                 cex_contracts=native.qty,
                 base_qty=hedged,
+                entry_price=native.price,
+                contract_size=float(m["contractSize"]),
+                cex_evidence=native.market_evidence,
+                fee_rate=fee,
+                dex_cash=amount,
+                asset_amount_raw=str(base_raw),
+                asset_decimals=tokens[asset]["decimals"],
+                stable_decimals=tokens[stable]["decimals"],
+                forward=forward,
                 reason=(
                     "SIMULATED_NET_POSITIVE"
                     if ceiling > 0.05
@@ -491,4 +541,4 @@ class Cycle:
                     else "DEX_CEX_SIMULATION_UNAVAILABLE"
                 ),
             )
-        return [row]
+        return row

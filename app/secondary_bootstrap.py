@@ -1,4 +1,5 @@
 import os, json
+import aiosqlite
 from pathlib import Path
 from .dex_firm_simulation import Provider as FirmProvider, Cycle as FirmCycle
 from .zerox_research import Provider as DexProvider, Cycle as DexCycle
@@ -15,6 +16,8 @@ from .funding_arb_service import Service as FundingService
 from .funding_cycle_service import CycleService as FundingCycle
 from .funding_paper import Engine as FundingPaper
 from .funding_paper_source import Source as FundingPaperSource
+from .cex_dex_paper_source import Source as DexPaperSource
+from .cex_dex_paper import Engine as DexPaper, Cycle as DexPaperCycle
 
 
 class Bundle:
@@ -26,6 +29,7 @@ class Bundle:
         self.dex_sim_provider = None
         self.ss_paper = None
         self.funding_paper = None
+        self.dex_paper = None
 
     async def close(self):
         await self.runtime.stop()
@@ -109,6 +113,20 @@ async def build_bundle(
             sr.add("cex_dex", DexCycle(bundle.dex_provider, routes))
             runtime.enabled["cex_dex"] = True
         simulation_routes = json.loads(os.getenv("DEX_SIMULATION_ROUTES_JSON", "[]"))
+        if not simulation_routes:
+            async with aiosqlite.connect(db_path) as d:
+                async with d.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='cex_dex_paper'"
+                ) as c:
+                    has_dex_history = await c.fetchone()
+                if has_dex_history:
+                    async with d.execute(
+                        "SELECT COUNT(*) FROM cex_dex_paper WHERE status!='CLOSED'"
+                    ) as c:
+                        if (await c.fetchone())[0]:
+                            raise ValueError(
+                                "DEX_OPEN_PAPER_REQUIRES_CONFIGURED_ROUTES"
+                            )
         if simulation_routes:
             required = {
                 "chain_id",
@@ -129,16 +147,21 @@ async def build_bundle(
             bundle.dex_sim_provider = FirmProvider(
                 os.getenv("ZEROX_API_KEY"), os.getenv("DEX_SIMULATION_RPC_URL")
             )
-            sr.add(
-                "cex_dex",
-                FirmCycle(
-                    bundle.dex_sim_provider,
-                    simulation_routes,
-                    registry,
-                    funding_service.clients if funding_service else {},
-                    private_clients,
-                ),
+            firm_cycle = FirmCycle(
+                bundle.dex_sim_provider,
+                simulation_routes,
+                registry,
+                funding_service.clients if funding_service else {},
+                private_clients,
             )
+            bundle.dex_paper = DexPaper(
+                db_path,
+                DexPaperSource(firm_cycle, funding_service),
+                capital=float(os.getenv("PAPER_CAPITAL_USD", "50")),
+                max_seconds=float(os.getenv("DEX_PAPER_HOLD_SECONDS", "900")),
+            )
+            await bundle.dex_paper.init()
+            sr.add("cex_dex", DexPaperCycle(bundle.dex_paper, simulation_routes))
             runtime.enabled["cex_dex"] = True
         return bundle
     except BaseException:

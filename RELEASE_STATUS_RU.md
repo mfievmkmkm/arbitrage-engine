@@ -2,15 +2,25 @@
 
 Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: LIVE Spot/Spot, Funding и firm DEX simulation
+## Текущий блок: двусторонний CEX/DEX Paper и Replay
 
 В main зарегистрированы LIVE Spot/Spot и Funding, strategy-scoped acceptance, общая capacity и монитор, Telegram read-only checks, close/recovery controls. Spot/Spot восстанавливает предварительно размещённые запасы по terminal/private cashflow, не использует transfers/borrow. Остаточные allocation deltas сохраняются отдельно; их наличие не считается flat. Funding прогноз не кредитуется; известные расходы каждой ноги резервируются отдельно, hold сохраняется до отправки, вывод результата требует mature private income. Цена/fee NET_STOP может работать без предполагаемого funding income.
 
 Pair funding mark теперь сверяет maturity cutoff + calendar gap; наблюдатель больше не требует незрелый until=now private history для profit capture. Funding evidence берётся до свежих closing books. Добавлен операторский derivative exit по свежей сверке и атомарному claim. LIVE admission outcomes записываются в дневник.
 
-CEX/DEX: 0x firm quote, exact units/min-received/tax/issues, expiring token/CEX identity registry, chain/block/hash/decimals/code/wallet/gas RPC proof и eth_call. Native CEX hedge и fee/gas NET ceiling model подключены к secondary scanner, Telegram и observations. Подписи, approvals и wallet transactions отсутствуют. Полноценный двусторонний DEX Paper/Replay и wallet LIVE ещё не реализованы.
+CEX/DEX: 0x firm quote, exact units/min-received/tax/issues, expiring token/CEX identity registry, chain/block/hash/decimals/code/wallet/gas RPC proof и eth_call. Native CEX hedge и fee/gas NET ceiling model подключены к secondary scanner, Telegram и observations. Подписи, approvals и wallet transactions отсутствуют. Двусторонний DEX Paper/Replay реализован: вход и обратный выход имеют отдельные firm-котировки, exact-in min-out и exact-out max-in сохраняют точный raw inventory. Это модель исполнения по границам котировки; wallet LIVE и latency/partial-leg stress ещё не реализованы.
 
-Локальная проверка этого блока: **1110 тестов**, compileall, импорт main и diff check. Реальные аккаунты и транзакции не запускались. Инструкция: `REMAINING_LIVE_RUNBOOK_RU.md`.
+Локальная проверка этого блока: **1141 тест**, compileall, импорт main и diff check. Реальные аккаунты и транзакции не запускались. Инструкция: `REMAINING_LIVE_RUNBOOK_RU.md`.
+
+### Двусторонний DEX Paper
+
+- LONG DEX / SHORT CEX и предварительно размещённый SHORT DEX / LONG CEX. Обратный exact-out возвращает именно исходные raw units, forward продаёт весь min-out inventory, включая небольшой не захеджированный остаток. До входа проверяется обратный маршрут против существующего инвентаря кошелька. Модель не утверждает, что виртуальный вход изменил реальный баланс.
+- Комиссия CEX берётся с аккаунта. Вход CEX оценён консервативным IOC limit, выход — полным native-contract VWAP; газ каждой операции оценивается отдельным свежим native ask. DEX fees включены в min/max quote cash и не вычитаются повторно. Прогноз funding не входит в доход.
+- Один DEX цикл резервирует $12 из общего Paper-бюджета: максимум $5 на каждую сторону, комиссии, газ и запас. Резерв виден другим модулям во время сетевых запросов и удерживается при неполных данных. Новые входы отключаются настройкой стратегии; наблюдение продолжается.
+- Исторические ставки единственной CEX-ноги сверяются с календарём, maturity и полнотой страницы; знак LONG/SHORT учитывается. Сетевой запрос истории предшествует свежим closing quotes. Settlement между историей и котировкой не считается покрытым.
+- Time/NET stop фиксирует модель выхода; неполный funding оставляет EXIT_ACCOUNTING_PENDING. SQLite CAS атомарно сохраняет state/trades/marks/events/decisions и Ledger. Перезапуск удерживает резерв; повторное закрытие не повторяет доход. Удаление конфигурации при незавершённых DEX-позициях блокирует startup.
+- `/dex_paper`, `/dex_replay`, кнопки, общий экран позиций и пять таблиц audit export. Replay принимает только CLOSED и полностью проверяемые marks: immutable entry, raw units, chain/block proof, свежие стаканы, fee/gas/funding lineage. Разреженная история исключается; train/test purged, история не даёт LIVE-допуска. Подбор правил Replay относится к time/trailing по NET marks, без симуляции задержки и частичных DEX fills.
+
 
 ## Предыдущий блок: Spot/Futures подключён к основному боту
 
