@@ -1,6 +1,7 @@
 """Complete database audit, built on request without exposing credentials."""
 
 import json
+import time
 import zipfile
 from pathlib import Path
 import aiosqlite
@@ -88,6 +89,15 @@ async def build(path, directory):
         if costs["trades"]:
             sheets["Live cost attribution"] = redact(costs["trades"])
             sheets["Live order attribution"] = redact(costs["orders"])
+        from .project_readiness import read as readiness_evidence
+
+        evidence = await readiness_evidence(d, time.time())
+        sheets["Paper OOS evidence"] = [
+            dict(strategy=s, **r) for s, r in evidence["samples"].items()
+        ]
+        sheets["Stress evidence"] = [
+            dict(strategy=s, **r) for s, r in evidence["execution_stress"].items()
+        ]
         await d.rollback()
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)

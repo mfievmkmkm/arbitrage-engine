@@ -2,7 +2,21 @@
 
 Дата: 10 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: единый actual NET пяти стратегий и cash post-fill защита
+## Текущий блок: единый dossier готовности и целостность model evidence
+
+Проверено: **1554 offline-теста passed** без предупреждений, compileall, импорт `app.main`, Black check изменённых Python-файлов и `git diff --check`.
+
+Новый read-only аудит объединяет Paper/OOS всех пяти стратегий, последние сохранённые execution-stress прогоны, native actual cost reconciliation, незавершённые LIVE/wallet intents и остатки owned spot inventory. Все данные базы читаются одной SQLite-транзакцией: конкурентная запись не смешивает старый run с новым result. База открывается mode=ro; отсутствующий файл не создаётся.
+
+Stress summaries проверяются против result journal, включая SQL/payload scenario/status/position/NET, отсутствие дублей, полноту summary и результаты вложенного DEX run. Повреждение или удаление результата даёт EVIDENCE_INVALID, а не успех. Расходы без определённого strategy scope не исчезают из диагностики. UNKNOWN/residual/funding-unknown outcomes остаются явными; NET сценариев не складывается, потому что это повторная модель тех же позиций. Старше 24 часов означает диагностически устаревший stress, а не истёкший торговый сертификат.
+
+Paper/OOS включает причины исключения, purged overlapping windows, train/test sizes и holdout metrics. No-loss profit factor хранится как unbounded/null, не JSON Infinity и не выдуманное конечное значение. Выборки ограничены; превышение не подменяется пригодным частичным history. DEX wallet acceptance здесь отдельно помечается неоценённой: сертификат CEX не подтверждает кошелёк.
+
+Telegram `/readiness` показывает конкретные пробелы и сверенные cycles по стратегиям; audit XLSX/CSV включает Paper OOS evidence и Stress evidence из того же snapshot. Добавлен CLI `python -m app.project_readiness --db ... --acceptance ... --venues ...` для JSON-аудита без импорта trading runtime, создания клиентов или signer. SHA-256 — идентификатор содержимого, не независимое evidence и не операторская подпись.
+
+Новый блок покрыт 40 offline-тестами: все пять форматов stress, реальные persisted runner fixtures, конфликт/удаление/дубликат, смена стратегии cash run, лимиты, WAL snapshot при конкурентном writer, экспорт, CLI, остатки inventory и неизвестный cost scope. Реальные аккаунты, RPC, подпись и заявки не использованы. Acceptance/торговые настройки не меняются; operational финал по-прежнему требует реальной account/wallet certification, длительного Paper/OOS и отдельно принятого micro-canary.
+
+## Предыдущий блок: единый actual NET пяти стратегий и cash post-fill защита
 
 Проверено: **1514 offline-тестов passed**, compileall, импорт `app.main` и `git diff --check`; новый блок добавляет 42 сценария сверх предыдущих 1472.
 

@@ -4,6 +4,7 @@ Legacy scalar marks cannot prove quantity/cost lineage and are excluded.
 
 import json
 import math
+from contextlib import nullcontext
 from itertools import groupby
 import aiosqlite
 from .spot_future_exit import decide
@@ -11,7 +12,15 @@ from .replay import ReplayParams, simulate as primary_simulate
 from .spot_future_replay import metrics
 
 
-async def dataset(path, max_gap=120, strategy="spot_futures"):
+async def dataset(
+    path,
+    max_gap=120,
+    strategy="spot_futures",
+    *,
+    connection=None,
+    limit=None,
+    mark_limit=None,
+):
     if strategy not in (
         "futures_futures",
         "spot_futures",
@@ -40,9 +49,12 @@ async def dataset(path, max_gap=120, strategy="spot_futures"):
     def reject(reason):
         excluded[reason] = excluded.get(reason, 0) + 1
 
-    async with aiosqlite.connect(path) as d:
+    async with (
+        aiosqlite.connect(path) if connection is None else nullcontext(connection)
+    ) as d:
         d.row_factory = aiosqlite.Row
-        await d.execute("BEGIN")
+        if connection is None:
+            await d.execute("BEGIN")
         async with d.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
             (mark_table,),
@@ -60,14 +72,24 @@ async def dataset(path, max_gap=120, strategy="spot_futures"):
                 if strategy in ("funding_arb", "futures_futures", "cex_dex")
                 else " WHERE status!='OPEN' ORDER BY opened_at,id"
             )
+            + (" LIMIT ?" if limit is not None else ""),
+            (limit + 1,) if limit is not None else (),
         ) as c:
             rows = await c.fetchall()
+        if limit is not None and len(rows) > limit:
+            return [], {"HISTORY_LIMIT_EXCEEDED": 1}
         for row in rows:
             async with d.execute(
-                "SELECT * FROM " + mark_table + " WHERE position_id=? ORDER BY ts,id",
-                (row["id"],),
+                "SELECT * FROM "
+                + mark_table
+                + " WHERE position_id=? ORDER BY ts,id"
+                + (" LIMIT ?" if mark_limit is not None else ""),
+                (row["id"], mark_limit + 1) if mark_limit is not None else (row["id"],),
             ) as c:
                 marks = await c.fetchall()
+            if mark_limit is not None and len(marks) > mark_limit:
+                reject("MARK_LIMIT_EXCEEDED")
+                continue
             if not marks:
                 reject("MARKS_MISSING")
                 continue
@@ -215,7 +237,13 @@ async def dataset(path, max_gap=120, strategy="spot_futures"):
                         ),
                     }
                 )
-            except (ValueError, TypeError, KeyError) as e:
+            except (
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                OverflowError,
+            ) as e:
                 reject(str(e) if isinstance(e, ValueError) else "PAYLOAD_INVALID")
     return trades, excluded
 

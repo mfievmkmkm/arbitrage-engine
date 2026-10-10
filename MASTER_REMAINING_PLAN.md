@@ -8,6 +8,15 @@ Historical A–F below is a design checklist, not an assertion that already
 integrated Paper/Replay/UI pieces are still missing. Use RELEASE_STATUS_RU.md
 for the actual implementation matrix.
 
+The read-only readiness dossier now combines all five Paper/OOS histories,
+persisted execution stress and actual native cost attribution in one SQLite
+snapshot. Stress run summaries are cross-checked against their result journal;
+corruption, duplicates, unknown/residual outcomes, old runs and sample caps are
+explicit. A local JSON CLI and audit export expose the same evidence. Owned
+spot inventory is not hidden by a zero active-LIVE count. Evidence hashes are
+content identifiers, not operator signatures or release authority. Remaining
+operational evidence cannot be manufactured by these offline checks.
+
 Spot/Futures Admission + Session are now registered with explicit spot private
 clients and strategy-scoped acceptance. The common monitor owns different
 leg symbols/account scopes; scanner entry, dynamic exit, explicit recovery,

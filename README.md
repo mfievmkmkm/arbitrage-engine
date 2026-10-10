@@ -132,4 +132,14 @@ Funding-прогноз не считается полученной прибыл
 
 Wallet signing/nonce/receipt backend и сценарный CEX/DEX execution stress добавлены; `/dex_stress`, `/dex_wallet`, `/readiness`. Main подключает настроенный автоматический swap→actual-native CEX hedge, paired NET/time exit, restart-safe bounded recovery и atomic accounting. Включение требует root LIVE, DEX_LIVE_ENABLED и действующих scoped certificates; без них доступно read-only наблюдение. Scope и настройки: [DEX_WALLET_AND_STRESS_RUNBOOK_RU.md](DEX_WALLET_AND_STRESS_RUNBOOK_RU.md).
 
+`/readiness` объединяет Paper/OOS, последние сохранённые stress-прогоны пяти стратегий и actual cost attribution в одной SQLite read transaction. Run summaries сверяются с результатами: конфликт SQL/payload, удалённая строка, дубликат или неверное время дают `EVIDENCE_INVALID`. NET сценариев не складывается; UNKNOWN/residual outcomes, неполный funding, исключённые histories и ограниченная выборка остаются явными. Возраст stress >24h — диагностический порог, не сертификат и не изменение gate. Остатки owned spot inventory показаны отдельно от active LIVE. DEX wallet certification оценивается отдельным workflow, не выводится из сертификата CEX.
+
+Локальный read-only JSON-аудит без запуска бота, exchange clients или signer:
+
+```bash
+python -m app.project_readiness --db arbitrage.db --acceptance live_acceptance.json --venues binance bybit
+```
+
+Используйте фактический путь существующей базы; отсутствующая база не создаётся. `--html` выводит тот же Telegram summary. SHA-256 идентифицирует содержимое отчёта, но не является подписью оператора или независимым подтверждением исполнения. Paper/OOS ограничен 10000 сделками и 10000 marks на сделку; превышение явно исключается, не превращается в успешную частичную выборку. Последний stress ограничен 10000 результатами, actual costs — 1000 LIVE-записями с признаком cap. В audit XLSX/CSV добавлены `Paper OOS evidence` и `Stress evidence` из той же транзакции. Этот аудит ничего не включает, не пишет acceptance и не заменяет длительный Paper/OOS, реальную account/wallet certification или отдельно принятый micro-canary.
+
 Предыдущие документы сохраняются как история реализации. Их формулировки «complete/ready» не являются текущим допуском к LIVE. Текущее состояние — в `RELEASE_STATUS_RU.md`.
