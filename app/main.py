@@ -219,7 +219,7 @@ async def text_for(s):
     if s == "risk":
         return render_risk_center(risk, live_supervisor, live_stop)
     if s == "status":
-        return render_system_center(scanner, strategy_runtime)
+        return render_system_center(scanner, strategy_runtime, secondary)
     if s == "strategies":
         return render_strategy_console(strategy_runtime)
     if s == "strategy_stats":
@@ -1448,6 +1448,8 @@ async def main():
             scanner.funding,
             scanner.universe.symbols if scanner.universe else (),
             private_clients=private_clients,
+            book_history=book_history if config.record_books else None,
+            book_record_interval=config.public_stream_record_interval,
             dex_options=dict(
                 live_enabled=config.live_enabled,
                 entry_authority=dex_entry_authority,

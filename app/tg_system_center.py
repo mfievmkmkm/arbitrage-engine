@@ -2,7 +2,7 @@ from .tg_ui import STRATEGY_LABELS
 from .tg_format import age
 
 
-def render(scanner, runtime):
+def render(scanner, runtime, secondary=None):
     out = [
         "⚙️ <b>Система</b>",
         f"\nСканер: {'⏸ На паузе' if scanner.paused else '🟢 Работает'}",
@@ -13,10 +13,12 @@ def render(scanner, runtime):
     out.extend(
         f"{STRATEGY_LABELS.get(k,k)}: <b>{v}</b>" for k, v in runtime.counts().items()
     )
+    clients = list(scanner.clients.values()) + list(
+        getattr(secondary, "clients", {}).values()
+    )
+    clients = list({id(c): c for c in clients}.values())
     statuses = [
-        c.book_status()
-        for c in scanner.clients.values()
-        if callable(getattr(c, "book_status", None))
+        c.book_status() for c in clients if callable(getattr(c, "book_status", None))
     ]
     if statuses:
         streams = sum(s["streams"] for s in statuses)
@@ -24,7 +26,7 @@ def render(scanner, runtime):
             [
                 "\n<b>Публичные стаканы</b>",
                 (
-                    f"WebSocket: {streams} площадок; REST — резервный источник"
+                    f"WebSocket: {streams} клиентов; REST — резервный источник"
                     if streams
                     else "Источник: проверяемые REST-стаканы"
                 ),
@@ -41,5 +43,12 @@ def render(scanner, runtime):
             f"История WS: {stats['recorded']} снимков • объединено: {stats['coalesced']} • потеряно: {stats['dropped']}"
         )
         out.append(f"Ошибки записи: {stats['failures']}")
+    recorder = getattr(secondary, "book_recorder", None)
+    if recorder is not None:
+        stats = recorder.status()
+        out.append(
+            f"История Spot/Futures и Spot/Spot: {stats['recorded']} снимков • объединено: {stats['coalesced']} • потеряно: {stats['dropped']}"
+        )
+        out.append(f"Ошибки вторичной записи: {stats['failures']}")
     out.append("\n<i>Настройки и допуск реального исполнения — в LIVE-контроле.</i>")
     return "\n".join(out)

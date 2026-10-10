@@ -124,6 +124,14 @@ def simulate(position, tape, scenario, fee_rates):
             k: b["instrument"][k]
             for k in ("base", "quote", "settle", "contract_size", "contract", "linear")
         }
+        if (
+            instrument["contract"] is not True
+            or instrument["linear"] is not True
+            or instrument["settle"] != "USDT"
+        ):
+            row["reason"] = "FUTURES_REPLAY_INSTRUMENT_REQUIRED"
+            rows.append(row)
+            return
         if venue in identity and identity[venue] != instrument:
             row["reason"] = "INSTRUMENT_CHANGED"
             rows.append(row)

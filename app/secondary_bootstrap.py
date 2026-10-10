@@ -24,6 +24,7 @@ from .dex_wallet import Journal as WalletJournal, RPC as WalletRPC
 from .dex_wallet_observer import Observer as WalletObserver
 from .dex_live_observer import build as dex_bridge_observer
 from .dex_live_bootstrap import build as build_dex_live
+from .secondary_book_history import attach as attach_book_history
 
 
 class Bundle:
@@ -38,10 +39,13 @@ class Bundle:
         self.dex_paper = None
         self.wallet_session = None
         self.dex_live = None
+        self.book_recorder = None
 
     async def close(self):
         await self.runtime.stop()
         await close(self.clients)
+        if self.book_recorder:
+            await self.book_recorder.close()
         if self.dex_provider:
             await self.dex_provider.close()
         if self.dex_sim_provider:
@@ -64,6 +68,8 @@ async def build_bundle(
     future_symbols=(),
     private_clients=None,
     dex_options=None,
+    book_history=None,
+    book_record_interval=1,
 ):
     clients = await build(ids)
     bundle = None
@@ -227,6 +233,10 @@ async def build_bundle(
         if bundle.dex_live:
             sr.add("dex_live_candidates", bundle.dex_live.source)
             runtime.enabled["cex_dex"] = True
+        if book_history is not None:
+            bundle.book_recorder = attach_book_history(
+                book_history, clients, book_record_interval
+            )
         return bundle
     except BaseException:
         if bundle and bundle.dex_provider:
@@ -237,5 +247,7 @@ async def build_bundle(
             await bundle.wallet_session.close()
         if bundle and bundle.dex_live:
             await bundle.dex_live.provider.close()
+        if bundle and bundle.book_recorder:
+            await bundle.book_recorder.close()
         await close(clients)
         raise

@@ -2,7 +2,17 @@
 
 Дата: 10 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: динамические приоритеты публичных стаканов
+## Текущий блок: вторичная история спотовых и фьючерсных стаканов
+
+Проверено: 1301 offline-тест, compileall, импорт main и diff-check. Новые сценарии покрывают mixed REST/WS tape, spot/contract units, неизвестные/сменившиеся metadata, запрет future lookahead, изоляцию futures replay, отказ дневника, retention/export и финальный flush при закрытии Bundle.
+
+Public clients Spot/Futures и Spot/Spot подключены к bounded REST/WS recorder в main/secondary bootstrap. После нормализации снимок передаётся в неблокирующий буфер, затем сохраняется в общий `market_books` и audit export. Исходные book timestamp/received_at не переустанавливаются; последние snapshots маршрута семплируются, coalescing/drop/error counters видны в «Система». Shutdown дожидается записи последнего буфера.
+
+Spot metadata требует явный spot=true, USDT quote, точную symbol/base identity и отсутствие contract/settle; base quantity не умножается на contractSize. Linear derivatives требуют известный положительный contractSize и USDT settlement. Metadata changes и неподтверждённые инструменты отбрасываются, вместо молчаливой подстановки размера 1. Record counter учитывает фактически принятые SQLite строки. Общие retention/cap сохраняются.
+
+Tape умеет хранить обе категории с явным типом. Futures/Futures simulator отдельно требует derivative instrument и не исполняет spot как фьючерс. Дальнейшая последовательная cash fill/latency модель и достаточная длительная выборка ещё нужны; запись сама по себе не подтверждает account fills, funding или production readiness.
+
+## Предыдущий блок: динамические приоритеты публичных стаканов
 
 Проверено: 1275 offline-тестов, compileall, импорт main и diff-check. Новые сценарии проверяют cap во время ротации, конкурирующие owners, изменившийся universe, uncertain/negative unsubscribe, stale cache, паузу сканера, durable pins и отмену shutdown.
 

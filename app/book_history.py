@@ -24,15 +24,26 @@ def valid_book(book):
         ):
             return False
         spec = book["instrument"]
-        if (
-            not spec["contract"]
-            or not spec["linear"]
-            or spec["settle"] != "USDT"
-            or spec["quote"] != "USDT"
-            or not spec["base"]
-        ):
+        future = (
+            spec["contract"] is True
+            and spec["linear"] is True
+            and spec["settle"] == "USDT"
+            and spec.get("spot", False) is False
+        )
+        spot = (
+            spec.get("spot") is True
+            and spec["contract"] is False
+            and spec["linear"] is False
+            and spec["settle"] == ""
+            and spec["contract_size"] == 1
+        )
+        if not (future or spot) or spec["quote"] != "USDT" or not spec["base"]:
             return False
-        if not math.isfinite(spec["contract_size"]) or spec["contract_size"] <= 0:
+        if (
+            isinstance(spec["contract_size"], bool)
+            or not math.isfinite(spec["contract_size"])
+            or spec["contract_size"] <= 0
+        ):
             return False
         for key in ("bids", "asks"):
             levels = book[key]
@@ -79,7 +90,11 @@ class Store:
         for q in quotes:
             received = q.received_at if q.received_at is not None else self.clock()
             book = dict(
-                mode="PUBLIC_WS_BASE_UNITS" if getattr(q, "data_source", "REST") == "WS" else "PUBLIC_REST_BASE_UNITS",
+                mode=(
+                    "PUBLIC_WS_BASE_UNITS"
+                    if getattr(q, "data_source", "REST") == "WS"
+                    else "PUBLIC_REST_BASE_UNITS"
+                ),
                 venue=q.exchange,
                 symbol=q.symbol,
                 book_ts=q.fetched,
@@ -106,6 +121,8 @@ class Store:
                 (self.max_rows,),
             )
             await d.commit()
+
+        return len(rows)
 
     async def stats(self):
         async with aiosqlite.connect(self.path) as d:

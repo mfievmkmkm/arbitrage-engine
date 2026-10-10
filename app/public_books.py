@@ -117,6 +117,7 @@ class Client:
         self.counters = Counter()
         self.closed = False
         self.on_book = None
+        self.on_snapshot = None
         self._close_lock = asyncio.Lock()
         self._priorities = {}
         self._desired = ()
@@ -320,6 +321,11 @@ class Client:
         )
         out = normalize(raw, symbol, started, self.clock(), self.max_age)
         self.counters["rest_reads"] += 1
+        if self.on_snapshot is not None:
+            try:
+                self.on_snapshot(copy.deepcopy(out))
+            except Exception:
+                self.counters["record_errors"] += 1
         return out
 
     def book_status(self):
