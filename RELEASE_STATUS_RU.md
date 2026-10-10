@@ -2,7 +2,19 @@
 
 Дата: 10 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: вторичная история спотовых и фьючерсных стаканов
+## Текущий блок: последовательный stress Spot/Futures и Spot/Spot
+
+Проверено: **1341 offline-тест passed**, compileall, импорт `app.main` и `git diff --check`. Реальные заявки и кошельковые транзакции не запускались.
+
+Добавлены `/sf_execution`, `/ss_execution` и выделенные кнопки в Replay. Последние 100 закрытых Paper-позиций проходят три сценария задержки по записанным REST/WS-стаканам без чтения будущих received_at. Первая cash-нога ограничивает вторую фактическим модельным fill; неполный вход отменяется с защитным закрытием. Выход сначала восстанавливает derivative/source asset, затем продаёт приобретённый cash. Максимум три recovery rounds, с сохранением остатка и `net=None`, если закрытие не завершено.
+
+Spot/Spot сохраняет до входа исходные BASE/USDT-остатки обеих площадок. Модель проверяет owned inventory и ограничивает обратные покупки отдельным денежным остатком площадки: средств другой биржи или выдуманного перевода нет. Старые позиции без такого evidence исключаются. Обратный Spot/Futures, требующий займа, не моделируется. Для forward Spot/Futures collateral остаётся допущением Paper, а не подтверждённым account balance.
+
+Один snapshot-side depth расходуется только один раз на позицию, даже при новом received_at того же book timestamp. Тип, symbol/exchange/base/quote и изменения instrument metadata проверяются. Fees начисляются на все fills, включая recovery, по фиксированной entry Paper-ставке в модельных quote units; funding исключён. Public tape не доказывает private fills, очередь, native precision/minimums или реальные account fees.
+
+Run и результаты записываются одной SQLite-транзакцией. Каждый результат содержит исходную позицию и book evidence для независимого воспроизведения после удаления tape. Две таблицы включены в XLSX/ZIP audit export; капитал, Ledger и LIVE acceptance не меняются. Проверка включает partial legs, quote shortage, stale/missing/changed books, no-lookahead, bounded recovery, rollback, replay reproduction, Telegram и export.
+
+## Предыдущий блок: вторичная история спотовых и фьючерсных стаканов
 
 Проверено: 1301 offline-тест, compileall, импорт main и diff-check. Новые сценарии покрывают mixed REST/WS tape, spot/contract units, неизвестные/сменившиеся metadata, запрет future lookahead, изоляцию futures replay, отказ дневника, retention/export и финальный flush при закрытии Bundle.
 
@@ -235,9 +247,9 @@ Spot/Futures public native-план **подключён к scanner, сохра�
 - Production CEX lifecycle: завершить проверку площадок и реального IOC-входа на выбранных аккаунтах. Production-entry admission подключён. Опциональный write-side автовыход и известный one-leg exit recovery со свежими reference quotes подключены к main; UNKNOWN и остатки без совпадающих terminal/private доказательств требуют дальнейшей сверки; подтверждённые остатки закрываются отдельным bounded координатором. Непрерывный read-only lookup, fresh snapshots, восстановление и exit-наблюдение уже подключены; разрешения на автоматическую торговлю они не дают.
 - Публичный WS-транспорт, private order streams и динамические bounded приоритеты подписок подключены. Ещё нужны certification snapshot/delta/sequence recovery каждой площадки. Unsupported/uncertain unsubscribe удерживает cap и переводит overflow на REST. Реальные подключения и плотная выборка в этой сессии не проверялись.
 - Подтвердить полноту приватной funding history на каждой площадке и задержки settlement; завершить fee/slippage attribution и реальные account acceptance. Открытый funding до текущего времени остаётся незрелым и не разрешает target/trailing по подтверждённому NET.
-- Spot/Futures replay уже работает по сохранённым model marks с purged train/test. Ещё нужны полноценная симуляция latency/fills, достаточная выборка, сквозное подтверждение Spot/Spot fills/latency и валидация Funding Paper на длительной записи публичных ставок и стаканов.
+- Spot/Futures и Spot/Spot имеют replay по сохранённым model marks и последовательный recorded-book IOC/latency stress. Ещё нужны достаточная плотная выборка, реальные private fills/fees/precision/inventory proof и валидация Funding Paper на длительной записи публичных ставок и стаканов.
 - CEX/DEX сопоставление контрактов, свежие gas-цены и исполнимые маршруты с min-received, tax/network evidence, simulation и отдельным failure acceptance. Индикативная price-заявка не заменяет эти проверки.
-- Offline IOC/latency-модель Futures/Futures подключена. Ещё нужны плотные временные ряды, exchange-certified precision/limits, limit queue, private fills и распространение stress-проверок на другие стратегии; существующий Paper не является подтверждённой исторической доходностью.
+- Offline IOC/latency-модели Futures/Futures, forward Spot/Futures и inventory-backed Spot/Spot подключены; DEX имеет отдельный sequential stress. Ещё нужны плотные временные ряды, exchange-certified precision/limits, limit queue и private fills; существующий Paper не является подтверждённой исторической доходностью.
 - Подтверждённый CI, длительная Paper-выборка, OOS, затем отдельно принятый micro-live canary. AUTO не разблокируется количеством написанных файлов.
 
 Реальные сделки в этой сессии не отправлялись. Тесты выполняются без финансовых ключей и реальных заявок. Настроенный write-side режим предназначен для отдельного запуска после проверки площадок.

@@ -7,6 +7,8 @@
 
 ## Работающий запуск
 
+`/sf_execution` и `/ss_execution` (кнопки в Replay) моделируют последовательные IOC по сохранённым REST/WS-стаканам: задержки, частичные fills, максимум три recovery rounds. Spot/Spot использует подтверждённые в Paper заранее размещённые запасы и отдельные USDT-остатки; повторный снимок не восстанавливает уже использованную глубину. Незакрытые остатки не получают NET. Результаты и исходные book evidence сохраняются атомарно и входят в audit export. Комиссии — фиксированная Paper-модель в quote units, funding исключён; native precision, приватные fills, borrowing и реальная доступность средств не сертифицируются этой проверкой. Старые Spot/Spot позиции без сохранённого inventory evidence исключаются.
+
 `app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, Spot/Spot scanner с сохраняемыми виртуальными запасами и Funding scanner с сохраняемым Paper. Для DEX доступны опциональные 0x research/simulation и отдельно настроенный LIVE runtime с изолированным signer и scoped acceptance.
 
 LIVE Spot/Spot и Funding зарегистрированы в основном запуске с отдельным account acceptance. Spot/Spot исполняет inventory-backed cash round trip и bounded explicit recovery; Funding использует общий derivative lifecycle с собственным горизонтом и reserve фактических расходов. Команды: `/ss_live`, `/ss_checks`, `/funding_live`, `/funding_checks`. CEX/DEX поддерживает firm simulation, native hedge, сохраняемый Paper/Replay, sequential stress и настроенный автоматический wallet/CEX runtime. Реальная сертификация аккаунтов, кошелька и длительная OOS-история остаются обязательными. Подробности: [REMAINING_LIVE_RUNBOOK_RU.md](REMAINING_LIVE_RUNBOOK_RU.md).

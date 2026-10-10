@@ -12,6 +12,8 @@ TABLES = {
     "Market books": "market_books",
     "Execution replay runs": "execution_replay_runs",
     "Execution replay results": "execution_replay_results",
+    "Cash execution runs": "cash_execution_runs",
+    "Cash execution results": "cash_execution_results",
     "Observations": "observations",
     "Strategy observations": "strategy_observations",
     "Paper trades": "paper_positions",

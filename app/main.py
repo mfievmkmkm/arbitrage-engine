@@ -123,6 +123,10 @@ from .execution_book_replay import (
     build as build_execution_replay,
     render as render_execution_replay,
 )
+from .cash_execution_replay import (
+    build as build_cash_execution,
+    render as render_cash_execution,
+)
 from .market_console import merged as merged_market
 from .tg_market_keyboard import build as market_keyboard, selection_key
 from .tg_market_detail import render as render_market_detail
@@ -322,6 +326,11 @@ async def text_for(s):
         )
     if s == "execution_replay":
         return render_execution_replay(await build_execution_replay(config.db_path))
+    if s in ("sf_execution", "ss_execution"):
+        strategy = "spot_futures" if s == "sf_execution" else "spot_spot"
+        return render_cash_execution(
+            await build_cash_execution(config.db_path, strategy)
+        )
     if s == "replay":
         return render_sf_replay(
             await build_sf_replay(
@@ -474,6 +483,8 @@ async def start(m: Message):
         "dex_wallet",
         "readiness",
         "execution_replay",
+        "sf_execution",
+        "ss_execution",
         "funding_paper",
         "dex_paper",
         "ss_inventory",
@@ -563,6 +574,8 @@ async def commands(m: Message):
             "dex_wallet",
             "readiness",
             "execution_replay",
+            "sf_execution",
+            "ss_execution",
             "funding_paper",
             "dex_paper",
             "ss_inventory",
@@ -766,6 +779,8 @@ def keyboard_for(screen):
         "fund_replay",
         "dex_replay",
         "execution_replay",
+        "sf_execution",
+        "ss_execution",
     ):
         return replay_menu(screen)
     if screen == "paper":

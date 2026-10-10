@@ -265,6 +265,15 @@ class Engine:
                         reason = "SELL_BASE_LOW"
                     else:
                         reason = "PAPER_OPEN"
+                        inventory_evidence = dict(
+                            mode="PREFUNDED_PAPER_INVENTORY",
+                            buy=x["buy"],
+                            sell=x["sell"],
+                            asset=asset,
+                            buy_quote=buy.get("USDT", 0),
+                            sell_quote=sell.get("USDT", 0),
+                            sell_base=sell.get(asset, 0),
+                        )
                         pid = state["next_id"]
                         state["next_id"] += 1
                         buy["USDT"] -= required
@@ -294,6 +303,7 @@ class Engine:
                             entry_fees=qty * (x["entry_buy"] + x["entry_sell"]) * rate,
                             safety=qty * x["entry_buy"] * x["safety_pct"] / 100,
                             entry_fee_pct=x["fee_pct"],
+                            inventory_evidence=inventory_evidence,
                         )
                         # The entry mark records the observed immediate round-trip cost.
                         ef = qty * (x["exit_buy"] + x["exit_sell"]) * rate

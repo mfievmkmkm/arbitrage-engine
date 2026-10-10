@@ -46,6 +46,15 @@ def test_inventory_entry_close_and_restart_preserve_cash_and_assets(tmp_path):
         e = await engine(tmp_path, max_age=60)
         await e.cycle([quote()])
         assert len(e.positions) == 1
+        assert next(iter(e.positions.values()))["inventory_evidence"] == dict(
+            mode="PREFUNDED_PAPER_INVENTORY",
+            buy="a",
+            sell="b",
+            asset="X",
+            buy_quote=120,
+            sell_quote=0,
+            sell_base=1,
+        )
         assert e.state["balances"]["a"]["X"] == 1 and e.state["balances"]["b"]["X"] == 0
         assert e.state["balances"]["a"]["USDT"] == pytest.approx(19.8)
         restarted = await engine(tmp_path, max_age=60)

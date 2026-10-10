@@ -131,6 +131,20 @@ def replay_menu(screen="replay"):
                     "primary" if screen == "execution_replay" else None,
                 )
             ],
+            [
+                button(
+                    "⏱ Спот ↔ Фьючерсы",
+                    "sf_execution",
+                    "primary" if screen == "sf_execution" else None,
+                )
+            ],
+            [
+                button(
+                    "⏱ Спот ↔ Спот",
+                    "ss_execution",
+                    "primary" if screen == "ss_execution" else None,
+                )
+            ],
             [button("↻ Обновить", screen), button("‹ Главное меню", "home")],
         ]
     )
