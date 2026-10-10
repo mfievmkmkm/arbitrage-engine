@@ -528,6 +528,7 @@ def test_dex_receipts_native_gas_and_private_income_reconcile(tmp_path, directio
         "depth",
         "gas_identity",
         "costs_scope",
+        "invalid_decimal",
     ],
 )
 def test_dex_contradicting_receipts_or_costs_never_get_reconciled(tmp_path, fault):
@@ -557,6 +558,8 @@ def test_dex_contradicting_receipts_or_costs_never_get_reconciled(tmp_path, faul
             costs["gas_valuation_evidence"]["market_identity"]["quote"] = "USD"
         if fault == "costs_scope":
             costs["symbol"] = "OTHER"
+        if fault == "invalid_decimal":
+            costs["gas_usdt"] = "invalid"
         meta["dex_result"] = stored
         async with aiosqlite.connect(store.path) as db:
             await db.execute("UPDATE live_trades SET payload=?", (json.dumps(meta),))

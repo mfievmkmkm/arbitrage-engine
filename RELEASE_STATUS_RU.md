@@ -4,7 +4,7 @@
 
 ## Текущий блок: единый actual NET пяти стратегий и cash post-fill защита
 
-Проверено: **1513 offline-тестов passed**, compileall, импорт `app.main` и `git diff --check`; новый блок добавляет 41 сценарий сверх предыдущих 1472.
+Проверено: **1514 offline-тестов passed**, compileall, импорт `app.main` и `git diff --check`; новый блок добавляет 42 сценария сверх предыдущих 1472.
 
 Read-only `/live_costs` теперь сверяет все пять стратегий из одного SQLite snapshot. Spot/Futures восстанавливает credited BASE, actual quote fees, fee в активе по цене фактического fill, realized futures cashflow и mature private funding. Funding coverage/window/events сохраняются при atomic result; отдельный `live_cash_inventory` сверяется с owned residual и cost basis. Остаток не называется private-flat и не получает выдуманной положительной оценки.
 

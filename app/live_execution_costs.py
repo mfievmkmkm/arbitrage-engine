@@ -7,6 +7,7 @@ Native spot inventory and DEX gas retain their own units and valuation labels.
 
 import json
 import math
+from decimal import DecimalException
 from html import escape
 from pathlib import Path
 from urllib.parse import quote
@@ -275,7 +276,7 @@ async def read(db, limit=100):
                             inventory_deficit_charge=0,
                             slippage_complete=True,
                         )
-        except (ValueError, TypeError, KeyError, AttributeError) as error:
+        except (ValueError, TypeError, KeyError, AttributeError, DecimalException) as error:
             item["reasons"].append(
                 str(error) if isinstance(error, ValueError) else "COST_EVIDENCE_INVALID"
             )
