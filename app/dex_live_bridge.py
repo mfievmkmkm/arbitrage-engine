@@ -117,6 +117,17 @@ def wallet_flow(rows, tid, p):
         paid = dec(receipt["gas_paid_raw"])
         if paid <= 0 or paid != paid.to_integral_value():
             raise ValueError("DEX_GAS_INVALID")
+        native_before, native_after = dec(receipt.get("native_before_raw")), dec(
+            receipt.get("native_after_raw")
+        )
+        if (
+            any(
+                x < 0 or x != x.to_integral_value()
+                for x in (native_before, native_after)
+            )
+            or native_before - native_after != paid
+        ):
+            raise ValueError("DEX_NATIVE_GAS_BALANCE_CONFLICT")
         gas += int(paid)
         previous = row["nonce"], receipt["after"], receipt.get("native_after_raw")
     return dict(
@@ -647,14 +658,15 @@ class Session:
                 return dict(
                     status="ACCOUNTING_PENDING", reason="DEX_WALLET_PROOF_CHANGED"
                 )
-            cur = await d.execute(
-                "SELECT rowid,intent_id,payload FROM order_intents WHERE trade_id=? ORDER BY rowid",
-                (tid,),
-            )
-            intents = {
-                iid: dict(json.loads(payload), _journal_sequence=seq)
-                for seq, iid, payload in await cur.fetchall()
-            }
+            from .live_cash_dex_attribution import intents as validated_intents
+
+            try:
+                _, intents = await validated_intents(d, tid, allow_empty=True)
+            except (ValueError, TypeError, KeyError):
+                return dict(
+                    status="ACCOUNTING_PENDING",
+                    reason="DEX_CEX_INTENT_COLUMNS_CONFLICT",
+                )
             from .dex_cex_backend import rebuild, snapshot
 
             if snapshot(intents) != obs["cex"].get("journal_snapshot"):

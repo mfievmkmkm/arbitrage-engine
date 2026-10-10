@@ -52,7 +52,7 @@ class Reader:
             # Require replacement depth rather than an unexecutable top-of-book mark.
             price, worst = executable(book["asks"], float(native))
             valuation = native * dec(price)
-        return dict(
+        result = dict(
             verified=True,
             trade_id=observation["trade_id"],
             venue=plan.venue,
@@ -63,6 +63,7 @@ class Reader:
             funding=str(funding.amount),
             funding_covered_until=funding.covered_until,
             funding_events=list(funding.events),
+            funding_verified_at=self.clock(),
             quote_usdt_identity_evidence=dict(
                 chain_id=1, token=USDT_MAINNET, decimals=6
             ),
@@ -75,5 +76,10 @@ class Reader:
                 book=book,
                 average_price=price,
                 worst_price=worst,
+                market_identity=dict(spot=True, active=True, base="ETH", quote="USDT"),
             ),
         )
+        from .live_cash_dex_attribution import dex_costs
+
+        dex_costs(plan, result, observation["wallet"], closed_at)
+        return result

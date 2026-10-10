@@ -1,8 +1,8 @@
-"""Read-only derivative execution attribution, never an accounting authority.
+"""Read-only cross-strategy execution attribution, never an accounting authority.
 
 Cumulative order-intent fills are counted once. Slippage explains the difference
 from saved public VWAP; it is NOT deducted again from already actual-price NET.
-Unsupported cash/DEX and incomplete legacy journals remain explicitly partial.
+Native spot inventory and DEX gas retain their own units and valuation labels.
 """
 
 import json
@@ -30,12 +30,15 @@ def close(a, b):
     return math.isclose(a, b, rel_tol=1e-8, abs_tol=1e-8)
 
 
-def order_cost(row, proof):
+def order_cost(row, proof, base_currency=None):
     p = json.loads(row["payload"])
     req = SubmitRequest(**json.loads(proof["payload"]))
     e = req.market_evidence
-    if not isinstance(e, dict) or e.get("source") not in SOURCES:
+    spot = isinstance(e, dict) and e.get("source") == "PUBLIC_SPOT_IOC_V1"
+    if not isinstance(e, dict) or (e.get("source") not in SOURCES and not spot):
         raise ValueError("COST_SCOPE_NOT_SUPPORTED")
+    if spot and (not base_currency or not row["venue"].endswith(":spot")):
+        raise ValueError("COST_SPOT_ACCOUNT_SCOPE_INVALID")
     # Historical proofs are checked at their durable claim, not today's clock.
     validate(req, row["venue"], number(proof["ts"]))
     keys = ("trade_id", "venue", "symbol", "side", "qty", "reduce_only", "state")
@@ -68,7 +71,11 @@ def order_cost(row, proof):
         or not terminal(result, req.qty)
     ):
         raise ValueError("COST_ORDER_NOT_SETTLED")
-    if number(p.get("base_fee", 0)) != 0:
+    base_fee = number(p.get("base_fee", 0))
+    if spot:
+        if p.get("base_currency") != base_currency or abs(base_fee) > result.filled:
+            raise ValueError("COST_SPOT_FEE_UNITS_INVALID")
+    elif base_fee != 0 or p.get("base_currency") is not None:
         raise ValueError("COST_BASE_FEE_NOT_SUPPORTED")
     if result.filled > 0 and not result.order_id:
         raise ValueError("COST_ORDER_ID_MISSING")
@@ -94,6 +101,10 @@ def order_cost(row, proof):
         contracts=result.filled,
         contract_size=size,
         base_qty=base,
+        market_type="spot" if spot else "linear_contract",
+        base_fee=base_fee,
+        base_currency=base_currency if spot else None,
+        base_fee_usd=base_fee * (average or 0),
         avg_price=average,
         reference_vwap=reference,
         actual_cashflow=cash,
@@ -118,7 +129,6 @@ async def read(db, limit=100):
         "live_results",
         "order_intents",
         "order_request_evidence",
-        "funding_settlements",
     }
     if not required <= tables:
         return dict(status="NO_DATA", trades=[], orders=[], execution_authority=False)
@@ -140,8 +150,34 @@ async def read(db, limit=100):
             metadata = json.loads(trade["payload"])
             strategy = metadata.get("strategy", "futures_futures")
             item["strategy"] = strategy
+            if strategy in ("spot_futures", "spot_spot", "cex_dex"):
+                if trade["phase"] not in (
+                    "CLOSED_PRIVATE_VERIFIED",
+                    "CLOSED_WITH_INVENTORY",
+                ):
+                    raise ValueError("COST_CYCLE_NOT_FINALIZED")
+                required_scope = {
+                    "spot_futures": {"live_cash_inventory", "funding_settlements"},
+                    "spot_spot": {"live_spot_allocations"},
+                    "cex_dex": {"wallet_tx_intents"},
+                }[strategy]
+                if not required_scope <= tables:
+                    raise ValueError("COST_SCOPE_TABLES_MISSING")
+                from .live_cash_dex_attribution import cash, dex
+
+                values, scoped_orders = await (
+                    dex(db, trade, metadata)
+                    if strategy == "cex_dex"
+                    else cash(db, trade, metadata)
+                )
+                item.update(values, orders=len(scoped_orders))
+                orders.extend(scoped_orders)
+                output.append(item)
+                continue
             if strategy not in ("futures_futures", "funding_arb"):
                 raise ValueError("COST_STRATEGY_NOT_SUPPORTED")
+            if "funding_settlements" not in tables:
+                raise ValueError("COST_SCOPE_TABLES_MISSING")
             async with db.execute(
                 "SELECT * FROM order_intents WHERE trade_id=? ORDER BY rowid LIMIT 20001",
                 (trade["trade_id"],),
@@ -233,6 +269,11 @@ async def read(db, limit=100):
                                 r["reference_cashflow"] for r in details
                             ),
                             adverse_slippage_usd=item["observed_adverse_slippage_usd"],
+                            trading_fees=fees,
+                            gas=0,
+                            safety_reserve=0,
+                            inventory_deficit_charge=0,
+                            slippage_complete=True,
                         )
         except (ValueError, TypeError, KeyError, AttributeError) as error:
             item["reasons"].append(
@@ -246,7 +287,7 @@ async def read(db, limit=100):
         capped=len(trades) > limit,
         execution_authority=False,
         slippage_is_explanatory=True,
-        scope="FUTURES_FUTURES_AND_FUNDING_NATIVE_CUMULATIVE_INTENTS",
+        scope="ALL_FIVE_STRATEGIES_NATIVE_CUMULATIVE_INTENTS_AND_RECEIPTS",
     )
 
 
@@ -264,13 +305,39 @@ def render(report):
     good = [r for r in trades if r["status"] == "RECONCILED"]
     out = [
         "🧾 <b>Фактические расходы LIVE</b>",
-        "Только чтение журнала. Futures/Futures и Funding; cash/DEX — отдельный учёт.",
+        "Только чтение. Все пять стратегий; actual fills, cash inventory и DEX receipts.",
         f"Сверено: {len(good)} / {len(trades)} циклов",
-        f"Комиссии сверенных: {sum(r['fees'] for r in good):.6f} USDT",
+        f"Торговые комиссии: {sum(r.get('trading_fees',r['fees']) for r in good):.6f} USDT",
+        f"Газ · replacement valuation: {sum(r.get('gas',0) for r in good):.6f} USDT",
+        f"Резерв DEX safety: {sum(r.get('safety_reserve',0) for r in good):.6f} USDT",
         f"Funding сверенных: {sum(r['funding'] for r in good):+.6f} USDT",
         f"NET сверенных: {sum(r['net'] for r in good):+.6f} USDT",
         "Slippage объясняет разницу с сохранённым public VWAP и не вычитается из NET повторно.",
+        "DEX gas оплачен в ETH; USDT — оценка замещения, не обмен. Остатки BASE не объявляются private-flat.",
     ]
+    if any(r.get("slippage_complete") is False for r in good):
+        out.append(
+            "Полный wallet slippage не подтверждён; CEX-часть показана отдельно в экспорте."
+        )
+    for strategy in (
+        "futures_futures",
+        "spot_futures",
+        "spot_spot",
+        "funding_arb",
+        "cex_dex",
+    ):
+        scoped = [r for r in good if r.get("strategy") == strategy]
+        if scoped:
+            label = {
+                "futures_futures": "Фьючерсы ↔ Фьючерсы",
+                "spot_futures": "Спот ↔ Фьючерсы",
+                "spot_spot": "Спот ↔ Спот",
+                "funding_arb": "Funding",
+                "cex_dex": "CEX ↔ DEX",
+            }[strategy]
+            out.append(
+                f"{label}: {len(scoped)} · NET {sum(r['net'] for r in scoped):+.6f} USDT"
+            )
     if not trades:
         out.append("Подходящих durable циклов пока нет.")
     for row in trades[:6]:

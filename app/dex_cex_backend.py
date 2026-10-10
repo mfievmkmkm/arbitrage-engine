@@ -26,7 +26,11 @@ def snapshot(intents):
             iid,
             row["_journal_sequence"],
             json.dumps(
-                {k: v for k, v in row.items() if k != "_journal_sequence"},
+                {
+                    k: v
+                    for k, v in row.items()
+                    if k not in ("_journal_sequence", "payload", "updated_at")
+                },
                 sort_keys=True,
             ),
         ]

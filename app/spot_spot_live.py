@@ -376,8 +376,25 @@ class Session(CashSession):
                     return await self._close(
                         tid, p, "SS_ENTRY_PARTIAL", "ENTRY_PARTIAL"
                     )
+                actual_edge = (
+                    sum(flow["cash"].values())
+                    - p.reference
+                    * sum(abs(q) * p.fees[v] for v, q in flow["base"].items())
+                    - p.budget * self.safety / 100
+                )
+                if not math.isfinite(actual_edge) or actual_edge < self.minimum:
+                    await self.store.phase(
+                        tid, "SS_ENTRY_PARTIAL", cash_actual_entry_edge=actual_edge
+                    )
+                    return await self._close(
+                        tid, p, "SS_ENTRY_PARTIAL", "ACTUAL_ENTRY_NET_BELOW_THRESHOLD"
+                    )
                 await self.store.phase(
-                    tid, "SS_OPEN", cashflow=flow, cash_private=proof
+                    tid,
+                    "SS_OPEN",
+                    cashflow=flow,
+                    cash_private=proof,
+                    cash_actual_entry_edge=actual_edge,
                 )
                 return dict(status="OPEN", trade_id=tid, cashflow=flow)
             except (Exception, asyncio.CancelledError) as e:

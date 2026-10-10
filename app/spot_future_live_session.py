@@ -256,23 +256,32 @@ class Session:
                     return await self._close(
                         trade_id, p, "CASH_ENTRY_PARTIAL", "ENTRY_PARTIAL_HEDGE"
                     )
+                actual_edge = (
+                    flow.future_base * flow.future_entry_price
+                    + flow.spot_cash
+                    - flow.quote_fees
+                    - flow.future_base * flow.future_entry_price * p.future_fee_rate
+                    - flow.spot_base * spot.avg_price * p.spot_fee_rate
+                    - p.loss_allowance
+                )
+                if not math.isfinite(actual_edge) or actual_edge < p.minimum_net:
+                    await self.store.phase(
+                        trade_id,
+                        "CASH_ENTRY_PARTIAL",
+                        cash_actual_entry_edge=actual_edge,
+                    )
+                    return await self._close(
+                        trade_id,
+                        p,
+                        "CASH_ENTRY_PARTIAL",
+                        "ACTUAL_ENTRY_NET_BELOW_THRESHOLD",
+                    )
                 await self.store.phase(
                     trade_id,
                     "CASH_OPEN",
                     cashflow=flow.row(),
                     cash_private=proof,
-                    cash_entry_edge=max(
-                        p.minimum_net,
-                        flow.future_base * flow.future_entry_price
-                        + flow.spot_cash
-                        - flow.quote_fees
-                        - 2
-                        * flow.future_base
-                        * flow.future_entry_price
-                        * p.future_fee_rate
-                        - flow.spot_base * spot.avg_price * p.spot_fee_rate
-                        - p.loss_allowance,
-                    ),
+                    cash_entry_edge=actual_edge,
                 )
                 return dict(status="OPEN", trade_id=trade_id, cashflow=flow.row())
             except (Exception, asyncio.CancelledError) as error:

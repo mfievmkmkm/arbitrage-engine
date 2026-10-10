@@ -32,8 +32,15 @@ two confirmed zero fills only, full refreshed account/risk/native admission,
 durable market VWAP proof, separate expiring venue certification and post-fill
 cost checks. A read-only actual derivative costs report reconciles cumulative
 intents, native flows, private funding and closed results, with UI/audit export.
-Resting passive-limit queues and cross-strategy unified cash/DEX attribution
-remain separate scope; existing cash/DEX accounting is not replaced by this report.
+Actual cost attribution now spans all five strategies. Cash native flows,
+BASE fees, held inventory/allocations and mature funding are rechecked; DEX
+receipts, canonical CEX journals, native ETH gas and saved replacement valuation
+are reproduced in a read-only snapshot. DEX wallet slippage remains explicitly
+unattributed rather than assumed zero. Cash actual post-fill NET breaches use
+protective close; the old Spot/Futures minimum-edge clamp is removed.
+Resting passive-limit queues are not enabled: aggressive IOC plus separately
+certified zero-fill market fallback is the selected small-bankroll entry path.
+Queue simulation or future maker execution needs its own evidence and scope.
 Public rates use entry-reference model valuation; actual account income, venue
 mark-price valuation and limit queues still require their own evidence. No
 percentage or file-count substitutes for these checks.

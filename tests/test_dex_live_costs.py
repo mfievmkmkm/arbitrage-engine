@@ -54,7 +54,16 @@ def test_private_costs_and_gas_are_scoped_and_executable(monkeypatch, fault):
                 return Evidence(
                     fault != "immature",
                     -0.01,
-                    (),
+                    (
+                        dict(
+                            venue="bybit",
+                            event_id="offline-income",
+                            symbol=symbol,
+                            ts=until,
+                            amount=-0.01,
+                            source="native_private_income",
+                        ),
+                    ),
                     "IMMATURE" if fault == "immature" else "VERIFIED",
                     until,
                 )

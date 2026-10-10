@@ -2,7 +2,23 @@
 
 Дата: 10 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: рабочий IOC → market и фактические расходы
+## Текущий блок: единый actual NET пяти стратегий и cash post-fill защита
+
+Проверено: **1513 offline-тестов passed**, compileall, импорт `app.main` и `git diff --check`; новый блок добавляет 41 сценарий сверх предыдущих 1472.
+
+Read-only `/live_costs` теперь сверяет все пять стратегий из одного SQLite snapshot. Spot/Futures восстанавливает credited BASE, actual quote fees, fee в активе по цене фактического fill, realized futures cashflow и mature private funding. Funding coverage/window/events сохраняются при atomic result; отдельный `live_cash_inventory` сверяется с owned residual и cost basis. Остаток не называется private-flat и не получает выдуманной положительной оценки.
+
+Spot/Spot воспроизводит по native journal последовательность исполнения и возвращение inventory обеих площадок; private cash/base deltas, baseline allocations и deficit charge должны совпасть с итогом. Комиссия в BASE не списывается второй раз: она уже отражена в количестве актива и конечном cashflow. Изменённые columns/payload, missing quote evidence, UNKNOWN, несогласованный funding или allocation дают PARTIAL без certified NET.
+
+DEX report независимо воспроизводит receipts в nonce order и terminal CEX intents; сверяет frozen wallet/CEX snapshots, wallet balances/native balance и план. ETH gas raw проверяется по native balance debit; USDT replacement valuation воспроизводится по сохранённому executable ETH/USDT book, market identity, depth и временам. Costs reader дополнительно проверяет structured USDT identity, gas valuation и scope/sum/maturity private funding. Actual CEX fees, газ и safety reserve показаны отдельно. DEX NET включает reserve; `net_before_safety_reserve` также доступен в экспорте. Полный wallet slippage не доказан и помечается отсутствующим, а не нулевым; известный CEX delta вынесен отдельно.
+
+Исправлен DEX integration bug: snapshot production Diary содержал SQL wrappers (`payload`, `updated_at`), тогда как finalizer сравнивал payload-only snapshot. Теперь сравнение семантическое, но SQL/payload identity/state/qty дополнительно сверяются внутри result transaction. Согласованное исполнение завершается; изменённое экономическое evidence не может получить credit. Reverted wallet entry без CEX intents остаётся допустимым gas-only accounting, а не зависает из-за пустого derivative journal.
+
+Обе cash стратегии после фактических fills заново рассчитывают convergence NET reserve. Actual entry fees больше не подменяются прогнозом; Spot/Futures больше не поднимает отрицательную оценку до minimum через `max`. Нарушение порога запускает существующий bounded protective close со stage claims, не штатный OPEN. До final private/funding proof это остаётся ACCOUNTING_PENDING. Новый экран доступен также выделенной кнопкой LIVE; русский summary и XLSX/CSV attribution включают пять стратегий.
+
+Работа проверяется только offline fixtures, без реальных аккаунтов, RPC/signing, заявок и переводов. Runtime acceptance не получена автоматически. Resting passive-limit queue не подключается: для микрокапитала основной путь остаётся коротким aggressive IOC и отдельно разрешённым zero-fill market fallback; maker fill/queue probability не объявляются гарантированными. Operational финал всё ещё требует реальной venue/account/wallet certification, длительного Paper/OOS и отдельно принятого micro-canary.
+
+## Предыдущий блок: рабочий IOC → market и фактические расходы
 
 Проверено: **1472 offline-теста passed**, compileall, импорт `app.main` и `git diff --check`.
 

@@ -15,7 +15,7 @@ async def finalize(path, trade_id, plan, expected_flow, proof, funding, now=None
     now = time.time() if now is None else now
     if (
         proof.get("future_flat") is not True
-        or not funding.verified
+        or funding.verified is not True
         or funding.covered_until < plan.closed_at
     ):
         raise ValueError("CASH_RESULT_PROOF_INCOMPLETE")
@@ -155,7 +155,18 @@ async def finalize(path, trade_id, plan, expected_flow, proof, funding, now=None
                 json.dumps(result),
             ),
         )
-        payload.update(result=result, cash_close_proof=proof)
+        payload.update(
+            result=result,
+            cash_close_proof=proof,
+            cash_funding_evidence=dict(
+                verified=True,
+                covered_until=funding.covered_until,
+                window_start=plan.opened_at,
+                window_end=plan.closed_at,
+                amount=funding.amount,
+                events=list(funding.events),
+            ),
+        )
         await d.execute(
             "UPDATE live_trades SET phase=?,updated_at=?,payload=? WHERE trade_id=?",
             (phase, now, json.dumps(payload), trade_id),
