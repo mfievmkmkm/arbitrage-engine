@@ -217,6 +217,27 @@ def test_negative_rates_reverse_payment_sign_without_forecast_substitution():
     assert [e["amount"] for e in r["funding_events"]] == pytest.approx([0.1, -1.1])
 
 
+@pytest.mark.parametrize("kind", ["conflict", "boundary", "identity"])
+def test_unknown_funding_result_retains_witnesses_for_independent_reproduction(kind):
+    p = position(1000.5) if kind == "boundary" else position()
+    rates = windows(p)
+    scenario = Scenario("LAG", 0, 0.5) if kind == "boundary" else BASE
+    if kind == "conflict":
+        extra = copy.deepcopy(rates[1])
+        extra["events"][0]["rate"] += 0.01
+        rates.append(extra)
+    elif kind == "identity":
+        rates[0]["instrument"]["contract_size"] = 0.1
+    r = replay(p, rates=rates, scenario=scenario)
+    assert r["net"] is None and r["rate_windows"]
+    proof = [o["book_evidence"] for o in r["orders"] if "book_evidence" in o]
+    again = simulate(p, BookTape(proof), RateTape(r["rate_windows"], 1060), scenario)
+    assert (
+        again["status"] == r["status"]
+        and again["funding_reason"] == r["funding_reason"]
+    )
+
+
 def test_funding_instrument_must_match_execution_book_metadata():
     data = windows()
     data[0]["instrument"]["contract_size"] = 0.1

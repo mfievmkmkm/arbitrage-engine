@@ -122,6 +122,7 @@ def simulate(position, books, rates, scenario):
                 first = number(position[prefix + "_next"], True)
                 period = number(position[prefix + "_interval"], True) * 3600
                 window = rates.covering(venue, p["symbol"], start, end, first, period)
+                windows.append(window)
                 if any(
                     o["book_evidence"]["instrument"] != window["instrument"]
                     for o in orders
@@ -131,7 +132,6 @@ def simulate(position, books, rates, scenario):
                 reference = math.fsum(
                     o["filled"] * o["price"] for o in entry
                 ) / math.fsum(o["filled"] for o in entry)
-                windows.append(window)
                 for event in window["events"]:
                     stamp = event["reported_ts"]
                     if not start <= stamp <= end:
@@ -169,9 +169,14 @@ def simulate(position, books, rates, scenario):
             ZeroDivisionError,
             OverflowError,
         ) as error:
+            evidence = list(windows)
+            for window in getattr(error, "windows", []):
+                if window not in evidence:
+                    evidence.append(window)
             result.update(
                 status="FUNDING_ACCOUNTING_UNKNOWN",
                 net=None,
+                rate_windows=evidence,
                 funding_reason=(
                     str(error)
                     if isinstance(error, ValueError)

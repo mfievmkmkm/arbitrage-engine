@@ -4,7 +4,7 @@
 
 ## Текущий блок: Funding execution stress, история ставок и время решения
 
-Проверено: **1389 offline-тестов passed**, compileall, импорт `app.main` и `git diff --check`. Новые проверки покрывают partial/late legs, пропущенные/отрицательные начисления, reported/calendar timestamps, ambiguous boundary, rate conflicts/maturity, stale/changed metadata, точные Funding snapshots, retention/rollback, Telegram/export и воспроизведение после очистки tape. Реальные ордера и транзакции не отправлялись.
+Проверено: **1392 offline-теста passed**, compileall, импорт `app.main` и `git diff --check`. Новые проверки покрывают partial/late legs, пропущенные/отрицательные начисления, reported/calendar timestamps, ambiguous boundary, rate conflicts/maturity, stale/changed metadata, точные Funding snapshots, retention/rollback, Telegram/export и воспроизведение успешных и неопределённых результатов после очистки tape. Реальные ордера и транзакции не отправлялись.
 
 Добавлены `/fund_execution` и выделенная кнопка Replay. Три сценария IOC/latency используют реальные записанные публичные стаканы и учитывают объём каждой модельной ноги в момент settled funding. Задержанный вход может пропустить начисление, частичный вход/выход получает только соответствующую долю. Три bounded recovery rounds не восстанавливают использованную snapshot-side depth. При незакрытой экспозиции, missing/conflicting/immature history, metadata changes или совпадении fill/settlement timestamps итоговый NET остаётся неизвестным.
 
@@ -14,7 +14,7 @@ Funding Paper source сохраняет bounded публичные rate windows 
 
 Funding valuation явно использует modeled entry VWAP × actual modeled open exposure × public settled rate; exchange mark-price valuation и фактический доход не доказываются. NET содержит basis, fees, safety, funding и объясняющий adverse execution delta относительно Paper basis, который не вычитается второй раз. Legacy Paper без новых rate windows не получает funding-inclusive stress NET. Source Paper public funding accounting остаётся отдельной моделью; Ledger не получает stress-результаты.
 
-Run/results атомарны и содержат исходную позицию, book evidence и rate windows для повторения после очистки tape. Три новые таблицы входят в XLSX/ZIP audit export. Futures/Futures replay также исправлен: повторный снимок, включая новый received_at при прежнем book timestamp, не возвращает использованную глубину. До реального запуска остаются private account/fee/funding/precision certification, плотная Paper/OOS-история и отдельный micro-canary.
+Run/results атомарны и содержат исходную позицию, book evidence и rate windows для повторения после очистки tape. UNKNOWN сохраняет также конфликтующие rate witnesses, identity evidence и окна при неоднозначном порядке fill/settlement, вместо одной текстовой причины. Три новые таблицы входят в XLSX/ZIP audit export. Futures/Futures replay также исправлен: повторный снимок, включая новый received_at при прежнем book timestamp, не возвращает использованную глубину. До реального запуска остаются private account/fee/funding/precision certification, плотная Paper/OOS-история и отдельный micro-canary.
 
 ## Предыдущий блок: последовательный stress Spot/Futures и Spot/Spot
 

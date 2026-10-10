@@ -15,6 +15,12 @@ CREATE INDEX IF NOT EXISTS funding_rate_window_route ON funding_rate_windows(ven
 MODE = "PUBLIC_FUNDING_RATE_WINDOW_MODEL"
 
 
+class EvidenceError(ValueError):
+    def __init__(self, reason, windows):
+        super().__init__(reason)
+        self.windows = windows
+
+
 def finite(value):
     if (
         isinstance(value, bool)
@@ -222,6 +228,7 @@ class Tape:
         # Check all overlapping evidence, including shorter windows. A newer
         # conflicting rate cannot silently replace a previously recorded rate.
         events, identity = {}, eligible[0]["instrument"]
+        witnesses = {}
         for w in values:
             if w["covered_until"] < start or w["opened_at"] > end:
                 continue
@@ -230,11 +237,17 @@ class Tape:
                 or w["interval_seconds"] != period
                 or (w["first_settlement"] - first) % period != 0
             ):
-                raise ValueError("FUNDING_HISTORY_IDENTITY_CONFLICT")
+                raise EvidenceError(
+                    "FUNDING_HISTORY_IDENTITY_CONFLICT", [eligible[0], w]
+                )
             for e in w["events"]:
                 if start - 1 <= e["ts"] <= end + 1:
                     value = (e["rate"], e["reported_ts"])
                     if e["ts"] in events and events[e["ts"]] != value:
-                        raise ValueError("FUNDING_HISTORY_CONFLICT")
+                        raise EvidenceError(
+                            "FUNDING_HISTORY_CONFLICT",
+                            [eligible[0], witnesses[e["ts"]], w],
+                        )
                     events[e["ts"]] = value
+                    witnesses[e["ts"]] = w
         return min(eligible, key=lambda w: (w["observed_at"], w["covered_until"]))
