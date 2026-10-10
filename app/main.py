@@ -116,6 +116,7 @@ from .cex_dex_paper_view import render as render_dex_paper
 from .dex_execution_stress import build as build_dex_stress, render as render_dex_stress
 from .dex_wallet_observer import render as render_wallet
 from .project_readiness import build as build_readiness, render as render_readiness
+from .book_priority_runtime import live as live_book_priorities
 from .book_history import Store as BookHistory
 from .stream_book_recorder import Recorder as StreamBookRecorder
 from .execution_book_replay import (
@@ -1265,6 +1266,11 @@ async def main():
 
         async def monitor_update(summary, new_incidents):
             global live_trades
+            live_book_priorities(
+                await durable.active(),
+                scanner.clients,
+                getattr(secondary, "clients", {}),
+            )
             live_trades = [RuntimeTrade(**row) for row in summary["runtime_trades"]]
             await live_exit_coordinator.process(summary)
             await live_residual_coordinator.process(summary)

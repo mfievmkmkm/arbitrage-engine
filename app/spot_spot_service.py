@@ -1,4 +1,5 @@
 from .spot_spot_source import Source
+from .book_priority_runtime import publish as book_priorities
 
 
 class Service:
@@ -29,6 +30,18 @@ class Service:
             self.i = (self.i + len(xs)) % len(self.symbols)
         self.source.watch_routes = self.paper.watch_routes() if self.paper else []
         xs = list(dict.fromkeys(xs + [p["symbol"] for p in self.source.watch_routes]))
+        required = {
+            v: [
+                p["symbol"]
+                for p in self.source.watch_routes
+                if v in (p["buy"], p["sell"])
+            ]
+            for v in self.source.clients
+        }
+        candidates = {
+            v: xs if self.source.allowed_venue(v) else [] for v in self.source.clients
+        }
+        book_priorities(self.source.clients, "spot_spot_scanner", required, candidates)
         out = []
         for s in xs:
             out.extend(await self.source.scan_symbol(s))

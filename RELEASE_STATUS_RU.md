@@ -2,7 +2,15 @@
 
 Дата: 10 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: автоматический CEX/DEX runtime
+## Текущий блок: динамические приоритеты публичных стаканов
+
+Проверено: 1275 offline-тестов, compileall, импорт main и diff-check. Новые сценарии проверяют cap во время ротации, конкурирующие owners, изменившийся universe, uncertain/negative unsubscribe, stale cache, паузу сканера, durable pins и отмену shutdown.
+
+Общий transport manager выбирает bounded набор подписок по владельцам: durable LIVE (включая UNKNOWN/recovery) → открытые Paper → текущие scanner batches. Кандидаты Futures/Futures, Spot/Futures, Spot/Spot и Funding делят места по очереди; один модуль не занимает весь cap первым длинным списком. LIVE/Paper demand сохраняется на паузе, закрытые позиции освобождают приоритет при следующей сверке.
+
+Ротация происходит только при явном CCXT `has.unWatchOrderBook=true` и успешно завершённом unwatch. Отмена локального watcher сама по себе не освобождает сетевое место. Timeout, отрицательный ответ и ошибка сохраняют slot и REST fallback; неподдерживаемые площадки сохраняют bounded sticky subscriptions. Старый cache удаляется, новая пара требует самостоятельный свежий снимок. Повторные updates во время снятия подписки применяют последний universe; close отменяет все задачи. В Telegram «Система» видны rotations и retained slots. Реальные биржевые streams не подключались; metadata capability не заменяет venue certification.
+
+## Предыдущий блок: автоматический CEX/DEX runtime
 
 Проверено: 1255 тестов, compileall, импорт main и diff-check. Новые offline-сценарии покрывают configured bootstrap, одноразовые кандидаты без calldata в журнале, hedge, restart unwind, UNKNOWN/stale holds, повторную проверку target, funding gaps/NET stop/time stop и конкурентную сверку receipt.
 
@@ -215,7 +223,7 @@ Spot/Futures public native-план **подключён к scanner, сохра�
 ## До целевого финала ещё требуется
 
 - Production CEX lifecycle: завершить проверку площадок и реального IOC-входа на выбранных аккаунтах. Production-entry admission подключён. Опциональный write-side автовыход и известный one-leg exit recovery со свежими reference quotes подключены к main; UNKNOWN и остатки без совпадающих terminal/private доказательств требуют дальнейшей сверки; подтверждённые остатки закрываются отдельным bounded координатором. Непрерывный read-only lookup, fresh snapshots, восстановление и exit-наблюдение уже подключены; разрешения на автоматическую торговлю они не дают.
-- Опциональный публичный WS-транспорт подключён; private order streams подключены; ещё нужны certification snapshot/delta/sequence recovery каждой площадки и динамический приоритет подписок на весь меняющийся universe. Текущий sticky cap переводит overflow-пары на REST. Реальные подключения и плотная выборка в этой сессии не проверялись.
+- Публичный WS-транспорт, private order streams и динамические bounded приоритеты подписок подключены. Ещё нужны certification snapshot/delta/sequence recovery каждой площадки. Unsupported/uncertain unsubscribe удерживает cap и переводит overflow на REST. Реальные подключения и плотная выборка в этой сессии не проверялись.
 - Подтвердить полноту приватной funding history на каждой площадке и задержки settlement; завершить fee/slippage attribution и реальные account acceptance. Открытый funding до текущего времени остаётся незрелым и не разрешает target/trailing по подтверждённому NET.
 - Spot/Futures replay уже работает по сохранённым model marks с purged train/test. Ещё нужны полноценная симуляция latency/fills, достаточная выборка, сквозное подтверждение Spot/Spot fills/latency и валидация Funding Paper на длительной записи публичных ставок и стаканов.
 - CEX/DEX сопоставление контрактов, свежие gas-цены и исполнимые маршруты с min-received, tax/network evidence, simulation и отдельным failure acceptance. Индикативная price-заявка не заменяет эти проверки.

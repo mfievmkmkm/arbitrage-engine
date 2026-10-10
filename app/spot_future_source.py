@@ -3,6 +3,7 @@ from .contract_book import to_base_levels
 from .spot_future_symbols import normalize
 from .spot_future_scanner import evaluate
 from .public_books import normalize as normalize_book
+from .book_priority_runtime import publish as book_priorities
 
 
 class SpotFutureSource:
@@ -97,6 +98,7 @@ class SpotFutureSource:
         for v, c in self.clients.items():
             pairs = self.pairs.get(v, [])
             if not pairs:
+                book_priorities({v: c}, "spot_futures_scanner")
                 continue
             start = self.cursor.get(v, 0)
             n = min(limit_per_venue, len(pairs))
@@ -110,6 +112,16 @@ class SpotFutureSource:
                 p
                 for p in pairs
                 if (v, p.base) in self.watch_pairs and p not in selected
+            )
+            required = [
+                s
+                for p in pairs
+                if (v, p.base) in self.watch_pairs
+                for s in (p.spot_symbol, p.future_symbol)
+            ]
+            candidates = [s for p in selected for s in (p.spot_symbol, p.future_symbol)]
+            book_priorities(
+                {v: c}, "spot_futures_scanner", {v: required}, {v: candidates}
             )
             jobs.extend(self._one(v, c, p) for p in selected)
         rows = await asyncio.gather(*jobs) if jobs else []

@@ -13,6 +13,7 @@ from .instruments import compatible
 from .contract_book import to_base_levels
 from .spot_future_vwap import vwap
 from .native_order_plan import prepare_pair
+from .book_priority_runtime import publish as book_priorities
 
 FEE_BPS = {
     "binance": 5.0,
@@ -171,6 +172,23 @@ class Scanner:
                 )
             )
         )
+        required = {
+            v: [
+                s
+                for s, a, b in sorted(self.watch_routes)
+                if v in (a, b) and s in self.symbols[v]
+            ]
+            for v in self.clients
+        }
+        candidates = {
+            v: (
+                [s for s in symbols if s in self.symbols[v]]
+                if not self.paused and v in getattr(self, "scan_enabled", self.clients)
+                else []
+            )
+            for v in self.clients
+        }
+        book_priorities(self.clients, "futures_scanner", required, candidates)
         sem = asyncio.Semaphore(self.concurrency)
 
         async def fetch(name, symbol):

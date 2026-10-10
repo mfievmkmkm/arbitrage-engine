@@ -1,3 +1,6 @@
+from .book_priority_runtime import publish as book_priorities
+
+
 class CycleService:
     def __init__(self, service, symbols, batch=5, paper=None):
         self.service = service
@@ -15,6 +18,14 @@ class CycleService:
                 for j in range(min(self.batch, len(self.symbols)))
             ]
             self.i = (self.i + len(xs)) % len(self.symbols)
+        clients = getattr(getattr(self.service, "fs", None), "clients", {})
+        positions = getattr(self.paper, "positions", {}) if self.paper else {}
+        required = {
+            v: [p["symbol"] for p in positions.values() if v in (p["buy"], p["sell"])]
+            for v in clients
+        }
+        candidates = {v: xs if self.service.allowed_venue(v) else [] for v in clients}
+        book_priorities(clients, "funding_scanner", required, candidates)
         out = []
         for s in xs:
             for x in await self.service.scan(s):

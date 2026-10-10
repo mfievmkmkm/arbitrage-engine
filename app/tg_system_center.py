@@ -31,6 +31,7 @@ def render(scanner, runtime):
                 f"Подписок: {sum(s['subscribed'] for s in statuses)} • свежих: {sum(s['fresh'] for s in statuses)}",
                 f"Чтения WS / REST: {sum(s.get('ws_reads', 0) for s in statuses)} / {sum(s.get('rest_reads', 0) for s in statuses)}",
                 f"Потоков с ошибкой: {sum(s['errors'] for s in statuses)}",
+                f"Смен подписок: {sum(s.get('rotated', 0) for s in statuses)} • удержано при неопределённом снятии: {sum(s.get('retained', 0) for s in statuses)}",
             ]
         )
     recorder = getattr(scanner, "book_recorder", None)
