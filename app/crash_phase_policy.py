@@ -1,0 +1,18 @@
+from dataclasses import dataclass
+@dataclass(frozen=True)
+class CrashPoint:
+ phase:str
+ action:str
+def decide(phase):
+ m={
+ "PRE_SUBMIT":"RESCAN",
+ "INTENTS_PERSISTED":"RECONCILE_ORDERS",
+ "ENTRY_SUBMITTED":"RECONCILE_ORDERS",
+ "ENTRY_FILLED":"VERIFY_PRIVATE",
+ "HEDGED":"MONITOR_POSITION",
+ "EXIT_INTENTS_PERSISTED":"RECONCILE_ORDERS",
+ "EXIT_SUBMITTED":"RECONCILE_ORDERS",
+ "EXIT_FILLED":"VERIFY_PRIVATE_FLAT",
+ "CLOSED_VERIFIED":"FINALIZE_DIARY",
+ }
+ return CrashPoint(phase,m.get(phase,"HALT_UNKNOWN_PHASE"))

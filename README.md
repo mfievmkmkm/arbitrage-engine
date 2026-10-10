@@ -1,23 +1,168 @@
-# Arbitrage Engine — Discovery MVP
+# Arbitrage Engine
 
-Русскоязычный Telegram-бот для наблюдения за межбиржевыми фьючерсными спредами. **Только публичные котировки и бумажное наблюдение. Реальные ордера не отправляются.**
+Русскоязычный Telegram-интерфейс исследования межбиржевого арбитража.
+Рабочая версия находится в **`phase-2-discovery`**; `main` содержит старый Discovery MVP.
 
-## Быстрый запуск
+Текущий этап: интегрированный Discovery/Paper/Replay. **Автоматическая реальная торговля и AUTO ещё не выпущены.** Фактические возможности и незавершённые пункты описаны в [RELEASE_STATUS_RU.md](RELEASE_STATUS_RU.md).
 
-1. Python 3.11+; `pip install -r requirements.txt`.
-2. Скопировать `.env.example` в `.env`, заполнить `BOT_TOKEN` и `ADMIN_ID`.
-3. `python -m app.main`.
+## Работающий запуск
 
-Сканер опрашивает публичные фьючерсные стаканы через CCXT на выбранных биржах. Пары сопоставляются по unified symbol; ограничение: одинаковый тикер не гарантирует идентичность базового актива, поэтому торговля автоматически отключена. Сигналы — **наблюдаемые оценки**, а не подтверждённые арбитражные сделки.
+Последний программный блок: `/walk_forward` (кнопка в Replay) выполняет несколько
+последовательных purged train/test периодов для всех пяти стратегий. Каждый
+период выбирает правила только из завершённой прошлой истории; test позиции не
+повторяются между периодами, одинаковое время открытия не разделяется.
+Неполные/censored/limited периоды не становятся успешным отчётом. Параметры и
+LIVE acceptance не меняются. Подробные периоды включены в XLSX/CSV export.
 
-## Команды
-`/start` — меню; `/status` — состояние; `/top` — лучшие наблюдения; `/diary` — дневник; `/exchanges` — биржи; `/pause`, `/resume` — сканер (только администратор).
+Новые DEX firm-quotes сохраняют expected-price reference с native decimals и
+digest. Actual receipt сравнивается с ожидаемой ценой: adverse и favorable
+отклонения показаны отдельно и не списываются второй раз из cashflow NET.
+Exact-out `maxSellAmount` не подменяет ожидаемый `sellAmount`; если ожидаемый
+input отсутствует, атрибуция остаётся неполной. Legacy записи не «исправляются»
+выдуманными reference.
 
-## Границы MVP
-- Публичные REST-данные, не low-latency WebSocket; стаканы разных площадок получены не атомарно. Проверка возраста данных обязательна.
-- `net_edge` — консервативная оценка **при гипотетическом полном схождении**, не текущая или гарантированная прибыль. Funding не включён, пока не известны точные ставки и сроки.
-- Не симулируем гарантированные fills и не выдаём историческую прибыль без replay tick/order-book данных.
-- Нет API-ключей бирж, DEX, реальных сделок, автоматического входа или AI-торговли. Эти этапы добавляются после проверки корректности сканера и накопления дневника.
+Добавлены локальные `app.database_maintenance` (WAL-aware backup, verify,
+non-overwriting inspection recovery copy) и `app.retention` (dry-run по
+умолчанию, backup-before-prune). Финансовые журналы не очищаются по возрасту;
+изменённые после backup наблюдения сохраняются. Восстановленная копия блокирует
+запуск runtime до отдельной операторской сверки — она не является разрешением
+переотправить старые заявки или nonce. Домашняя последовательность проверки:
+[PRELAUNCH_CHECKLIST_RU.md](PRELAUNCH_CHECKLIST_RU.md). Актуальная сверка исходной
+концепции: [ORIGINAL_DESIGN_AUDIT.md](ORIGINAL_DESIGN_AUDIT.md).
 
-## Безопасность
-При банке $40–50 реальные сделки могут быть экономически невыгодны из-за минимальных ордеров, комиссий и риска одной незахеджированной ноги. Начинаем с наблюдения. `ADMIN_ID` обязателен, чтобы данные не рассылались посторонним. Никогда не коммитить `.env` и приватные ключи.
+`/fund_execution` моделирует IOC/latency для Funding с начислениями на объём каждой ноги, открытый в reported settlement timestamp. История публичных ставок сохраняется из существующих ответов с календарём, зрелостью и coverage; Funding quote отдельно записывает свои base-unit стаканы. Время решения отделено от времени рынка. Непокрытое/противоречивое начисление или незакрытый остаток оставляют итоговый NET неизвестным. Расчёт по entry VWAP — публичная модель, не account income. Run/results и их исходные доказательства входят в audit export; Ledger и LIVE acceptance не меняются.
+
+`/sf_execution` и `/ss_execution` (кнопки в Replay) моделируют последовательные IOC по сохранённым REST/WS-стаканам: задержки, частичные fills, максимум три recovery rounds. Spot/Spot использует подтверждённые в Paper заранее размещённые запасы и отдельные USDT-остатки; повторный снимок не восстанавливает уже использованную глубину. Незакрытые остатки не получают NET. Результаты и исходные book evidence сохраняются атомарно и входят в audit export. Комиссии — фиксированная Paper-модель в quote units, funding исключён; native precision, приватные fills, borrowing и реальная доступность средств не сертифицируются этой проверкой. Старые Spot/Spot позиции без сохранённого inventory evidence исключаются.
+
+`app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, Spot/Spot scanner с сохраняемыми виртуальными запасами и Funding scanner с сохраняемым Paper. Для DEX доступны опциональные 0x research/simulation и отдельно настроенный LIVE runtime с изолированным signer и scoped acceptance.
+
+LIVE Spot/Spot и Funding зарегистрированы в основном запуске с отдельным account acceptance. Spot/Spot исполняет inventory-backed cash round trip и bounded explicit recovery; Funding использует общий derivative lifecycle с собственным горизонтом и reserve фактических расходов. Команды: `/ss_live`, `/ss_checks`, `/funding_live`, `/funding_checks`. CEX/DEX поддерживает firm simulation, native hedge, сохраняемый Paper/Replay, sequential stress и настроенный автоматический wallet/CEX runtime. Реальная сертификация аккаунтов, кошелька и длительная OOS-история остаются обязательными. Подробности: [REMAINING_LIVE_RUNBOOK_RU.md](REMAINING_LIVE_RUNBOOK_RU.md).
+
+
+Telegram: `/start`, `/top`, `/paper`, `/funding_paper`, `/fund_replay`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/execution_replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_checks`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
+
+Основной `/replay` использует проверенные Paper marks и purged train/test. `/execution_replay` проверяет задержки, partial fills и закрытие остатка по записанным публичным REST-стаканам. Незавершённое исполнение не получает итоговый NET. Это offline-модель IOC/taker, а не реальные fills; funding из этой проверки исключён, результат не меняет капитал.
+
+Futures/Futures получает read-only native-план: одинаковая экспозиция двух ног, CCXT-округление количества/цены и проверка опубликованных лимитов. Неизвестные параметры блокируют новые Paper-входы, существующие позиции продолжают наблюдаться. Публичная проверка не подтверждает права аккаунта или готовность LIVE.
+
+Spot/Futures scanner теперь также сохраняет отдельный публичный native-план: gross-спот, ожидаемый актив после base-комиссии, объём фьючерсного хеджа и незахеджированный остаток. Telegram показывает разные единицы двух ног. Обратный short-spot маршрут не получает исполнимого плана без borrowing.
+
+## Новый контур Spot/Futures — граница подключения
+
+`spot_future_live_preflight.Admission` проверяет реальные read-only балансы, account fees, one-way, funding calendar/history capability, native minimums, свежую глубину и консервативный NET. Прогноз funding income не зачисляется. Для общего USDT-кошелька требуется запас обеих ног, а не двойное использование одного баланса.
+
+`spot_future_live_session.Session` реализует последовательный forward-вход: сначала terminal spot IOC, затем свежий native hedge на **фактически зачисленный** актив. Непригодный/нулевой/частичный hedge ведёт к защитному выходу; UNKNOWN запрещает слепое закрытие и повтор. SQLite резервирует общую ёмкость с Futures/Futures. Восстановление read-only; отдельный явно вызванный recovery использует новые stage IDs и максимум 3 раунда.
+
+Выход закрывает derivative reduce-only, затем продаёт только принадлежащий сделке спот с резервом base-комиссии. Итог требует terminal журнала, совпадающих private-остатков и зрелой приватной funding history. Малый непродаваемый остаток сохраняется в `live_cash_inventory` / `CLOSED_WITH_INVENTORY`: это **не flat**. Его стоимость уже полностью удержана из cash NET; рыночная переоценка не добавляет прибыль. Лимиты held cost: 0.05 USD на сделку, 0.5 USD суммарно. Итог, inventory, funding attribution и события записываются одной транзакцией, ровно один раз. Base-fee USD attribution использует фактическую цену соответствующего spot fill без повторного списания комиссии. Экспорт включает отдельную таблицу inventory.
+
+**Этот контур зарегистрирован в `app.main`**: отдельные private clients с `defaultType=spot`, scanner row hook под общим monitor lock, account admission, общий ownership-aware monitor, dynamic NET/target/trailing/time-stop, отдельная exit authority, финальный funding/result и уведомления. Futures/Futures monitor не пытается восстановить спотовую ногу как derivative RuntimeTrade.
+
+`/sf_live` и `/sf_checks` показывают отдельный LIVE-контур, read-only preflight, активные циклы и учёт оставшегося актива. Залитые кнопки закрытия и явного bounded recovery повторно проверяют authority и journal/private truth. После устранения monitor-инцидента `/live_clear` может снять только monitor kill при свежей чистой сверке; STOP остаётся и снимается отдельным действием. Stale/unknown/private mismatch не разрешают снятие блокировки.
+
+Новые SF-входы требуют общих `LIVE_ENABLED`/`LIVE_ENTRY_ENABLED`, `LIVE_SPOT_FUTURES_ENABLED`, выбранной scan-площадки из `LIVE_EXIT_VENUES`, работающего derivative private stream, no-withdraw attestation и **дополнительных** `strategies.spot_futures.venues.<venue>` checks из шаблона acceptance. Futures/Futures acceptance сама по себе не разрешает Spot/Futures. Выключение новых SF-входов не выключает наблюдение существующего цикла и отдельно разрешённый выход. Существующая торговая конфигурация не переписывается. Offline-тесты не заменяют account/canary acceptance; реальные заявки этой сессией не отправлялись.
+
+Опциональный IOC → market fallback в execution flow выключен по умолчанию и не подключён к основному боту: он допускается только после двух terminal zero-fill ответов, свежего native-плана и повторной проверки NET. UNKNOWN и partial fills не разрешают повторную отправку.
+
+Аварийное восстановление подтверждает terminal-состояние дополнительной заявки. Частичные recovery fills, средние цены и комиссии сохраняются в общем результате даже при неудачном закрытии. Округлённый остаток не объявляется полностью закрытым; неизвестные размеры контрактов и некорректные приватные позиции блокируют отправку. Приватное закрытие через SafeExecutor использует durable intent вместо прямой отправки.
+
+Опциональный `recovery_market.Reader` готовит market reference по объёму контрактов: строгие native limits, корректный uncrossed стакан, полная глубина, возраст до 1.5 секунды, worst-level slippage до 0.2%. Без exchange timestamp возраст отсчитывается от начала REST-запроса. Стакан, времена, размер контракта и request сохраняются атомарно с intent и входят в `/export`; свежесть и gate проверяются повторно после записи. Поддерживается подготовка single-leg recovery, приватного reduce-only закрытия и обеих ног защитного выхода. Если одна из двух котировок не проверена, отправка обеих блокируется.
+
+При фактическом adverse slippage выше 0.2% сохраняются реальные fills, а flow возвращает STOP-причину; durable session сохраняет hold, read-only monitor фиксирует incident. Это не rollback исполненного ордера. Дооткрытие `COMPLETE` в quote-backed recovery запрещено до повторного расчёта NET; котировка закрытия не подтверждает выгодность нового входа. Reader подключён к write-side входу и выходу в `app.main`; права аккаунта и биржевые reduceOnly-семантики требуют отдельной проверки. Market recovery requests без reader остаются заблокированы native-guard из-за отсутствующей reference price.
+
+`recovery_assessment.assess` сравнивает quote-оценку закрытия лишнего объёма с моделью дооткрытия: учитывает уже уплаченные комиссии, дополнительный taker-вход, полный будущий выход, funding-cost allowance, отдельный slippage reserve и safety buffer. Проверяются и общий NET, и дополнительный NET недостающей части: прибыль уже совпавшего объёма не скрывает плохое дооткрытие. Модель показывает остаточный спред, минимальную долю сжатия для безубыточности и quote-NET немедленного выхода. Capture 50% по умолчанию — сценарное допущение, не прогноз или гарантия прибыли.
+
+Assessment всегда `release_authorized=False`. В опциональном quote-backed entry flow исполнение ограничено reduce-only сокращением лишнего объёма даже при рекомендации COMPLETE. Actual reduction gross, доля исходной комиссии, новая комиссия и остаток обеих ног сохраняются в durable payload и отображаются в read-only Telegram-карточке. Это результат сокращения без funding, а не итог всей сделки. Новый runtime-вход после сокращения не подтверждается автоматически: нужны private-сверка и учёт оставшейся позиции.
+
+Read-only monitor восстанавливает уменьшенную пару по terminal entry/recovery fills и совпадающему private-остатку. Runtime переносит все исходные entry fees, realized recovery gross и recovery fees; дополнительный результат не зачисляется отдельно в Ledger. Mark и итоговый выход учитывают его один раз. Итог после private-flat проверяется по полным денежным потокам обеих ног, включая закрытый ранее лишний объём; funding нужен за весь исходный период. Поддержан и полностью закрытый односторонний вход без выдуманной парной позиции. ROI уменьшенной сделки использует исходный максимальный notional реально исполненной ноги, а не уменьшенный остаток.
+
+Сохранённые recovery-числа сверяются с intent history. UNKNOWN, дубликаты, overfill, неверное направление, неизвестные единицы/расходы и несовпадающий private-остаток блокируют восстановление. Zero-fill с неизвестной/ненулевой комиссией не списывается как бесплатный abort. Цель выхода уменьшенной пары пересчитывается по её объёму и полным расходам только при проверенных fees/funding; это ceiling-модель полного схождения, не гарантия дохода. STOP остаётся включённым после восстановления; автоматического разрешения торговли нет.
+
+Стаканы записываются в основном сканере с временами котировки и получения. По умолчанию хранятся до 200 000 строк / 72 часов; настройка `RECORD_PUBLIC_BOOKS`, `BOOK_HISTORY_MAX_ROWS`, `BOOK_HISTORY_HOURS` в `.env.example`. Использованные доказательства сохраняются внутри результатов исполнения.
+
+В `/export` формируются XLSX и ZIP с CSV-таблицами и JSON-входом для анализа. Replay выбирает параметры на train и отдельно показывает отложенную выборку; параметры автоматически не меняются.
+
+## Опциональный вход IOC → market и фактические расходы
+
+`LIVE_ENTRY_MARKET_FALLBACK=true` подключает резервный market-вход Futures/Futures только после двух подтверждённых terminal zero-fill IOC. Нужны обычные LIVE/entry разрешения и отдельные strict `hybrid.venues.<venue>` checks из `live_acceptance.example.json`, с TTL до 24 часов. До market повторно проверяются private-flat, margin, fees/funding, realized risk, native size и executable depth. Возраст quote ≤1.5s, book slippage ≤0.2%, исходный размер не увеличивается. UNKNOWN и partial IOC не переотправляются. Market не гарантирует цену; actual breach сохраняет reconciliation/STOP либо защитный reduce-only выход. Passive resting queue этим путём не моделируется; Funding/cash/DEX сохраняют собственное исполнение.
+
+`/live_costs` (выделенная кнопка в LIVE и анализе) показывает actual расходы и NET всех пяти стратегий. Cash flows, комиссия в BASE, owned inventory/allocations и private funding сверяются по native journals. DEX проверяет receipts/CEX snapshots и сохранённую executable оценку ETH gas; trading fees, gas replacement valuation и safety reserve разделены. Полный wallet slippage пока не атрибутирован и явно не подменяется нулём. Только сведённый закрытый цикл получает reconciled NET; missing/conflicting/legacy proofs дают PARTIAL. Slippage к public VWAP не вычитается повторно из actual NET. Два derived листа доступны в `/export` из того же read snapshot; отчёт не меняет capital/acceptance.
+
+После fills обе cash стратегии повторно проверяют NET с actual fees и резервом выхода. Если допустимый запас утрачен, используется штатное protective close и accounting/private proof, а не OPEN с искусственно повышенной оценкой дохода. Остаток BASE не называется private-flat и не получает положительной оценки в NET. Для микрокапитала выбран aggressive IOC + отдельно сертифицированный zero-fill fallback; passive maker очередь не включается и не считается гарантированным fill.
+
+## Исполнение выхода Futures/Futures
+
+Write-side координатор выхода подключён к обновлениям monitor в main. Он использует TARGET_CAPTURE/NET_TRAILING/NET_STOP/TIME_STOP, атомарно резервирует EXIT_SUBMITTING в SQLite, получает свежие reference books для обеих ног и отправляет reduce-only MARKET через SafeExecutor. Для известного остатка одной ноги применяется существующий recovery. Подтверждённые частичные остатки обеих ног передаются отдельному residual-координатору; неизвестные заявки, ошибки и неподтверждённые остатки сохраняют фазу/STOP для сверки. Автоматического повторного выхода после reservation нет.
+
+Закрытие по fills не объявляется private-flat и не зачисляет результат. Наблюдатель отдельно проверяет terminal intents, private-flat и историческое funding, затем атомарно фиксирует полный итог. Его обновление marks не может вернуть одновременно зарезервированный выход в OPEN.
+
+Исполнение требует явно заданных `LIVE_ENABLED=true`, `LIVE_EXIT_VENUES` для обеих площадок, снятого оператором STOP, отсутствия kill-блокировок и свежей согласованной private/market-сверки. Значения по умолчанию — наблюдение. Список площадок — разрешение записи, **не автоматическая сертификация** reduceOnly/one-way/account режима; его задают только после проверки площадок. Конфигурация автовыхода не включает новые входы. Telegram отдельно показывает настроенный автовыход. В этой сессии ключи и реальные заявки не использовались.
+
+## Подтверждённые остатки выхода
+
+`live_residual_dispatch.Coordinator` подключён к main после координатора выхода. Он работает только с EXIT_SUBMITTING без hold, завершённой первичной отправкой и terminal intent обеих исходных exit-ног. Сверяются весь денежный поток входа/выхода, RuntimeTrade, отсутствие чужих позиций/работающих ордеров и точный native-остаток приватного аккаунта. Несогласованные единицы, side, fees, price, дубли exchange order ID и UNKNOWN не разрешают отправку.
+
+Перед заявками атомарно сохраняется отдельная round reservation с fingerprint ордерной истории. История перепроверяется в той же SQLite-транзакции; после записи private snapshot читается заново. Fresh recovery quotes и SafeExecutor проверяют каждую reduce-only заявку перед отправкой. У каждой попытки свои client IDs. Повтор уже claimed fingerprint запрещён, включая crash до создания intent. Следующая попытка возможна только после terminal обеих заявок предыдущей и фактического прогресса fills; максимум три раунда. Нулевой прогресс, превышение лимита, actual slippage, неизвестная отправка и прерывание сохраняют hold/STOP. Нет автоматического снятия hold или kill-switch.
+
+Если terminal fills уже подтверждены, а REST-позиции временно запаздывают, monitor ждёт согласования максимум 30 секунд после завершённой отправки. До совпадения данных residual-координатор не отправляет новые заявки, flat/PnL не объявляются. После таймаута или при side/scope/units/UNKNOWN конфликте сохраняется STOP.
+
+Residual-координатор не объявляет private-flat и не записывает PnL: это делает monitor после свежей сверки, terminal cashflow и funding coverage. Минимальные ненулевые объёмы не округляются в flat; NaN/Infinity, bool и отсутствие списка позиций не подтверждают нулевую экспозицию. Для количества применяются относительные допуски, без абсолютного порога, превращающего малый working order в исполненный.
+
+`/live_checks` и кнопка «Проверка аккаунтов и NET» вызывают отдельный read-only preview даже при выключенной торговле. Проверяются доступные private/public данные и расчётные затраты; reservation, заявки, снятие STOP и автоматическое release acceptance отсутствуют. Preview не подтверждает реальные fills или прибыльность. Кнопка «Снять STOP» — отдельное явное действие; устаревшая/будущая/неполная сверка и active kill-switch его запрещают.
+
+Защитный выход после входа использует отдельное разрешение на reduce-only закрытие. Потеря entry acceptance/private stream не заменяет exit authority; STOP, kill-switch, заданные exit venues и свежие котировки остаются обязательными. Ни одна проверка не включает торговлю автоматически.
+
+## Исполнение входа Futures/Futures
+
+Сканер связан с durable IOC-входом через `live_entry_dispatch.Coordinator`. Перед резервированием единственного места проверяются свежие private snapshots, отсутствие позиций/работающих ордеров на выбранных аккаунтах, USDT free margin, one-way, комиссии аккаунта и funding. Стаканы запрашиваются после account-проверок: native объёмы обеих ног совпадают, полная глубина и IOC-лимиты входят в атомарно сохраняемые доказательства. Gate и возраст котировок проверяются повторно перед отправкой. Реальный ответ за пределами лимита остаётся UNKNOWN до сверки.
+
+Бюджет одной ноги ограничен меньшим из заданного notional, 5 USD и 10% восстановленного LIVE-капитала. Дневной realized loss 2% запрещает следующий вход. На каждой площадке требуется свободный баланс не менее 120% бюджета ноги; изменение leverage и position mode не производится. Работает один durable цикл одновременно, включая recovery/UNKNOWN. Координатор входа и monitor используют общий lock; фактические fills сохраняются до runtime-позиции. Защитный terminal/private-flat цикл учитывается monitor даже без созданного RuntimeTrade.
+
+`PRIVATE_ORDER_STREAMS=true` создаёт CCXT Pro private clients и запускает `watch_orders` у поддерживаемых площадок. Канонические события без raw info сохраняются в SQLite и пробуждают monitor. Fill не уменьшается, terminal статус не возвращается в рабочий, одинаковое событие не продлевает свежесть. Ошибка потока сбрасывает кеш; неизвестные fees/price и устаревшие события читаются через REST. Позиции и баланс подтверждает REST, поток не заменяет сверку аккаунта.
+
+Вход требует `LIVE_ENABLED=true`, `LIVE_ENTRY_ENABLED=true`, обеих площадок в `LIVE_EXIT_VENUES`, `PRIVATE_ORDER_STREAMS=true`, `LIVE_NO_WITHDRAW_ATTESTED=true`, снятого STOP, действующего потока и записи по `LIVE_ACCEPTANCE_PATH`. Ключи сами по себе не включают торговлю. Перезапуск сохраняет STOP; release evidence не снимает его автоматически. Начальный капитал задаётся `LIVE_CAPITAL_USD` и не смешивается с Paper.
+
+[Шаблон acceptance](live_acceptance.example.json) намеренно содержит только false и пустой evidence_id. Рабочий файл — операторское подтверждение проведённых проверок с ссылкой/ID доказательств, точным scope площадок и сроком не более 24 часов. **Это не автоматически доказанная сертификация:** нельзя заменить CI/Paper/OOS, биржевую проверку IOC/reduceOnly/client ID, funding и restart простым заполнением true. Файл с пустым ID, истёкшим сроком или неполными проверками не разрешает вход. Порядок финальной проверки описан в [LIVE_ACCEPTANCE_RUNBOOK_RU.md](LIVE_ACCEPTANCE_RUNBOOK_RU.md).
+
+## Публичные стаканы: транспорт
+
+Публичные клиенты используют общий проверяемый транспорт. Пустые/пересечённые стаканы, неупорядоченные или повторяющиеся уровни, неверный symbol, отрицательные/нулевые объёмы, NaN/Infinity и устаревшие/будущие timestamp отклоняются. Единицы количества остаются native до преобразования по contractSize в сканере.
+
+`PUBLIC_BOOK_STREAMS=true` выбирает CCXT Pro для поддерживаемых площадок; по умолчанию `false`. Первое обращение к паре начинает подписку и использует REST до появления свежего WS-снимка. Ошибка/timeout/устаревание потока сбрасывают кеш, следующий запрос использует проверяемый REST. Неподдерживаемые площадки продолжают REST. Private streams и отправка ордеров этим не включаются.
+
+Не более `PUBLIC_STREAM_MAX_SYMBOLS=40` подписок на один публичный клиент. Приоритет: сохранённые LIVE-позиции → открытые Paper-позиции → текущие кандидаты всех сканеров с чередованием между модулями. Изменение universe обновляет подписки через подтверждённый CCXT unwatch; первый освободившийся слот сразу получает нужная пара. Если unsubscribe не поддерживается, отклонён или неопределён, старое место удерживается до закрытия клиента, остальные пары используют REST. Cache WS требует явные symbol/timestamp и свежесть максимум `PUBLIC_STREAM_MAX_AGE_SEC=1.5`; повтор nonce не обновляет received_at, регрессия/конфликт отклоняется. CCXT реконструирует snapshot/delta; собственная exchange-certified проверка sequence gaps ещё не выполнена.
+
+Если `RECORD_PUBLIC_BOOKS=true`, основной Futures/Futures процесс записывает семплированные WS-снимки между циклами сканера. Вторичные Spot/Futures и Spot/Spot клиенты записывают также REST/WS-снимки: один последний снимок маршрута за `PUBLIC_STREAM_RECORD_INTERVAL_SEC=1`. Запись в SQLite не блокирует приём данных. Spot хранится в base units с явным `spot=true`, linear futures — после contractSize conversion; неизвестные или изменившиеся метаданные отбрасываются. Объединённые/потерянные снимки, успешная запись и ошибки видны в «Система». Ограничение 200 000 строк / 72 часа действует на общий архив: плотный сбор сокращает горизонт. Время получения сохраняется, будущие снимки не доступны replay. Текущий Futures/Futures execution replay отклоняет spot и не превращается автоматически в cash fill/latency модель. Это публичная выборка, не доказательство fills или очереди.
+
+## Разработка и проверка кода
+
+Python 3.11+. `pip install -r requirements.txt pytest`.
+
+```bash
+python -m compileall -q app
+python -m pytest -q
+```
+
+Для будущего Paper-запуска конфигурация находится в `.env.example`; `LIVE_ENABLED=false`.
+Публичный сбор и private reconciliation работают без write-authority. Отдельный автовыход вызывается только при явном разрешении и свежей сверке; наличие API-ключей само по себе не разрешает отправку ордеров.
+
+SQLite хранит дневник, Paper и durable LIVE-фазы. JSON RuntimeStore служит кешем. UNKNOWN и работающие ордера блокируют новый LIVE-допуск; закрытие считается подтверждённым только после private exposure=0.
+
+Funding Paper рассчитывает направление на общем горизонте и фиксирует выход по свежим стаканам. Итог ожидает полную историческую проверку ставок; резерв остаётся занят до неё. Историческая ставка умножается на reference notional входа — это модель, а не фактическая выплата биржи.
+
+Funding-прогноз не считается полученной прибылью. Статистика Paper и Replay — модельные результаты на REST-наблюдениях; реальные fills, latency и комиссии должны подтверждаться отдельно.
+
+## История этапов
+
+Wallet signing/nonce/receipt backend и сценарный CEX/DEX execution stress добавлены; `/dex_stress`, `/dex_wallet`, `/readiness`. Main подключает настроенный автоматический swap→actual-native CEX hedge, paired NET/time exit, restart-safe bounded recovery и atomic accounting. Включение требует root LIVE, DEX_LIVE_ENABLED и действующих scoped certificates; без них доступно read-only наблюдение. Scope и настройки: [DEX_WALLET_AND_STRESS_RUNBOOK_RU.md](DEX_WALLET_AND_STRESS_RUNBOOK_RU.md).
+
+`/readiness` объединяет Paper/OOS, последние сохранённые stress-прогоны пяти стратегий и actual cost attribution в одной SQLite read transaction. Run summaries сверяются с результатами: конфликт SQL/payload, удалённая строка, дубликат или неверное время дают `EVIDENCE_INVALID`. NET сценариев не складывается; UNKNOWN/residual outcomes, неполный funding, исключённые histories и ограниченная выборка остаются явными. Возраст stress >24h — диагностический порог, не сертификат и не изменение gate. Остатки owned spot inventory показаны отдельно от active LIVE. DEX wallet certification оценивается отдельным workflow, не выводится из сертификата CEX.
+
+Локальный read-only JSON-аудит без запуска бота, exchange clients или signer:
+
+```bash
+python -m app.project_readiness --db arbitrage.db --acceptance live_acceptance.json --venues binance bybit
+```
+
+Используйте фактический путь существующей базы; отсутствующая база не создаётся. `--html` выводит тот же Telegram summary. SHA-256 идентифицирует содержимое отчёта, но не является подписью оператора или независимым подтверждением исполнения. Paper/OOS ограничен 10000 сделками и 10000 marks на сделку; превышение явно исключается, не превращается в успешную частичную выборку. Последний stress ограничен 10000 результатами, actual costs — 1000 LIVE-записями с признаком cap. В audit XLSX/CSV добавлены `Paper OOS evidence` и `Stress evidence` из той же транзакции. Этот аудит ничего не включает, не пишет acceptance и не заменяет длительный Paper/OOS, реальную account/wallet certification или отдельно принятый micro-canary.
+
+Предыдущие документы сохраняются как история реализации. Их формулировки «complete/ready» не являются текущим допуском к LIVE. Текущее состояние — в `RELEASE_STATUS_RU.md`.

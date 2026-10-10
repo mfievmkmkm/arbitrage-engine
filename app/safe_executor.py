@@ -1,0 +1,130 @@
+import asyncio
+from .exchange_executor import ExchangeExecutor
+from .order_lifecycle import transition
+
+
+class SafeExecutor(ExchangeExecutor):
+    def __init__(self, venue, inner, diary, gate, exit_gate=None, clock=None):
+        self.venue = venue
+        self.inner = inner
+        self.diary = diary
+        self.gate = gate
+        self.exit_gate = exit_gate or gate
+        self.clock = clock
+
+    async def submit_intent(self, intent, request):
+        if request.market_evidence is not None:
+            from copy import deepcopy
+            from .quote_order_evidence import validate as validate_evidence
+
+            request = deepcopy(request)
+            try:
+                validate_evidence(
+                    request, self.venue, self.clock() if self.clock else None
+                )
+            except (ValueError, TypeError):
+                return None, "RECOVERY_EVIDENCE_INVALID"
+        if (
+            intent.venue != self.venue
+            or intent.symbol != request.symbol
+            or intent.side != request.side
+            or intent.qty != request.qty
+            or intent.reduce_only != request.reduce_only
+        ):
+            return None, "INTENT_REQUEST_MISMATCH"
+        states = await self.diary.order_intent_states(intent.trade_id)
+        if intent.intent_id in states:
+            return None, "DUPLICATE_OR_UNRESOLVED_INTENT"
+        if not (self.exit_gate() if request.reduce_only else self.gate()):
+            return None, "LIVE_GATE_LOCKED"
+        if hasattr(self.inner, "validate"):
+            try:
+                self.inner.validate(request)
+            except (ValueError, TypeError):
+                return None, "REQUEST_NATIVE_VALIDATION_FAILED"
+        if hasattr(self.diary, "claim_order_intent"):
+            if request.market_evidence is not None:
+                if not hasattr(self.diary, "order_request_evidence"):
+                    return None, "RECOVERY_EVIDENCE_STORAGE_REQUIRED"
+                claimed = await self.diary.claim_order_intent(intent, request=request)
+            else:
+                claimed = await self.diary.claim_order_intent(intent)
+            if not claimed:
+                return None, "DUPLICATE_OR_UNRESOLVED_INTENT"
+        else:
+            if request.market_evidence is not None:
+                return None, "RECOVERY_EVIDENCE_STORAGE_REQUIRED"
+            await self.diary.save_order_intent(intent, "SUBMITTING")
+        try:
+            if not (self.exit_gate() if request.reduce_only else self.gate()):
+                raise ValueError("LIVE_GATE_LOCKED")
+            if request.market_evidence is not None:
+                validate_evidence(
+                    request, self.venue, self.clock() if self.clock else None
+                )
+        except (ValueError, TypeError):
+            await self.diary.save_order_intent(intent, "FAILED")
+            return None, "RECOVERY_PRE_SEND_GUARD_FAILED"
+        try:
+            result = await self.inner.submit(request)
+        except (Exception, asyncio.CancelledError) as error:
+            await asyncio.shield(self.diary.save_order_intent(intent, "UNKNOWN"))
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            return None, "SUBMIT_UNKNOWN_RECONCILE"
+        from .order_settlement import valid, TERMINAL
+        from .order_status import normalize
+
+        if not valid(result, request.qty):
+            await self.diary.save_order_intent(intent, "UNKNOWN")
+            return None, "ORDER_EVIDENCE_INVALID"
+        state = (
+            normalize(result.status)
+            if str(result.status).lower() in TERMINAL
+            else (
+                "FILLED"
+                if result.filled >= request.qty * (1 - 1e-10)
+                else ("PARTIAL" if result.filled > 0 else "ACK")
+            )
+        )
+        if hasattr(self.diary, "save_order_intent_result"):
+            await self.diary.save_order_intent_result(intent, state, result)
+        else:
+            await self.diary.save_order_intent(intent, state)
+        return result, state
+
+    async def submit(self, request):
+        raise RuntimeError("USE_SUBMIT_INTENT")
+
+    async def cancel(self, order_id, symbol):
+        result = await self.inner.cancel(order_id, symbol)
+        if hasattr(self.diary, "order_intents"):
+            from .order_status import normalize
+
+            for iid, meta in (await self.diary.order_intents()).items():
+                if (
+                    meta.get("venue") == self.venue
+                    and meta.get("symbol") == symbol
+                    and meta.get("order_id") == order_id
+                ):
+                    from .order_settlement import valid
+
+                    if not valid(
+                        result, meta.get("qty"), meta.get("filled", 0), order_id
+                    ):
+                        await self.diary.update_order_intent_reconciled(iid, "UNKNOWN")
+                        raise RuntimeError("CANCEL_EVIDENCE_CONFLICT")
+                    updated = await self.diary.update_order_intent_reconciled(
+                        iid,
+                        normalize(result.status, result.filled, meta.get("qty")),
+                        result,
+                    )
+                    if not updated:
+                        raise RuntimeError("CANCEL_EVIDENCE_CONFLICT")
+        return result
+
+    async def order(self, order_id, symbol):
+        return await self.inner.order(order_id, symbol)
+
+    async def order_by_client_id(self, client_order_id, symbol):
+        return await self.inner.order_by_client_id(client_order_id, symbol)
