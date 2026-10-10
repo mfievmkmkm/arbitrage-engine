@@ -2,7 +2,7 @@
 
 This is the authoritative order for the rest of the build.
 
-## Current checkpoint — 2026-10-09
+## Current checkpoint — 2026-10-10
 
 Historical A–F below is a design checklist, not an assertion that already
 integrated Paper/Replay/UI pieces are still missing. Use RELEASE_STATUS_RU.md
@@ -13,15 +13,22 @@ clients and strategy-scoped acceptance. The common monitor owns different
 leg symbols/account scopes; scanner entry, dynamic exit, explicit recovery,
 funding/result finalization, Telegram control and notifications are wired.
 Held spot inventory remains separate from derivative flat proof. Next: account
-certification of fee units, IOC/lookup, private history completeness and canary;
-extend dense execution stress evidence to the cash strategy.
+certification of fee units, IOC/lookup, private history completeness and canary.
+Forward Spot/Futures and inventory-backed Spot/Spot now have recorded sequential
+IOC/latency/partial-fill stress, bounded recovery, durable evidence and export.
 
 Spot/Spot and Funding live lifecycles are now registered with strategy-scoped
 acceptance, shared capacity/private monitor and Telegram. DEX firm/RPC simulation
-and native CEX hedge/NET ceiling evidence are registered read-only. Remaining:
-real account certification/canary, dense recorded OOS evidence for cash/Funding,
-and complete two-sided CEX/DEX Paper/Replay plus wallet signer/receipt lifecycle.
-The one-cycle DEX convergence ceiling is not a booked Paper/live trade. No
+and native CEX hedge/NET ceiling evidence are integrated. Two-sided CEX/DEX
+Paper/Replay, isolated signer/nonce journal, dual-RPC finalized receipts, durable
+bridge and explicitly configured automatic entry/paired exit are implemented.
+Funding now has recorded IOC stress, per-leg settlement exposure, mature public
+rate windows, exact quote books, decision/market time separation and durable
+attribution/export. Stress results never credit capital or release LIVE.
+Remaining: real account/wallet/venue certification, private funding/fee/fill
+completeness, dense Paper/OOS evidence and separately accepted micro-canary.
+Public rates use entry-reference model valuation; actual account income, venue
+mark-price valuation and limit queues still require their own evidence. No
 percentage or file-count substitutes for these checks.
 
 ## A. Finish integration, not architecture

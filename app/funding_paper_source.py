@@ -2,10 +2,12 @@
 
 import asyncio, math, time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from .contract_book import to_base_levels
 from .spot_future_vwap import vwap
-from .instruments import from_market, compatible, min_notional_ok
+from .instruments import compatible, min_notional_ok
 from .public_books import normalize
+from .secondary_book_history import spec as history_spec
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,8 @@ class Source:
         safety_pct=0.1,
         max_age=1.5,
         clock=time.time,
+        history_store=None,
+        book_history=None,
     ):
         if (
             not all(
@@ -45,6 +49,9 @@ class Source:
         self.safety = safety_pct
         self.max_age = max_age
         self.clock = clock
+        self.history_store = history_store
+        self.book_history = book_history
+        self.book_recorded = self.book_record_failures = 0
 
     async def quote(self, symbol, long, short, qty=None):
         try:
@@ -66,10 +73,10 @@ class Source:
             specs = []
             for venue in (long, short):
                 market = self.clients[venue].market(symbol)
-                size = float(market["contractSize"])
-                if not math.isfinite(size) or size <= 0:
+                instrument = history_spec(venue, market)
+                if instrument is None or instrument.contract is not True:
                     raise ValueError("CONTRACT_SIZE_INVALID")
-                specs.append(from_market(venue, market))
+                specs.append(instrument)
             if not compatible(*specs):
                 raise ValueError("INSTRUMENT_MISMATCH")
 
@@ -78,6 +85,7 @@ class Source:
                 b = await asyncio.wait_for(
                     self.clients[venue].fetch_order_book(symbol, limit=20), 8
                 )
+                original_received = b.get("received_at", self.clock())
                 b = normalize(
                     b,
                     symbol,
@@ -96,10 +104,29 @@ class Source:
                     or not 0 <= self.clock() - stamp <= self.max_age
                 ):
                     raise ValueError("FUNDING_BOOK_STALE")
+                if (
+                    isinstance(original_received, bool)
+                    or not isinstance(original_received, (int, float))
+                    or not math.isfinite(original_received)
+                    or not stamp <= original_received <= self.clock()
+                ):
+                    raise ValueError("FUNDING_BOOK_RECEIPT_INVALID")
+                bids, asks = to_base_levels(b["bids"], size), to_base_levels(
+                    b["asks"], size
+                )
                 return (
-                    to_base_levels(b["bids"], size),
-                    to_base_levels(b["asks"], size),
+                    bids,
+                    asks,
                     stamp,
+                    SimpleNamespace(
+                        exchange=venue,
+                        symbol=symbol,
+                        fetched=stamp,
+                        received_at=original_received,
+                        data_source=b["data_source"],
+                        bids=bids,
+                        asks=asks,
+                    ),
                 )
 
             a, b = await asyncio.gather(
@@ -125,6 +152,33 @@ class Source:
                 for s, price in zip(specs, prices[:2])
             ):
                 raise ValueError("FUNDING_ORDER_MINIMUM")
+            if any(
+                history_spec(v, self.clients[v].market(symbol)) != s
+                for v, s in zip((long, short), specs)
+            ):
+                raise ValueError("FUNDING_INSTRUMENT_CHANGED")
+            if self.book_history is not None:
+                try:
+                    count = await self.book_history.record(
+                        [a[3], b[3]],
+                        {v: {symbol: s} for v, s in zip((long, short), specs)},
+                    )
+                    if (
+                        isinstance(count, bool)
+                        or not isinstance(count, int)
+                        or not 0 <= count <= 2
+                    ):
+                        raise ValueError("FUNDING_BOOK_RECORD_COUNT_INVALID")
+                    self.book_recorded += count
+                except Exception:
+                    self.book_record_failures += 1
+            if self.clock() - min(a[2], b[2]) > self.max_age:
+                raise ValueError("FUNDING_BOOK_STALE_AFTER_RECORD")
+            decision = self.clock()
+            if not math.isfinite(decision) or decision < max(
+                a[3].received_at, b[3].received_at
+            ):
+                raise ValueError("FUNDING_DECISION_TIME_INVALID")
             return dict(
                 ok=True,
                 symbol=symbol,
@@ -135,7 +189,9 @@ class Source:
                 entry_sell=prices[1],
                 exit_buy=prices[2],
                 exit_sell=prices[3],
-                ts=min(a[2], b[2]),
+                ts=decision,
+                market_ts=min(a[2], b[2]),
+                received_at=max(a[3].received_at, b[3].received_at),
                 fee_pct=self.fees,
                 safety_pct=self.safety,
                 long_rate=rates[0],
@@ -158,6 +214,7 @@ class Source:
 
     async def settlements(self, p, until):
         events = []
+        histories = {}
         verified = True
         reason = "VERIFIED_MODEL_HISTORY"
         due = []
@@ -193,6 +250,7 @@ class Source:
                     ),
                     8,
                 )
+                histories[venue] = rows
                 if not isinstance(rows, list) or len(rows) >= 100:
                     raise ValueError("FUNDING_HISTORY_TRUNCATED")
                 actual = {}
@@ -240,6 +298,14 @@ class Source:
         if until > self.clock() or any(ts > cutoff for ts in due):
             verified = False
             reason = "FUNDING_HISTORY_MATURITY_PENDING"
+        if self.history_store is not None and set(histories) == {p["buy"], p["sell"]}:
+            try:
+                await self.history_store.capture(
+                    p, histories, self.clients, self.clock()
+                )
+            except Exception:
+                # Offline evidence persistence does not rewrite Paper cashflow.
+                self.history_store.failures += 1
         return History(
             verified,
             sum(x["amount"] for x in events),

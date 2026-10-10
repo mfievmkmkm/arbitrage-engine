@@ -140,7 +140,9 @@ class Engine:
                 if x["ts"] < p.get("last_mark", {}).get("ts", p["opened_at"]):
                     continue
                 h = await self.source.settlements(p, x["ts"])
-                if self.clock() - x["ts"] > getattr(self.source, "max_age", 1.5):
+                if self.clock() - x.get("market_ts", x["ts"]) > getattr(
+                    self.source, "max_age", 1.5
+                ):
                     p["data_reason"] = "BOOK_STALE_AFTER_HISTORY"
                     saved.append(p)
                     continue

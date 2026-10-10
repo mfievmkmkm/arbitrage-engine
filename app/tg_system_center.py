@@ -50,5 +50,14 @@ def render(scanner, runtime, secondary=None):
             f"История Spot/Futures и Spot/Spot: {stats['recorded']} снимков • объединено: {stats['coalesced']} • потеряно: {stats['dropped']}"
         )
         out.append(f"Ошибки вторичной записи: {stats['failures']}")
+    funding_source = getattr(getattr(secondary, "funding_paper", None), "source", None)
+    funding_history = getattr(funding_source, "history_store", None)
+    if funding_history is not None:
+        out.append(
+            f"История funding: {funding_history.recorded} проверенных окон • ошибок записи/проверки: {funding_history.failures}"
+        )
+        out.append(
+            f"Стаканы Funding: {getattr(funding_source, 'book_recorded', 0)} • ошибок записи: {getattr(funding_source, 'book_record_failures', 0)}"
+        )
     out.append("\n<i>Настройки и допуск реального исполнения — в LIVE-контроле.</i>")
     return "\n".join(out)

@@ -17,6 +17,7 @@ from .funding_arb_service import Service as FundingService
 from .funding_cycle_service import CycleService as FundingCycle
 from .funding_paper import Engine as FundingPaper
 from .funding_paper_source import Source as FundingPaperSource
+from .funding_rate_history import Store as FundingRateHistory
 from .cex_dex_paper_source import Source as DexPaperSource
 from .cex_dex_paper import Engine as DexPaper, Cycle as DexPaperCycle
 from .dex_execution_stress import History as DexHistory
@@ -100,9 +101,17 @@ async def build_bundle(
         )
         fp = None
         if funding_service:
+            funding_history = FundingRateHistory(db_path)
+            await funding_history.init()
             fp = FundingPaper(
                 db_path,
-                FundingPaperSource(funding_service.clients, funding_service, notional),
+                FundingPaperSource(
+                    funding_service.clients,
+                    funding_service,
+                    notional,
+                    history_store=funding_history,
+                    book_history=book_history,
+                ),
                 capital=float(os.getenv("PAPER_CAPITAL_USD", "50")),
                 max_seconds=max(
                     60, int(os.getenv("FUNDING_PAPER_HOLD_SECONDS", "28800"))

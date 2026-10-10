@@ -2,7 +2,21 @@
 
 Дата: 10 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: последовательный stress Spot/Futures и Spot/Spot
+## Текущий блок: Funding execution stress, история ставок и время решения
+
+Проверено: **1389 offline-тестов passed**, compileall, импорт `app.main` и `git diff --check`. Новые проверки покрывают partial/late legs, пропущенные/отрицательные начисления, reported/calendar timestamps, ambiguous boundary, rate conflicts/maturity, stale/changed metadata, точные Funding snapshots, retention/rollback, Telegram/export и воспроизведение после очистки tape. Реальные ордера и транзакции не отправлялись.
+
+Добавлены `/fund_execution` и выделенная кнопка Replay. Три сценария IOC/latency используют реальные записанные публичные стаканы и учитывают объём каждой модельной ноги в момент settled funding. Задержанный вход может пропустить начисление, частичный вход/выход получает только соответствующую долю. Три bounded recovery rounds не восстанавливают использованную snapshot-side depth. При незакрытой экспозиции, missing/conflicting/immature history, metadata changes или совпадении fill/settlement timestamps итоговый NET остаётся неизвестным.
+
+Funding Paper source сохраняет bounded публичные rate windows из уже полученных history responses, без дополнительных запросов: calendar + reported timestamps, instrument identity, обе площадки, coverage и 30 секунд model maturity. Проверяются пропуски, дубликаты/конфликты, усечённый ответ, изменение календаря и будущие наблюдения. Два окна сохраняются одной транзакцией; cap 20 000 строк и retention 72 часа. Это public-history model evidence, а не account income или сертификация venue settlement lag.
+
+Сохраняются также конкретные base-unit стаканы Funding quote с исходными book_ts/received_at, независимо от того, попал ли символ в текущий scanner batch. Вход/решение ставит timestamp после получения данных; market timestamp остаётся отдельно. После записи/чтения history повторно проверяется возраст рынка. Неявные/сменившиеся derivative metadata и некорректный receipt time блокируют quote. Отказ записи виден в «Система» и не переписывает Paper cashflow.
+
+Funding valuation явно использует modeled entry VWAP × actual modeled open exposure × public settled rate; exchange mark-price valuation и фактический доход не доказываются. NET содержит basis, fees, safety, funding и объясняющий adverse execution delta относительно Paper basis, который не вычитается второй раз. Legacy Paper без новых rate windows не получает funding-inclusive stress NET. Source Paper public funding accounting остаётся отдельной моделью; Ledger не получает stress-результаты.
+
+Run/results атомарны и содержат исходную позицию, book evidence и rate windows для повторения после очистки tape. Три новые таблицы входят в XLSX/ZIP audit export. Futures/Futures replay также исправлен: повторный снимок, включая новый received_at при прежнем book timestamp, не возвращает использованную глубину. До реального запуска остаются private account/fee/funding/precision certification, плотная Paper/OOS-история и отдельный micro-canary.
+
+## Предыдущий блок: последовательный stress Spot/Futures и Spot/Spot
 
 Проверено: **1341 offline-тест passed**, compileall, импорт `app.main` и `git diff --check`. Реальные заявки и кошельковые транзакции не запускались.
 
@@ -247,9 +261,9 @@ Spot/Futures public native-план **подключён к scanner, сохра�
 - Production CEX lifecycle: завершить проверку площадок и реального IOC-входа на выбранных аккаунтах. Production-entry admission подключён. Опциональный write-side автовыход и известный one-leg exit recovery со свежими reference quotes подключены к main; UNKNOWN и остатки без совпадающих terminal/private доказательств требуют дальнейшей сверки; подтверждённые остатки закрываются отдельным bounded координатором. Непрерывный read-only lookup, fresh snapshots, восстановление и exit-наблюдение уже подключены; разрешения на автоматическую торговлю они не дают.
 - Публичный WS-транспорт, private order streams и динамические bounded приоритеты подписок подключены. Ещё нужны certification snapshot/delta/sequence recovery каждой площадки. Unsupported/uncertain unsubscribe удерживает cap и переводит overflow на REST. Реальные подключения и плотная выборка в этой сессии не проверялись.
 - Подтвердить полноту приватной funding history на каждой площадке и задержки settlement; завершить fee/slippage attribution и реальные account acceptance. Открытый funding до текущего времени остаётся незрелым и не разрешает target/trailing по подтверждённому NET.
-- Spot/Futures и Spot/Spot имеют replay по сохранённым model marks и последовательный recorded-book IOC/latency stress. Ещё нужны достаточная плотная выборка, реальные private fills/fees/precision/inventory proof и валидация Funding Paper на длительной записи публичных ставок и стаканов.
+- Spot/Futures и Spot/Spot имеют replay по сохранённым model marks и последовательный recorded-book IOC/latency stress. Funding имеет recorded IOC stress с per-leg settlement exposure и сохраняемыми зрелыми public rate windows. Ещё нужны достаточная плотная выборка, реальные private fills/fees/precision/inventory/funding proof и валидация Funding Paper на длительной записи рынка.
 - CEX/DEX сопоставление контрактов, свежие gas-цены и исполнимые маршруты с min-received, tax/network evidence, simulation и отдельным failure acceptance. Индикативная price-заявка не заменяет эти проверки.
-- Offline IOC/latency-модели Futures/Futures, forward Spot/Futures и inventory-backed Spot/Spot подключены; DEX имеет отдельный sequential stress. Ещё нужны плотные временные ряды, exchange-certified precision/limits, limit queue и private fills; существующий Paper не является подтверждённой исторической доходностью.
+- Offline IOC/latency-модели Futures/Futures, forward Spot/Futures, inventory-backed Spot/Spot и Funding подключены; DEX имеет отдельный sequential stress. Ещё нужны плотные временные ряды, exchange-certified precision/limits, limit queue и private fills; существующий Paper не является подтверждённой исторической доходностью.
 - Подтверждённый CI, длительная Paper-выборка, OOS, затем отдельно принятый micro-live canary. AUTO не разблокируется количеством написанных файлов.
 
 Реальные сделки в этой сессии не отправлялись. Тесты выполняются без финансовых ключей и реальных заявок. Настроенный write-side режим предназначен для отдельного запуска после проверки площадок.

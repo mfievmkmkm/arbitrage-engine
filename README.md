@@ -7,6 +7,8 @@
 
 ## Работающий запуск
 
+`/fund_execution` моделирует IOC/latency для Funding с начислениями на объём каждой ноги, открытый в reported settlement timestamp. История публичных ставок сохраняется из существующих ответов с календарём, зрелостью и coverage; Funding quote отдельно записывает свои base-unit стаканы. Время решения отделено от времени рынка. Непокрытое/противоречивое начисление или незакрытый остаток оставляют итоговый NET неизвестным. Расчёт по entry VWAP — публичная модель, не account income. Run/results и их исходные доказательства входят в audit export; Ledger и LIVE acceptance не меняются.
+
 `/sf_execution` и `/ss_execution` (кнопки в Replay) моделируют последовательные IOC по сохранённым REST/WS-стаканам: задержки, частичные fills, максимум три recovery rounds. Spot/Spot использует подтверждённые в Paper заранее размещённые запасы и отдельные USDT-остатки; повторный снимок не восстанавливает уже использованную глубину. Незакрытые остатки не получают NET. Результаты и исходные book evidence сохраняются атомарно и входят в audit export. Комиссии — фиксированная Paper-модель в quote units, funding исключён; native precision, приватные fills, borrowing и реальная доступность средств не сертифицируются этой проверкой. Старые Spot/Spot позиции без сохранённого inventory evidence исключаются.
 
 `app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, Spot/Spot scanner с сохраняемыми виртуальными запасами и Funding scanner с сохраняемым Paper. Для DEX доступны опциональные 0x research/simulation и отдельно настроенный LIVE runtime с изолированным signer и scoped acceptance.

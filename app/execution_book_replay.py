@@ -75,7 +75,13 @@ class Tape:
         )
 
 
-def simulate(position, tape, scenario, fee_rates):
+def simulate(position, tape, scenario, fee_rates, recovery_rounds=1):
+    if (
+        isinstance(recovery_rounds, bool)
+        or not isinstance(recovery_rounds, int)
+        or not 1 <= recovery_rounds <= 3
+    ):
+        raise ValueError("EXECUTION_RECOVERY_INVALID")
     qty = float(position["base_qty"])
     opened = float(position["opened_at"])
     closed = float(position["closed_at"])
@@ -100,6 +106,7 @@ def simulate(position, tape, scenario, fee_rates):
     exposure = {long: 0.0, short: 0.0}
     cash = fees = 0.0
     identity = {}
+    consumed = {}
 
     def order(venue, side, amount, arrival, phase):
         nonlocal cash, fees
@@ -125,6 +132,13 @@ def simulate(position, tape, scenario, fee_rates):
             for k in ("base", "quote", "settle", "contract_size", "contract", "linear")
         }
         if (
+            b["instrument"].get("exchange") != venue
+            or b["instrument"].get("symbol") != symbol
+        ):
+            row["reason"] = "INSTRUMENT_MISMATCH"
+            rows.append(row)
+            return
+        if (
             instrument["contract"] is not True
             or instrument["linear"] is not True
             or instrument["settle"] != "USDT"
@@ -146,7 +160,16 @@ def simulate(position, tape, scenario, fee_rates):
             rows.append(row)
             return
         identity[venue] = instrument
-        f = walk(b["asks" if side == "BUY" else "bids"], amount)
+        side_key = "asks" if side == "BUY" else "bids"
+        levels = consumed.setdefault(
+            (venue, symbol, b["book_ts"], side_key), [list(x) for x in b[side_key]]
+        )
+        f = walk(levels, amount)
+        remaining = f.filled
+        for level in levels:
+            used = min(level[1], remaining)
+            level[1] -= used
+            remaining -= used
         fee = f.filled * (f.price or 0) * fee_rates[venue]
         cash += (1 if side == "SELL" else -1) * f.filled * (f.price or 0)
         fees += fee
@@ -190,13 +213,15 @@ def simulate(position, tape, scenario, fee_rates):
         latest = max(closed + scenario.long_latency, closed + scenario.short_latency)
     entry_failed = not complete
     # IOC implies no working remainder; all surviving modeled exposure is flattened.
-    if any(abs(x) > tolerance for x in exposure.values()):
+    for attempt in range(recovery_rounds):
+        if all(abs(x) <= tolerance for x in exposure.values()):
+            break
         for venue in (long, short):
             order(
                 venue,
                 "SELL" if exposure[venue] > 0 else "BUY",
                 abs(exposure[venue]),
-                latest + scenario.recovery_latency,
+                latest + (attempt + 1) * scenario.recovery_latency,
                 "RECOVERY",
             )
     flat = all(abs(x) <= tolerance for x in exposure.values())

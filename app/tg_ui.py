@@ -145,6 +145,13 @@ def replay_menu(screen="replay"):
                     "primary" if screen == "ss_execution" else None,
                 )
             ],
+            [
+                button(
+                    "⏱ Funding · исполнение",
+                    "fund_execution",
+                    "primary" if screen == "fund_execution" else None,
+                )
+            ],
             [button("↻ Обновить", screen), button("‹ Главное меню", "home")],
         ]
     )
