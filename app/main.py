@@ -33,8 +33,10 @@ from .live_acceptance import (
     accepted as live_accepted,
     spot_accepted,
     cash_spot_accepted,
+    market_fallback_accepted,
 )
 from .live_funding_dispatch import Coordinator as FundingLiveCoordinator
+from .live_execution_costs import build as build_live_costs, render as render_live_costs
 from .spot_spot_live import Session as SpotSpotSession
 from .live_spot_spot_dispatch import Coordinator as SpotSpotCoordinator, CashObserver
 from .tg_remaining_live import (
@@ -330,6 +332,8 @@ async def text_for(s):
         )
     if s == "execution_replay":
         return render_execution_replay(await build_execution_replay(config.db_path))
+    if s == "live_costs":
+        return render_live_costs(await build_live_costs(config.db_path))
     if s == "fund_execution":
         return render_funding_execution(await build_funding_execution(config.db_path))
     if s in ("sf_execution", "ss_execution"):
@@ -489,6 +493,7 @@ async def start(m: Message):
         "dex_wallet",
         "readiness",
         "execution_replay",
+        "live_costs",
         "sf_execution",
         "ss_execution",
         "fund_execution",
@@ -581,6 +586,7 @@ async def commands(m: Message):
             "dex_wallet",
             "readiness",
             "execution_replay",
+            "live_costs",
             "sf_execution",
             "ss_execution",
             "fund_execution",
@@ -787,6 +793,7 @@ def keyboard_for(screen):
         "fund_replay",
         "dex_replay",
         "execution_replay",
+        "live_costs",
         "sf_execution",
         "ss_execution",
         "fund_execution",
@@ -1409,6 +1416,9 @@ async def main():
             minimum_net=config.live_min_net_edge_usd,
             safety_pct=config.safety_buffer_pct,
             max_seconds=config.paper_max_seconds,
+            market_fallback=getattr(config, "live_entry_market_fallback", False),
+            market_authority=lambda symbol, lv, sv: entry_authority(symbol, lv, sv)
+            and market_fallback_accepted(config.live_acceptance_path, (lv, sv)),
         )
         live_entry_coordinator.halt = live_stop.stop
         funding_live = FundingLiveCoordinator(

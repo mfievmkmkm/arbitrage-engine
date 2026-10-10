@@ -1,4 +1,4 @@
-import asyncio, uuid, time
+import asyncio, uuid, time, math
 from dataclasses import dataclass
 from .exchange_executor import SubmitRequest
 from .order_policy import choose
@@ -103,6 +103,8 @@ async def execute(
             await durable_store.phase(trade_id, "PLANNED", **meta)
         await durable_store.phase(trade_id, "ENTRY_SUBMITTING")
 
+    market_requests = None
+
     async def leg(name, leg, ex, price, order_policy=None):
         order_policy = order_policy or policy
         req = SubmitRequest(
@@ -116,10 +118,13 @@ async def execute(
             trade_id + ":" + name,
             price if order_policy.order_type == "market" else None,
         )
-        if prepared_requests is not None and name in ("entry-long", "entry-short"):
+        templates = (
+            market_requests if name.startswith("entry-market-") else prepared_requests
+        )
+        if templates is not None:
             from dataclasses import replace
 
-            template = prepared_requests[leg.venue]
+            template = templates[leg.venue]
             if (
                 template.symbol,
                 template.side,
@@ -128,6 +133,7 @@ async def execute(
                 template.reduce_only,
                 template.ioc,
                 template.price,
+                template.reference_price,
             ) != (
                 req.symbol,
                 req.side,
@@ -136,6 +142,7 @@ async def execute(
                 req.reduce_only,
                 req.ioc,
                 req.price,
+                req.reference_price,
             ):
                 return None, "ENTRY_PREPARED_REQUEST_MISMATCH"
             req = replace(template, client_order_id=req.client_order_id)
@@ -190,6 +197,35 @@ async def execute(
                 False, "FALLBACK_BLOCKED:" + reason, trade_id, admission=adm
             )
         fp = fallback_policy()
+        if prepared_requests is not None:
+            if (
+                not isinstance(proof.requests, dict)
+                or set(proof.requests) != {plan.long.venue, plan.short.venue}
+                or proof.fee_schedule is None
+                or not isinstance(proof.admission_kwargs, dict)
+                or proof.minimum_net_edge_usd is None
+            ):
+                return LiveEntryResult(
+                    False,
+                    "FALLBACK_REFRESHED_ADMISSION_REQUIRED",
+                    trade_id,
+                    admission=adm,
+                )
+            from .quote_order_evidence import validate
+
+            try:
+                for venue, req in proof.requests.items():
+                    if req.market_evidence.get("source") != "PUBLIC_MARKET_ENTRY_V1":
+                        raise ValueError("MARKET_ENTRY_SOURCE_REQUIRED")
+                    validate(req, venue)
+            except (ValueError, TypeError, AttributeError):
+                return LiveEntryResult(
+                    False, "FALLBACK_MARKET_PROOF_INVALID", trade_id, admission=adm
+                )
+            market_requests = proof.requests
+            fee_schedule = proof.fee_schedule
+            admission_kwargs = proof.admission_kwargs
+            min_net_edge_usd = proof.minimum_net_edge_usd
         fallback_used = True
         adm = prepare(
             plan,
@@ -216,6 +252,16 @@ async def execute(
                 fallback_native_plan=proof.native.row(),
                 fallback_long_quote=proof.long_price,
                 fallback_short_quote=proof.short_price,
+                fallback_required_net_usd=min_net_edge_usd,
+                fallback_realized_equity=admission_kwargs.get("bankroll"),
+                fallback_daily_loss=admission_kwargs.get("daily_loss", 0),
+                fallback_fee_rates={
+                    v: {
+                        "maker": fee_schedule.require(v, "maker"),
+                        "taker": fee_schedule.require(v, "taker"),
+                    }
+                    for v in (plan.long.venue, plan.short.venue)
+                },
             )
         l, s = await asyncio.gather(
             leg("entry-market-long", plan.long, long_executor, proof.long_price, fp),
@@ -414,13 +460,33 @@ async def execute(
         private_attempts,
         private_delay,
     )
-    if prepared_requests is not None and (
-        a.long_price > prepared_requests[plan.long.venue].price * (1 + 1e-10)
-        or a.short_price < prepared_requests[plan.short.venue].price * (1 - 1e-10)
+    if (
+        prepared_requests is not None
+        and not fallback_used
+        and (
+            a.long_price > prepared_requests[plan.long.venue].price * (1 + 1e-10)
+            or a.short_price < prepared_requests[plan.short.venue].price * (1 - 1e-10)
+        )
     ):
         from dataclasses import replace
 
         pv = replace(pv, verified=False, reason="IOC_ACTUAL_LIMIT_VIOLATION")
+    if prepared_requests is not None:
+        actual_net = (
+            (a.short_price - a.long_price) * a.base_qty
+            - a.long_fee
+            - a.short_fee
+            - a.base_qty
+            * max(a.long_price, a.short_price)
+            * (
+                fee_schedule.require(plan.long.venue, "taker")
+                + fee_schedule.require(plan.short.venue, "taker")
+            )
+        )
+        if not math.isfinite(actual_net) or actual_net < min_net_edge_usd:
+            from dataclasses import replace
+
+            pv = replace(pv, verified=False, reason="ACTUAL_ENTRY_NET_BELOW_THRESHOLD")
     if not pv.verified:
         tmp = RuntimeTrade(
             trade_id,

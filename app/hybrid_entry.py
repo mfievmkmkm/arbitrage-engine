@@ -14,6 +14,10 @@ class FallbackQuote:
     short_price: float
     book_ts: float
     books_verified: bool = False
+    requests: dict | None = None
+    fee_schedule: object = None
+    admission_kwargs: dict | None = None
+    minimum_net_edge_usd: float | None = None
 
 
 def assess(
@@ -78,6 +82,12 @@ def assess(
         or not math.isclose(n.long.qty, plan.long.contracts, rel_tol=1e-10)
         or not math.isclose(n.short.qty, plan.short.contracts, rel_tol=1e-10)
         or not math.isclose(n.base_qty, plan.base_amount, rel_tol=1e-10)
+        or not math.isclose(
+            n.long.qty * plan.long.contract_size, n.base_qty, rel_tol=1e-10
+        )
+        or not math.isclose(
+            n.short.qty * plan.short.contract_size, n.base_qty, rel_tol=1e-10
+        )
     ):
         return False, "FALLBACK_PLAN_CHANGED"
     cap = max_slippage_pct / 100

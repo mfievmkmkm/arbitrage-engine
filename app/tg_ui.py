@@ -152,6 +152,13 @@ def replay_menu(screen="replay"):
                     "primary" if screen == "fund_execution" else None,
                 )
             ],
+            [
+                button(
+                    "🧾 Фактические расходы LIVE",
+                    "live_costs",
+                    "primary" if screen == "live_costs" else None,
+                )
+            ],
             [button("↻ Обновить", screen), button("‹ Главное меню", "home")],
         ]
     )

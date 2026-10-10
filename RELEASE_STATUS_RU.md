@@ -2,7 +2,21 @@
 
 Дата: 10 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: Funding execution stress, история ставок и время решения
+## Текущий блок: рабочий IOC → market и фактические расходы
+
+Проверено: **1472 offline-теста passed**, compileall, импорт `app.main` и `git diff --check`.
+
+Futures/Futures coordinator подключён к опциональному bounded fallback. Только две terminal IOC с нулевым исполнением и нулевой комиссией допускают новый проход admission: private-flat/orders, режим счёта, margin, account fees, funding reserve, текущий капитал и дневной убыток, native metadata и свежие стаканы. Размер позиции не увеличивается; стоимость каждой ноги ограничена бюджетом и $5. Изменившиеся realized results во время I/O блокируют отправку. NaN/отрицательная cost policy и boolean размеры не принимаются.
+
+Market requests используют отдельный `PUBLIC_MARKET_ENTRY_V1`, executable VWAP, полный depth, возраст до 1.5s и worst-level bound 0.2%. Gate проверяет свежие обе котировки и отдельную market acceptance до и после claim; старый IOC proof не блокирует обновлённый market stage. Каждая из четырёх заявок имеет уникальный durable client id и request evidence. Partial/UNKNOWN IOC не запускают fallback; потерянный market acknowledgement не повторяется. Actual slippage breach сохраняет UNKNOWN для reconciliation, actual entry fee/NET breach использует protective reduce-only exit и private-flat proof, а не штатный OPEN.
+
+Включение нового пути: `LIVE_ENTRY_MARKET_FALLBACK=true` плюс обычные разрешения входа и свежие строгие `hybrid.venues.<venue>` checks: market_entry, market_lookup, market_slippage, zero_fill_transition. Существующая конфигурация торговли не переписана; Funding/cash/DEX не получают это разрешение автоматически. Passive resting-limit queue не реализована этим блоком. Market slippage bound — проверка текущего depth и последующего actual fill, не гарантированный биржей лимит цены и не атомарность двух ног.
+
+`/live_costs` и выделенная кнопка показывают read-only actual attribution Futures/Futures и Funding. Cumulative fills каждого intent учитываются один раз; комиссии, native cashflows и mature private funding сверяются с durable final result и private-flat. Slippage объясняет delta к сохранённому public VWAP, не вычитается повторно из actual NET. Неполные legacy/UNKNOWN журналы, conflicting proofs/results и неподдерживаемые cash/DEX — PARTIAL, а не нулевые расходы. Открытые циклы не получают realized NET. Отчёт не меняет Ledger/capital/acceptance; два derived листа входят в XLSX/CSV export из того же SQLite read snapshot.
+
+Новые offline-проверки покрывают dispatch, post-claim STOP, старение IOC proof, полный repeat admission, market uncertainty, actual cost breaches, certification TTL, read-only attribution/reconciliation и Telegram/export. Реальные заявки не отправлялись. Полная готовность к реальным средствам по-прежнему требует account/venue/wallet certification, длительной Paper/OOS-выборки и отдельного micro-canary.
+
+## Предыдущий блок: Funding execution stress, история ставок и время решения
 
 Проверено: **1392 offline-теста passed**, compileall, импорт `app.main` и `git diff --check`. Новые проверки покрывают partial/late legs, пропущенные/отрицательные начисления, reported/calendar timestamps, ambiguous boundary, rate conflicts/maturity, stale/changed metadata, точные Funding snapshots, retention/rollback, Telegram/export и воспроизведение успешных и неопределённых результатов после очистки tape. Реальные ордера и транзакции не отправлялись.
 

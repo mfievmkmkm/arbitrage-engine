@@ -71,6 +71,22 @@
       }
     }
   },
+  "hybrid": {
+    "venues": {
+      "binance": {
+        "market_entry": false,
+        "market_lookup": false,
+        "market_slippage": false,
+        "zero_fill_transition": false
+      },
+      "bybit": {
+        "market_entry": false,
+        "market_lookup": false,
+        "market_slippage": false,
+        "zero_fill_transition": false
+      }
+    }
+  },
   "venues": {
     "binance": {
       "one_way": false,

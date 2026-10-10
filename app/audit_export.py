@@ -82,6 +82,12 @@ async def build(path, directory):
                     except (ValueError, TypeError):
                         pass
             sheets[title] = redact(rows)
+        from .live_execution_costs import read as execution_costs
+
+        costs = await execution_costs(d, limit=1000)
+        if costs["trades"]:
+            sheets["Live cost attribution"] = redact(costs["trades"])
+            sheets["Live order attribution"] = redact(costs["orders"])
         await d.rollback()
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)

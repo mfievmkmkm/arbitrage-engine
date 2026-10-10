@@ -8,7 +8,8 @@ import time
 import aiosqlite
 from dataclasses import replace
 from types import SimpleNamespace as NS
-from .native_order_plan import prepare_pair, market
+from .native_order_plan import prepare_pair, market, PairPlan
+from .hybrid_entry import FallbackQuote
 from .public_books import normalize
 from .recovery_market import executable, Reader as RecoveryReader
 from .executor_plan import ExecutionPlan, PlannedLeg
@@ -39,7 +40,14 @@ class Coordinator:
         max_seconds=1200,
         clock=time.time,
         exit_authority=None,
+        market_fallback=False,
+        market_authority=None,
     ):
+        if type(market_fallback) is not bool or (
+            market_fallback and not callable(market_authority)
+        ):
+            raise ValueError("MARKET_FALLBACK_AUTHORITY_REQUIRED")
+        self.market_fallback, self.market_authority = market_fallback, market_authority
         self.durable, self.runtime, self.diary = durable, runtime, diary
         self.public, self.private, self.snapshots, self.funding = (
             public,
@@ -79,7 +87,7 @@ class Coordinator:
                 raise ValueError("ENTRY_ACCOUNT_NOT_FLAT")
         return snapshot
 
-    async def _prepare(self, op, require_authority=True):
+    async def _prepare(self, op, require_authority=True, fixed_base=None):
         symbol, lv, sv = op["symbol"], op["buy"], op["sell"]
         venues = (lv, sv)
         if lv == sv or (require_authority and not self.authority(symbol, lv, sv)):
@@ -87,10 +95,23 @@ class Coordinator:
         if any(v not in self.private or v not in self.public for v in venues):
             raise ValueError("ENTRY_CLIENT_MISSING")
         if (
-            not all(math.isfinite(x) and x > 0 for x in (self.bankroll, self.notional))
+            not all(
+                type(x) in (int, float) and math.isfinite(x) and x > 0
+                for x in (self.bankroll, self.notional)
+            )
             or self.notional > 5
         ):
             raise ValueError("ENTRY_NOTIONAL_LIMIT")
+        if (
+            any(
+                type(x) not in (int, float) or not math.isfinite(x) or x < 0
+                for x in (self.minimum, self.safety)
+            )
+            or type(self.max_seconds) not in (int, float)
+            or not math.isfinite(self.max_seconds)
+            or self.max_seconds <= 0
+        ):
+            raise ValueError("ENTRY_COST_POLICY_INVALID")
         async with aiosqlite.connect(self.durable.path) as db:
             async with db.execute(
                 "SELECT COALESCE(SUM(net),0) FROM live_results WHERE ts>=?",
@@ -174,6 +195,15 @@ class Coordinator:
             budget_notional / books[0]["asks"][0][0],
             budget_notional / books[1]["bids"][0][0],
         )
+        if fixed_base is not None:
+            if (
+                isinstance(fixed_base, bool)
+                or not math.isfinite(fixed_base)
+                or fixed_base <= 0
+                or fixed_base > qty * (1 + 1e-12)
+            ):
+                raise ValueError("FALLBACK_FIXED_SIZE_BUDGET_EXCEEDED")
+            qty = fixed_base
         native = prepare_pair(
             symbol,
             lv,
@@ -195,6 +225,14 @@ class Coordinator:
         )
         if not native.valid:
             raise ValueError(native.reason)
+        if fixed_base is not None and not math.isclose(
+            native.base_qty, fixed_base, rel_tol=1e-12
+        ):
+            raise ValueError("FALLBACK_NATIVE_SIZE_CHANGED")
+        if native.base_qty * max(
+            *prices, native.long.price, native.short.price
+        ) > budget_notional * (1 + 1e-12):
+            raise ValueError("ENTRY_DEPTH_NOTIONAL_LIMIT")
         reqs = {}
         for v, b, size, req in zip(venues, books, sizes, (native.long, native.short)):
             evidence = dict(
@@ -226,6 +264,16 @@ class Coordinator:
         async def snapshots():
             return self.fresh_snapshot(await self.snapshots(), venues)
 
+        # A concurrent reconciliation may credit a result during account/book I/O.
+        # Never submit against the earlier realized-loss/equity snapshot.
+        async with aiosqlite.connect(self.durable.path) as db:
+            async with db.execute(
+                "SELECT COALESCE(SUM(net),0),COALESCE(SUM(CASE WHEN ts>=? THEN net ELSE 0 END),0) FROM live_results",
+                (math.floor(self.clock() / 86400) * 86400,),
+            ) as cursor:
+                latest_total, latest_daily = map(float, await cursor.fetchone())
+        if latest_total != total_net or latest_daily != daily_net:
+            raise ValueError("ENTRY_REALIZED_RISK_CHANGED")
         return (
             plan,
             reqs,
@@ -300,12 +348,93 @@ class Coordinator:
                     plan, requests, fees, allowance, snapshots, equity, daily_loss = (
                         await self._prepare(op)
                     )
+                    current_requests = requests
+                    market_stage = False
+
+                    def admission(equity, daily_loss):
+                        return dict(
+                            live_enabled=True,
+                            release_gate=NS(micro_live=True),
+                            startup_safe=True,
+                            private_streams=True,
+                            withdrawals_disabled=True,
+                            bankroll=equity,
+                            daily_loss=daily_loss,
+                            books_fresh=True,
+                            risk_ok=True,
+                        )
+
+                    async def requote():
+                        nonlocal current_requests, market_stage
+                        if (
+                            getattr(self, "strategy", "futures_futures")
+                            != "futures_futures"
+                        ):
+                            raise ValueError("FALLBACK_STRATEGY_NOT_CERTIFIED")
+                        if not self.market_authority(
+                            op["symbol"], op["buy"], op["sell"]
+                        ):
+                            raise ValueError("FALLBACK_MARKET_AUTHORITY_REQUIRED")
+                        fresh, reqs, new_fees, reserve, _, new_equity, loss = (
+                            await self._prepare(op, fixed_base=plan.base_amount)
+                        )
+                        for old, new in (
+                            (plan.long, fresh.long),
+                            (plan.short, fresh.short),
+                        ):
+                            if old != new:
+                                raise ValueError("FALLBACK_NATIVE_PLAN_CHANGED")
+                        converted = {}
+                        for venue, req in reqs.items():
+                            e = req.market_evidence
+                            rows = e["asks"] if req.side == "buy" else e["bids"]
+                            average, _ = executable(rows, req.qty)
+                            converted[venue] = replace(
+                                req,
+                                order_type="market",
+                                price=None,
+                                ioc=False,
+                                reference_price=average,
+                                market_evidence={
+                                    **e,
+                                    "source": "PUBLIC_MARKET_ENTRY_V1",
+                                    "reduce_only": False,
+                                },
+                            )
+                            validate(converted[venue], venue, self.clock())
+                        if not self.market_authority(
+                            op["symbol"], op["buy"], op["sell"]
+                        ):
+                            raise ValueError("FALLBACK_MARKET_AUTHORITY_REQUIRED")
+                        current_requests, market_stage = converted, True
+                        lp, sp = converted[op["buy"]], converted[op["sell"]]
+                        return FallbackQuote(
+                            PairPlan(True, "OK", plan.base_amount, lp, sp),
+                            lp.reference_price,
+                            sp.reference_price,
+                            min(
+                                min(
+                                    r.market_evidence["book_ts"],
+                                    r.market_evidence["started_at"],
+                                )
+                                for r in converted.values()
+                            ),
+                            True,
+                            converted,
+                            new_fees,
+                            admission(new_equity, loss),
+                            self.minimum + reserve,
+                        )
 
                     def gate():
                         try:
                             if not self.authority(op["symbol"], op["buy"], op["sell"]):
                                 return False
-                            for v, r in requests.items():
+                            if market_stage and not self.market_authority(
+                                op["symbol"], op["buy"], op["sell"]
+                            ):
+                                return False
+                            for v, r in current_requests.items():
                                 validate(r, v, self.clock())
                             return True
                         except (ValueError, TypeError):
@@ -314,12 +443,13 @@ class Coordinator:
                     executors = {
                         v: SafeExecutor(
                             v,
-                            CCXTExecutor(v, self.private[v]),
+                            CCXTExecutor(v, self.private[v], clock=self.clock),
                             self.diary,
                             gate,
                             exit_gate=lambda: self.exit_authority(
                                 op["symbol"], op["buy"], op["sell"]
                             ),
+                            clock=self.clock,
                         )
                         for v in requests
                     }
@@ -340,17 +470,8 @@ class Coordinator:
                             book_spread_pct=0.01,
                             fee_schedule=fees,
                             min_net_edge_usd=self.minimum + allowance,
-                            admission_kwargs=dict(
-                                live_enabled=True,
-                                release_gate=NS(micro_live=True),
-                                startup_safe=True,
-                                private_streams=True,
-                                withdrawals_disabled=True,
-                                bankroll=equity,
-                                daily_loss=daily_loss,
-                                books_fresh=True,
-                                risk_ok=True,
-                            ),
+                            admission_kwargs=admission(equity, daily_loss),
+                            hybrid_requote=requote if self.market_fallback else None,
                             private_snapshot=snapshots,
                             long_round=lambda value: float(
                                 self.private[op["buy"]].amount_to_precision(

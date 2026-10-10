@@ -26,6 +26,51 @@ SPOT_CHECKS = (
     "cash_recovery",
     "held_inventory",
 )
+MARKET_CHECKS = (
+    "market_entry",
+    "market_lookup",
+    "market_slippage",
+    "zero_fill_transition",
+)
+
+
+def market_fallback_accepted(path, venues, now=None):
+    """IOC certification alone never authorizes an unbounded market request."""
+    try:
+        now = time.time() if now is None else now
+        if not accepted(path, venues, now):
+            return False
+        d = json.loads(Path(path).read_text())
+        scoped = d.get("hybrid", {}).get("venues", {})
+        # Revalidate the exact second read as well: replacement cannot remove TTL.
+        created, expires = d["verified_at"], d["expires_at"]
+        if any(
+            type(x) not in (int, float) or not math.isfinite(x)
+            for x in (created, expires)
+        ):
+            return False
+        if not created <= now < expires or expires - created > 86400:
+            return False
+        if (
+            type(d.get("version")) is not int
+            or d["version"] != 1
+            or not isinstance(d.get("evidence_id"), str)
+            or not d["evidence_id"].strip()
+        ):
+            return False
+        return (
+            all(d.get("checks", {}).get(k) is True for k in CHECKS)
+            and all(
+                all(d.get("venues", {}).get(v, {}).get(k) is True for k in VENUE_CHECKS)
+                for v in venues
+            )
+            and all(
+                all(scoped.get(v, {}).get(k) is True for k in MARKET_CHECKS)
+                for v in venues
+            )
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
 
 
 def accepted(path, venues, now=None, strategy=None):

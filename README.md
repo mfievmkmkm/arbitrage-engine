@@ -58,6 +58,12 @@ Read-only monitor восстанавливает уменьшенную пару
 
 В `/export` формируются XLSX и ZIP с CSV-таблицами и JSON-входом для анализа. Replay выбирает параметры на train и отдельно показывает отложенную выборку; параметры автоматически не меняются.
 
+## Опциональный вход IOC → market и фактические расходы
+
+`LIVE_ENTRY_MARKET_FALLBACK=true` подключает резервный market-вход Futures/Futures только после двух подтверждённых terminal zero-fill IOC. Нужны обычные LIVE/entry разрешения и отдельные strict `hybrid.venues.<venue>` checks из `live_acceptance.example.json`, с TTL до 24 часов. До market повторно проверяются private-flat, margin, fees/funding, realized risk, native size и executable depth. Возраст quote ≤1.5s, book slippage ≤0.2%, исходный размер не увеличивается. UNKNOWN и partial IOC не переотправляются. Market не гарантирует цену; actual breach сохраняет reconciliation/STOP либо защитный reduce-only выход. Passive resting queue этим путём не моделируется; Funding/cash/DEX сохраняют собственное исполнение.
+
+`/live_costs` (кнопка «Фактические расходы LIVE» в анализе) показывает комиссии, private funding и объясняющий slippage по durable Futures/Futures/Funding intents. Только полностью сведённый закрытый цикл получает reconciled NET; incomplete/conflicting/unsupported записи явно PARTIAL. Slippage к public VWAP не вычитается повторно из actual NET. Два derived листа добавлены в `/export`; отчёт только читает данные и не предоставляет trading authority.
+
 ## Исполнение выхода Futures/Futures
 
 Write-side координатор выхода подключён к обновлениям monitor в main. Он использует TARGET_CAPTURE/NET_TRAILING/NET_STOP/TIME_STOP, атомарно резервирует EXIT_SUBMITTING в SQLite, получает свежие reference books для обеих ног и отправляет reduce-only MARKET через SafeExecutor. Для известного остатка одной ноги применяется существующий recovery. Подтверждённые частичные остатки обеих ног передаются отдельному residual-координатору; неизвестные заявки, ошибки и неподтверждённые остатки сохраняют фазу/STOP для сверки. Автоматического повторного выхода после reservation нет.

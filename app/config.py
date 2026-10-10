@@ -58,6 +58,9 @@ class Config:
     live_spot_futures_enabled: bool = os.getenv(
         "LIVE_SPOT_FUTURES_ENABLED", "true"
     ).strip().lower() in ("true", "1", "yes", "on")
+    live_entry_market_fallback: bool = os.getenv(
+        "LIVE_ENTRY_MARKET_FALLBACK", "false"
+    ).strip().lower() in ("true", "1", "yes", "on")
     live_spot_spot_enabled: bool = os.getenv(
         "LIVE_SPOT_SPOT_ENABLED", "true"
     ).strip().lower() in ("true", "1", "yes", "on")
