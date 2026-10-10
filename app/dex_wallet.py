@@ -728,7 +728,13 @@ class Reader:
             elif not await self.journal.transition(
                 iid, ("PENDING", "BROADCASTING", "UNKNOWN"), phase, receipt=proofs[0]
             ):
-                raise ValueError("WALLET_RECEIPT_CLAIM_CONFLICT")
+                fresh = await self.journal.get(iid)
+                if (
+                    not fresh
+                    or fresh["phase"] != phase
+                    or json.loads(fresh["payload"]).get("receipt") != proofs[0]
+                ):
+                    raise ValueError("WALLET_RECEIPT_CLAIM_CONFLICT")
             return dict(status=phase, proof=proofs[0])
         except asyncio.CancelledError:
             raise

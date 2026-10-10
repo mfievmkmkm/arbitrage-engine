@@ -115,6 +115,7 @@ def rebuild(intents, tid, p):
                 base -= q
     return dict(
         base=str(base * (-1 if p.direction == "forward" else 1)),
+        entry_price=str(cost / base) if base else None,
         realized=str(realized),
         fees=str(fees),
         stages=stages,

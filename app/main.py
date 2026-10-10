@@ -281,7 +281,10 @@ async def text_for(s):
     if s == "readiness":
         return render_readiness(
             await build_readiness(
-                config.db_path, config.live_acceptance_path, config.live_exit_venues
+                config.db_path,
+                config.live_acceptance_path,
+                config.live_exit_venues,
+                dex_runtime_connected=bool(getattr(secondary, "dex_live", None)),
             )
         )
     if s == "dex_replay":
@@ -1258,6 +1261,8 @@ async def main():
             live_stop,
         )
 
+        dex_live = None
+
         async def monitor_update(summary, new_incidents):
             global live_trades
             live_trades = [RuntimeTrade(**row) for row in summary["runtime_trades"]]
@@ -1265,6 +1270,8 @@ async def main():
             await live_residual_coordinator.process(summary)
             summary["closed"].extend(await spot_future_live.process(summary))
             summary["closed"].extend(await spot_spot_live.process(summary))
+            if dex_live:
+                summary["closed"].extend(await dex_live.process(summary))
             summary["realized"] = await live_monitor.store.totals()
             if notification_bot:
                 for item in new_incidents:
@@ -1398,6 +1405,32 @@ async def main():
             min_carry_pct=config.live_funding_min_carry_pct,
         )
         funding_live.halt = live_stop.stop
+
+        def dex_entry_authority(venue):
+            summary = live_monitor.latest or {}
+            return bool(
+                config.live_enabled
+                and config.live_entry_enabled
+                and strategy_runtime.enabled.get("cex_dex", False)
+                and not scanner.paused
+                and not live_stop.stopped
+                and venue in config.live_exit_venues
+                and venue_controller.get(venue)["scan"]
+                and config.live_no_withdraw_attested
+                and not live_supervisor.kill.pairs
+                and not live_supervisor.kill.check("", venue, venue).blocked
+                and summary.get("private_verified") is True
+                and summary.get("reconciled") is True
+                and summary.get("unknown_orders") == 0
+                and 0 <= time.time() - summary.get("ts", 0) <= 15
+                and order_streams is not None
+                and venue in order_streams.tasks
+                and not order_streams.tasks[venue].done()
+                and venue in order_streams.observed
+                and venue not in order_streams.errors
+                and live_accepted(config.live_acceptance_path, (venue,))
+            )
+
         secondary = await build_bundle(
             config.exchanges,
             config.notional,
@@ -1409,15 +1442,34 @@ async def main():
             scanner.funding,
             scanner.universe.symbols if scanner.universe else (),
             private_clients=private_clients,
+            dex_options=dict(
+                live_enabled=config.live_enabled,
+                entry_authority=dex_entry_authority,
+                exit_authority=venue_exit_authority,
+                acceptance_path=config.live_acceptance_path,
+                bankroll=config.live_capital,
+                budget=min(5, config.notional),
+                minimum_net=config.live_min_net_edge_usd,
+                max_seconds=min(3600, config.paper_max_seconds),
+                target=config.paper_target_convergence,
+                trailing=config.paper_trailing_drawdown,
+                safety=str(config.notional * config.safety_buffer_pct / 100),
+            ),
         )
         secondary.runtime.paused = lambda: scanner.paused
-        live_monitor.cash_observer.dex = secondary.runtime.services.get("dex_live_observation")
+        live_monitor.cash_observer.dex = secondary.runtime.services.get(
+            "dex_live_observation"
+        )
+        dex_live = getattr(secondary, "dex_live", None)
+        if dex_live:
+            live_monitor.cash_observer.dex = dex_live.marker
 
         async def secondary_rows(name, rows, entry_enabled):
             coordinator = {
                 "spot_futures": spot_future_live,
                 "spot_spot": spot_spot_live,
                 "funding_arb": funding_live,
+                "dex_live_candidates": dex_live,
             }.get(name)
             if entry_enabled and coordinator:
                 async with live_monitor.lock:

@@ -7,9 +7,9 @@
 
 ## Работающий запуск
 
-`app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, Spot/Spot scanner с сохраняемыми виртуальными запасами и Funding scanner с сохраняемым Paper. Для DEX доступен опциональный 0x price-research; кошелёк не подписывает и не отправляет транзакции.
+`app.main` запускает Futures/Futures scanner и Paper, Spot/Futures scanner и сохраняемый Paper, Spot/Spot scanner с сохраняемыми виртуальными запасами и Funding scanner с сохраняемым Paper. Для DEX доступны опциональные 0x research/simulation и отдельно настроенный LIVE runtime с изолированным signer и scoped acceptance.
 
-LIVE Spot/Spot и Funding теперь зарегистрированы в основном запуске с отдельным account acceptance. Spot/Spot исполняет inventory-backed cash round trip и bounded explicit recovery; Funding использует общий derivative lifecycle с собственным горизонтом и reserve фактических расходов. Команды: `/ss_live`, `/ss_checks`, `/funding_live`, `/funding_checks`. CEX/DEX дополнительно поддерживает 0x firm quote + read-only RPC simulation и native CEX hedge/NET ceiling model. Добавлен двусторонний DEX Paper/Replay с сохраняемым reserve, min-out / exact-out max-in, отдельным gas и историей funding; `/dex_paper`, `/dex_replay`. Wallet LIVE и latency/partial-leg stress ещё требуют реализации и проверки. Подробности: [REMAINING_LIVE_RUNBOOK_RU.md](REMAINING_LIVE_RUNBOOK_RU.md).
+LIVE Spot/Spot и Funding зарегистрированы в основном запуске с отдельным account acceptance. Spot/Spot исполняет inventory-backed cash round trip и bounded explicit recovery; Funding использует общий derivative lifecycle с собственным горизонтом и reserve фактических расходов. Команды: `/ss_live`, `/ss_checks`, `/funding_live`, `/funding_checks`. CEX/DEX поддерживает firm simulation, native hedge, сохраняемый Paper/Replay, sequential stress и настроенный автоматический wallet/CEX runtime. Реальная сертификация аккаунтов, кошелька и длительная OOS-история остаются обязательными. Подробности: [REMAINING_LIVE_RUNBOOK_RU.md](REMAINING_LIVE_RUNBOOK_RU.md).
 
 
 Telegram: `/start`, `/top`, `/paper`, `/funding_paper`, `/fund_replay`, `/strategies`, `/exchanges`, `/diary`, `/replay`, `/execution_replay`, `/capital`, `/risk`, `/startup`, `/live`, `/live_checks`, `/live_stop`, `/live_resume`, `/export`, `/pause`, `/resume`.
@@ -118,6 +118,6 @@ Funding-прогноз не считается полученной прибыл
 
 ## История этапов
 
-Wallet signing/nonce/receipt backend и сценарный CEX/DEX execution stress добавлены; `/dex_stress`, `/dex_wallet`, `/readiness`. Main подключает только read-only receipt observer, не автоматический swap→CEX LIVE bridge. Текущие ограничения, параметры и незавершённые блоки: [DEX_WALLET_AND_STRESS_RUNBOOK_RU.md](DEX_WALLET_AND_STRESS_RUNBOOK_RU.md).
+Wallet signing/nonce/receipt backend и сценарный CEX/DEX execution stress добавлены; `/dex_stress`, `/dex_wallet`, `/readiness`. Main подключает настроенный автоматический swap→actual-native CEX hedge, paired NET/time exit, restart-safe bounded recovery и atomic accounting. Включение требует root LIVE, DEX_LIVE_ENABLED и действующих scoped certificates; без них доступно read-only наблюдение. Scope и настройки: [DEX_WALLET_AND_STRESS_RUNBOOK_RU.md](DEX_WALLET_AND_STRESS_RUNBOOK_RU.md).
 
 Предыдущие документы сохраняются как история реализации. Их формулировки «complete/ready» не являются текущим допуском к LIVE. Текущее состояние — в `RELEASE_STATUS_RU.md`.

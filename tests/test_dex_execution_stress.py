@@ -164,10 +164,8 @@ def test_database_report_persists_inputs_results_and_never_credits_ledger(tmp_pa
             == result["samples"]["cex_dex"]["eligible"]
             == 1
         )
-        assert (
-            "DEX_WRITE_BOOTSTRAP_AND_PAIRED_EXIT_MONITOR_NOT_CONNECTED"
-            in result["missing"]
-        )
-        assert "runtime observer только читает" in render_readiness(result)
+        assert "DEX_LIVE_RUNTIME_CONFIGURATION_REQUIRED" in result["missing"]
+        assert result["dex_software_components_complete"]
+        assert "NET-выходы" in render_readiness(result)
 
     asyncio.run(run())

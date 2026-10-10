@@ -126,7 +126,7 @@ class Admission:
             value = qty * dec(avg)
         return value, b
 
-    async def edge(self, p, signed_asset_raw, quote_raw, gas_raw, request):
+    async def edge(self, p, signed_asset_raw, quote_raw, gas_raw, request=None):
         client = self.identity(p)
         started = self.clock()
         fee = await asyncio.wait_for(client.fetch_trading_fee(p.symbol), 8)
@@ -151,6 +151,8 @@ class Admission:
         ):
             raise ValueError("DEX_FUNDING_CALENDAR_INVALID")
         gas, book = await self.gas(gas_raw)
+        if request is None:
+            request = await self.backend.prepare(p, -signed_asset_raw, closing=False)
         with localcontext() as ctx:
             ctx.prec = 80
             base = abs(dec(signed_asset_raw)) / 10**p.asset_decimals
@@ -191,6 +193,7 @@ class Admission:
             cex_evidence=evidence,
             ts=self.clock(),
         )
+        self.latest_request = request
         return True
 
     async def account(self, p):
@@ -251,9 +254,8 @@ class Admission:
         # Preflight the opposite route against already-owned isolated inventory.
         reverse = await self.reverse_quote(p, asset)
         self.check_reverse(p, asset, reverse)
-        request = await self.backend.prepare(p, -asset, closing=False)
         gas_raw = max(int(q["network_fee_raw"]), int(reverse.proof["network_fee_raw"]))
-        return await self.edge(p, asset, quote, gas_raw, request)
+        return await self.edge(p, asset, quote, gas_raw)
 
     async def hedge(self, p, observation, request):
         await self.account(p)
@@ -265,3 +267,17 @@ class Admission:
         return await self.edge(
             p, flow["asset_raw"], flow["quote_raw"], gas_raw, request
         )
+
+    async def prepare_hedge(self, p, observation):
+        """Acquire private/DEX/cost evidence before the final executable CEX book."""
+        await self.account(p)
+        flow = observation["wallet"]
+        reverse = await self.reverse_quote(p, flow["asset_raw"])
+        self.check_reverse(p, flow["asset_raw"], reverse)
+        gas_raw = max(flow["gas_raw"], int(reverse.proof["network_fee_raw"]))
+        if (
+            await self.edge(p, flow["asset_raw"], flow["quote_raw"], gas_raw)
+            is not True
+        ):
+            raise ValueError("DEX_POST_RECEIPT_NET_UNVERIFIED")
+        return self.latest_request

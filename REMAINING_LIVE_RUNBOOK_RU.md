@@ -51,7 +51,7 @@ CEX сопоставление использует native linear USDT contract 
 
 ## CEX/DEX Paper: полный модельный цикл
 
-Дополнение следующего блока: wallet backend, dual-RPC receipts и sequential execution stress реализованы. Общий CEX/DEX LIVE-координатор пока не подключён. Актуальные ограничения и команды — [DEX_WALLET_AND_STRESS_RUNBOOK_RU.md](DEX_WALLET_AND_STRESS_RUNBOOK_RU.md).
+Дополнение: wallet backend, dual-RPC receipts, sequential execution stress и настроенный автоматический CEX/DEX LIVE-координатор с paired NET exits подключены. Требуются реальные scoped certificates и настройка изолированного кошелька. Актуальные ограничения и команды — [DEX_WALLET_AND_STRESS_RUNBOOK_RU.md](DEX_WALLET_AND_STRESS_RUNBOOK_RU.md).
 
 Те же simulation routes теперь подключают сохраняемый Paper вместо отдельного ceiling-only сервиса. Нужны доступные CEX futures markets, аккаунтные taker fees и известный funding calendar. `DEX_PAPER_HOLD_SECONDS=900` ограничивает модельный hold. Наблюдение открытых позиций продолжается при отключении стратегии.
 

@@ -247,6 +247,7 @@ class Session:
             wallet_chain=1,
             cex_venue=p.venue,
             wallet_quote_fingerprint=envelope.proof["quote_fingerprint"],
+            dex_entry_edge=getattr(self.admission, "latest", {}).get("ceiling"),
         ):
             return dict(status="BLOCKED", reason="GLOBAL_LIVE_CAPACITY")
         try:
@@ -402,14 +403,21 @@ class Session:
             return dict(
                 status="RECOVERY_REQUIRED", reason="DEX_ENTRY_AUTHORITY_EXPIRED"
             )
-        request = await self.cex.prepare(p, -asset, closing=False)
-        if (
-            self.hedge_admission is None
-            or await self.hedge_admission(p, obs, request) is not True
-        ):
-            return dict(
-                status="RECOVERY_REQUIRED", reason="DEX_POST_RECEIPT_NET_UNVERIFIED"
-            )
+        if callable(getattr(self.admission, "prepare_hedge", None)):
+            request = await self.admission.prepare_hedge(p, obs)
+            if request is None:
+                return dict(
+                    status="RECOVERY_REQUIRED", reason="DEX_POST_RECEIPT_NET_UNVERIFIED"
+                )
+        else:
+            request = await self.cex.prepare(p, -asset, closing=False)
+            if (
+                self.hedge_admission is None
+                or await self.hedge_admission(p, obs, request) is not True
+            ):
+                return dict(
+                    status="RECOVERY_REQUIRED", reason="DEX_POST_RECEIPT_NET_UNVERIFIED"
+                )
         if not await self._change(
             tid,
             (row["phase"],),
@@ -436,6 +444,45 @@ class Session:
             )
         except Exception:
             return dict(status="HOLD", reason="DEX_CEX_SEND_UNKNOWN")
+
+    async def abort_reserved(self, tid):
+        """Only a never-claimed wallet/CEX reservation can be released without costs.
+
+        A racing Sender.reserve then sees ABORTED and cannot sign/broadcast.
+        SIGNING/UNKNOWN or any wallet/order journal entry prevents this path.
+        """
+        await self._row(tid)
+        async with aiosqlite.connect(self.path) as d:
+            await d.execute("BEGIN IMMEDIATE")
+            cur = await d.execute(
+                "SELECT phase FROM live_trades WHERE trade_id=?", (tid,)
+            )
+            row = await cur.fetchone()
+            if not row or row[0] != "PLANNED":
+                return dict(status="RECONCILE_REQUIRED")
+            for table in ("wallet_tx_intents", "order_intents", "dex_live_stages"):
+                cur = await d.execute(
+                    "SELECT 1 FROM " + table + " WHERE trade_id=? LIMIT 1", (tid,)
+                )
+                if await cur.fetchone():
+                    return dict(
+                        status="HOLD", reason="DEX_RESERVED_EXECUTION_EVIDENCE_PRESENT"
+                    )
+            await d.execute(
+                "UPDATE live_trades SET phase='ABORTED',updated_at=? WHERE trade_id=?",
+                (self.clock(), tid),
+            )
+            await d.execute(
+                "INSERT INTO dex_live_events(trade_id,ts,phase,payload) VALUES(?,?,?,?)",
+                (
+                    tid,
+                    self.clock(),
+                    "ABORTED",
+                    json.dumps(dict(reason="NO_EXECUTION_CLAIM_NO_SEND")),
+                ),
+            )
+            await d.commit()
+        return dict(status="ABORTED", trade_id=tid)
 
     async def close(self, tid, recovery=False):
         row, meta, p = await self._row(tid)

@@ -1,8 +1,18 @@
 # Фактическое состояние после интеграции рабочего запуска
 
-Дата: 9 октября 2026. Рабочая ветка: `phase-2-discovery`.
+Дата: 10 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: durable CEX/DEX bridge API и общий read-only monitor
+## Текущий блок: автоматический CEX/DEX runtime
+
+Проверено: 1255 тестов, compileall, импорт main и diff-check. Новые offline-сценарии покрывают configured bootstrap, одноразовые кандидаты без calldata в журнале, hedge, restart unwind, UNKNOWN/stale holds, повторную проверку target, funding gaps/NET stop/time stop и конкурентную сверку receipt.
+
+Write-bootstrap подключён к secondary scanner и общему LIVE monitor. Одноразовые firm-кандидаты проходят повторный account/wallet admission; calldata остаётся в памяти. После finalized dual-RPC receipt новый цикл хеджирует фактический raw asset. После перезапуска незахеджированный остаток восстанавливается через новый bounded exit, без повторения входа. UNKNOWN удерживает owner и запрещает повторную отправку.
+
+Paired NET mark использует обратный firm swap, свежий reduce-only CEX book, account fees, gas replacement valuation и только mature private funding. Target/trailing повторно проверяются перед выходом; time/NET stop и максимум 3 recovery rounds используют Session boundaries. Общий лимит освобождается после атомарного двухстороннего результата. Обычный PENDING с сохранённым hash получает WARNING; UNKNOWN, конфликт и слишком долгое ожидание сохраняют HIGH/STOP.
+
+Код включается явными root LIVE и DEX_LIVE_ENABLED, проверенными registry/routes, изолированным ключом, caps и expiring CEX/wallet acceptance. Поддерживаемый wallet scope: Ethereum mainnet EOA, стандартные ERC20, USDT quote, legacy gasPrice; другие сети/типы транзакций не сертифицированы. Software components реализованы для этого scope; полная operational readiness остаётся false до настройки, реальной сертификации и Paper/OOS/micro-canary. Ни реальные ключи, ни реальные заявки при разработке не использовались.
+
+## Предыдущий блок: durable CEX/DEX bridge API и общий read-only monitor
 
 Проверка текущего блока: 1234 теста, compileall/import и diff-check. Только offline fixtures/моки, без реальных финансовых ключей или отправки сделок.
 

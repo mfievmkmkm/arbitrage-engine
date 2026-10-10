@@ -23,6 +23,7 @@ from .dex_execution_stress import History as DexHistory
 from .dex_wallet import Journal as WalletJournal, RPC as WalletRPC
 from .dex_wallet_observer import Observer as WalletObserver
 from .dex_live_observer import build as dex_bridge_observer
+from .dex_live_bootstrap import build as build_dex_live
 
 
 class Bundle:
@@ -36,6 +37,7 @@ class Bundle:
         self.funding_paper = None
         self.dex_paper = None
         self.wallet_session = None
+        self.dex_live = None
 
     async def close(self):
         await self.runtime.stop()
@@ -46,6 +48,8 @@ class Bundle:
             await self.dex_sim_provider.close()
         if self.wallet_session:
             await self.wallet_session.close()
+        if self.dex_live:
+            await self.dex_live.provider.close()
 
 
 async def build_bundle(
@@ -59,6 +63,7 @@ async def build_bundle(
     funding_service=None,
     future_symbols=(),
     private_clients=None,
+    dex_options=None,
 ):
     clients = await build(ids)
     bundle = None
@@ -113,6 +118,7 @@ async def build_bundle(
         rpc_a, rpc_b = os.getenv("DEX_WALLET_RPC_PRIMARY"), os.getenv(
             "DEX_WALLET_RPC_SECONDARY"
         )
+        primary = secondary_rpc = None
         if rpc_a or rpc_b:
             if not rpc_a or not rpc_b or rpc_a == rpc_b:
                 raise ValueError("DEX_WALLET_DUAL_RPC_REQUIRED")
@@ -208,6 +214,19 @@ async def build_bundle(
             await bundle.dex_paper.init()
             sr.add("cex_dex", DexPaperCycle(bundle.dex_paper, simulation_routes))
             runtime.enabled["cex_dex"] = True
+        bundle.dex_live = await build_dex_live(
+            db_path,
+            wallet,
+            primary,
+            secondary_rpc,
+            clients,
+            private_clients or {},
+            funding_service,
+            dex_options,
+        )
+        if bundle.dex_live:
+            sr.add("dex_live_candidates", bundle.dex_live.source)
+            runtime.enabled["cex_dex"] = True
         return bundle
     except BaseException:
         if bundle and bundle.dex_provider:
@@ -216,5 +235,7 @@ async def build_bundle(
             await bundle.dex_sim_provider.close()
         if bundle and bundle.wallet_session:
             await bundle.wallet_session.close()
+        if bundle and bundle.dex_live:
+            await bundle.dex_live.provider.close()
         await close(clients)
         raise

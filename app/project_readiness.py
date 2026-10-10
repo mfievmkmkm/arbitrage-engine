@@ -15,7 +15,9 @@ TABLES = {
 }
 
 
-async def build(path, acceptance_path, venues=(), now=None):
+async def build(
+    path, acceptance_path, venues=(), now=None, dex_runtime_connected=False
+):
     now = time.time() if now is None else now
     counts, active, wallet_pending = {}, 0, 0
     async with aiosqlite.connect(path) as d:
@@ -72,7 +74,11 @@ async def build(path, acceptance_path, venues=(), now=None):
             )
         )
     missing = [
-        "DEX_WRITE_BOOTSTRAP_AND_PAIRED_EXIT_MONITOR_NOT_CONNECTED",
+        *(
+            []
+            if dex_runtime_connected is True
+            else ["DEX_LIVE_RUNTIME_CONFIGURATION_REQUIRED"]
+        ),
         "REAL_ACCOUNT_AND_WALLET_CERTIFICATION",
         "LONG_RUNNING_PAPER_OOS_AND_MICRO_CANARY",
     ]
@@ -81,6 +87,8 @@ async def build(path, acceptance_path, venues=(), now=None):
     return dict(
         mode="READ_ONLY_PROJECT_AUDIT",
         software_complete=False,
+        dex_software_components_complete=True,
+        dex_runtime_connected=dex_runtime_connected is True,
         production_ready=False,
         missing=missing,
         samples=sample,
@@ -95,6 +103,8 @@ async def build(path, acceptance_path, venues=(), now=None):
             "DUAL_RPC_FINALIZED_RECEIPT_CASHFLOW",
             "DEX_DURABLE_BRIDGE_SESSION_AND_CEX_BACKEND",
             "DEX_READ_ONLY_BRIDGE_RUNTIME_OBSERVER",
+            "DEX_CONFIGURED_AUTO_ENTRY_AND_PAIRED_NET_EXIT",
+            "DEX_RESTART_SAFE_BOUNDED_RECOVERY_AND_FINAL_ACCOUNTING",
             "TELEGRAM_DIARY_EXPORT",
         ],
         live_allowed=False,
@@ -113,7 +123,7 @@ def render(report):
         "🏁 <b>Проверка готовности проекта</b>",
         "<i>Отчёт не разрешает торговлю и не меняет настройки. Прохождение тестов не является проверкой аккаунта.</i>",
         "\n<b>Реализовано</b>\nCEX lifecycles, DEX Paper/Replay, stress задержек/частичных fills, wallet signer/nonce journal, dual-RPC receipts, durable bridge session/CEX backend, дневник и экспорт.",
-        "\n<b>До окончательного завершения</b>\n• Подключить write-bootstrap CEX/DEX к scanner/shared monitor и динамическим NET-выходам. Durable session API уже реализован; runtime observer только читает.\n• Проверить выбранные аккаунты, изолированный кошелёк и scope разрешений.\n• Собрать длительную Paper/OOS-историю, затем отдельно провести micro-canary.",
+        "\n<b>До допуска к реальной торговле</b>\n• Настроить DEX runtime: изолированный кошелёк, два RPC, token registry, маршруты и лимиты. Автоматические входы, shared monitor, динамические NET-выходы и bounded recovery реализованы.\n• Проверить выбранные аккаунты, кошелёк и scope разрешений.\n• Собрать длительную Paper/OOS-историю, затем отдельно провести micro-canary.",
         f"\nНезавершённых LIVE: {report['active_live']} · wallet intents: {report['wallet_pending']}",
         "\n<b>Сохранённая модельная история</b>",
     ]

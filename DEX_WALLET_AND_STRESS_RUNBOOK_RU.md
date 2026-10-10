@@ -1,6 +1,18 @@
 # DEX wallet backend и stress исполнения
 
-Дата: 9 октября 2026. Этот документ описывает реализованные компоненты, не production-допуск.
+Дата: 10 октября 2026. Этот документ описывает реализованные компоненты, не production-допуск.
+
+## Подключённый автоматический runtime
+
+`dex_live_bootstrap` создаёт signer только при `LIVE_ENABLED=true` и `DEX_LIVE_ENABLED=true`. `dex_live_runtime.Source` получает firm exact-out/ exact-in кандидаты, держит calldata в одноразовом кэше до 15 секунд и повторяет admission перед отправкой. `Coordinator` работает под общим monitor lock: confirmed swap → actual-native hedge → paired NET/time exit → verified result. После перезапуска неподтверждённый вход не повторяется; подтверждённая незахеджированная экспозиция закрывается отдельным recovery stage. UNKNOWN никогда не считается нулевым fill.
+
+`Marker` считает executable estimate по reverse swap и CEX exit book, account fees, gas и mature funding. Funding gaps исключают прибыльный capture, но не отменяют price/fee loss stop и time stop. Target/trailing пересчитываются свежим mark перед закрытием. Estimate отличается от результата: ledger credit возможен только после двухстороннего private-flat и immutable accounting proof.
+
+Настройки: два различных HTTPS `DEX_WALLET_RPC_PRIMARY/SECONDARY`, `DEX_TOKEN_REGISTRY_PATH`, `ZEROX_API_KEY`, `DEX_WALLET_POLICY_PATH`, изолированный `DEX_WALLET_PRIVATE_KEY`, `DEX_LIVE_ROUTES_JSON`, `DEX_MAX_UNHEDGED_SECONDS` (1–3600). Маршруты — массив объектов `{"asset_token":"0x…","asset_amount_raw":"100","direction":"forward"}`; direction также `reverse`. Raw amount относится к asset, contractSize/decimals проверяются по registry и native market. Бюджет не превышает 5 USDT.
+
+Policy JSON содержит ровно `version:1`, `wallet`, `cex_venue`, `acceptance_path`, `targets` (allowlist адресов), `max_sell_raw` (token → положительный raw cap), `max_gas_raw` (положительный cap в wei). Scope expiring wallet certificate сверяется перед каждой подписью; account certificate и entry/exit authority остаются отдельными проверками. Allowance должен существовать и быть независимо проверен: автоматического approve нет. Private key не сохраняется в policy, journal или экспорте.
+
+Обычная сохранённая PENDING-транзакция с hash в пределах max hold временно блокирует новые действия и даёт WARNING. UNKNOWN, RPC mismatch, недоказанный receipt и превышение срока вызывают HOLD/HIGH; новые отправки и снятие STOP без сверки запрещены. Finalized receipt одного wallet сам по себе не освобождает общую LIVE capacity.
 
 ## Следующий реализованный блок: durable bridge session API
 
@@ -46,9 +58,9 @@ Firm quotes, газ, timestamps и native books записываются read-on
 
 `/dex_wallet` показывает intents и подтверждённые raw cashflow/gas; `/readiness` отдельно показывает незавершённые блоки, unresolved LIVE, объём пригодной Paper-истории и действующее account evidence. Отчёт не снимает STOP и не меняет gates. Audit export включает wallet intents/events и quote/stress tables. Публичные ERC20 addresses/deltas сохраняются в экспорте; секреты и raw signing capabilities редактируются.
 
-## Что ещё не закончено
+## Внешние проверки до production
 
-1. Общий CEX/DEX LIVE-координатор: admit обеих площадок, время и доказательство CEX hedge относительно DEX receipt, симметричный выход, bounded one-leg recovery, фактическая fee/funding/gas attribution и финализация двух площадок. Сейчас wallet backend намеренно не подключён к автоматическим swap-сигналам.
+1. Настройка выбранных registry, маршрутов, изолированного кошелька, caps и действующих CEX/wallet certificates. Автоматический координатор и paired NET monitor подключены; готовность конкретной установки показывается отдельно.
 2. Реальные account/chain/wallet certification и micro-canary на выбранном scope. Нельзя просто выставить все checks=true по успешным unit-тестам.
 3. Длительная запись Paper/OOS и плотных публичных данных. Это нельзя выполнить мгновенно или восстановить будущими/выдуманными котировками.
 

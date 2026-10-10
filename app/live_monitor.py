@@ -637,8 +637,17 @@ class Monitor:
                 private_ok = False
                 incidents.append(
                     self._incident(
-                        "CASH_PRIVATE_UNVERIFIED",
+                        (
+                            "DEX_SETTLEMENT_PENDING"
+                            if info.get("settlement_pending") is True
+                            else "CASH_PRIVATE_UNVERIFIED"
+                        ),
                         tid,
+                        severity=(
+                            "WARNING"
+                            if info.get("settlement_pending") is True
+                            else "HIGH"
+                        ),
                         reason=info.get("cash_error", "UNKNOWN"),
                     )
                 )

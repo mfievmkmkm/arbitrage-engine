@@ -15,6 +15,8 @@ def evaluate(
     dedicated_acceptance=False,
     cash_account_acceptance=False,
     funding_account_acceptance=False,
+    wallet_acceptance=False,
+    dex_runtime_connected=False,
 ):
     if strategy == "futures_futures":
         return Gate(
@@ -44,5 +46,18 @@ def evaluate(
             "FUNDING_ACCOUNT_ACCEPTANCE" if live else "FUNDING_ACCEPTANCE_REQUIRED",
         )
     if strategy == "cex_dex":
-        return Gate(True, True, False, "DEX_LIVE_COORDINATOR_AND_ACCEPTANCE_REQUIRED")
+        live = all(
+            x is True
+            for x in (dedicated_acceptance, wallet_acceptance, dex_runtime_connected)
+        )
+        return Gate(
+            True,
+            True,
+            live,
+            (
+                "DEX_SCOPED_ACCEPTANCE"
+                if live
+                else "DEX_RUNTIME_AND_SCOPED_ACCEPTANCE_REQUIRED"
+            ),
+        )
     return Gate(False, False, False, "UNKNOWN_STRATEGY")
