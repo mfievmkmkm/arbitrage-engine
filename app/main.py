@@ -118,6 +118,7 @@ from .cex_dex_paper_view import render as render_dex_paper
 from .dex_execution_stress import build as build_dex_stress, render as render_dex_stress
 from .dex_wallet_observer import render as render_wallet
 from .project_readiness import build as build_readiness, render as render_readiness
+from .walk_forward import build as build_walk_forward, render as render_walk_forward
 from .book_priority_runtime import live as live_book_priorities
 from .book_history import Store as BookHistory
 from .stream_book_recorder import Recorder as StreamBookRecorder
@@ -296,6 +297,12 @@ async def text_for(s):
                 config.live_acceptance_path,
                 config.live_exit_venues,
                 dex_runtime_connected=bool(getattr(secondary, "dex_live", None)),
+            )
+        )
+    if s == "walk_forward":
+        return render_walk_forward(
+            await build_walk_forward(
+                config.db_path, max_gap=max(120, config.interval * 3)
             )
         )
     if s == "dex_replay":
@@ -492,6 +499,7 @@ async def start(m: Message):
         "dex_stress",
         "dex_wallet",
         "readiness",
+        "walk_forward",
         "execution_replay",
         "live_costs",
         "sf_execution",
@@ -585,6 +593,7 @@ async def commands(m: Message):
             "dex_stress",
             "dex_wallet",
             "readiness",
+            "walk_forward",
             "execution_replay",
             "live_costs",
             "sf_execution",
@@ -788,6 +797,7 @@ def keyboard_for(screen):
         return strategy_menu(strategy_runtime.enabled)
     if screen in (
         "replay",
+        "walk_forward",
         "sf_replay",
         "ss_replay",
         "fund_replay",
@@ -1058,6 +1068,9 @@ async def main():
         raise RuntimeError(render_preflight(pf))
     if pf.warnings:
         log.warning("%s", render_preflight(pf).replace("\\n", " | "))
+    from .database_maintenance import ensure_not_restored
+
+    ensure_not_restored(config.db_path)
     secondary = None
     live_monitor = None
     live_exit_coordinator = None

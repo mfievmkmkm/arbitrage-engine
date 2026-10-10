@@ -98,6 +98,17 @@ async def build(path, directory):
         sheets["Stress evidence"] = [
             dict(strategy=s, **r) for s, r in evidence["execution_stress"].items()
         ]
+        walks = evidence["walk_forward"]["strategies"]
+        sheets["Walk forward summary"] = [
+            dict(
+                strategy=s,
+                **{k: v for k, v in r.items() if k not in ("folds", "strategy")}
+            )
+            for s, r in walks.items()
+        ]
+        sheets["Walk forward folds"] = [
+            dict(strategy=s, **fold) for s, r in walks.items() for fold in r["folds"]
+        ]
         await d.rollback()
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)

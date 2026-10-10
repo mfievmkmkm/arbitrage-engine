@@ -8,6 +8,15 @@ Historical A–F below is a design checklist, not an assertion that already
 integrated Paper/Replay/UI pieces are still missing. Use RELEASE_STATUS_RU.md
 for the actual implementation matrix.
 
+The final pre-connection software block adds expected-firm-price DEX receipt
+attribution, purged expanding multi-fold walk-forward for all five strategies,
+WAL-aware sealed database backups and backup-before-prune observation retention.
+Legacy quotes without expected-input evidence remain incomplete; max-input
+bounds are never substituted for price references. Restored inspection copies
+cannot boot trading runtime until separately reconciled. ORIGINAL_DESIGN_AUDIT.md
+contains the current requirement matrix; PRELAUNCH_CHECKLIST_RU.md provides the
+local/home verification sequence. No account, RPC, signer or real order was used.
+
 The read-only readiness dossier now combines all five Paper/OOS histories,
 persisted execution stress and actual native cost attribution in one SQLite
 snapshot. Stress run summaries are cross-checked against their result journal;
@@ -44,8 +53,9 @@ intents, native flows, private funding and closed results, with UI/audit export.
 Actual cost attribution now spans all five strategies. Cash native flows,
 BASE fees, held inventory/allocations and mature funding are rechecked; DEX
 receipts, canonical CEX journals, native ETH gas and saved replacement valuation
-are reproduced in a read-only snapshot. DEX wallet slippage remains explicitly
-unattributed rather than assumed zero. Cash actual post-fill NET breaches use
+are reproduced in a read-only snapshot. DEX wallet slippage is attributed when
+a valid expected-price reference was durably recorded; legacy missing references
+remain explicitly incomplete rather than assumed zero. Cash actual post-fill NET breaches use
 protective close; the old Spot/Futures minimum-edge clamp is removed.
 Resting passive-limit queues are not enabled: aggressive IOC plus separately
 certified zero-fill market fallback is the selected small-bankroll entry path.

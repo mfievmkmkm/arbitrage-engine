@@ -203,6 +203,7 @@ class Provider(ResearchProvider):
             ):
                 raise ValueError("DEX_QUOTE_SCOPE_MISMATCH")
             bought = integer(raw.get("buyAmount"), "DEX_BUY_AMOUNT")
+            expected_sell = raw.get("sellAmount")
             requested = amount
             if exact_out:
                 if bought != requested or raw.get("minBuyAmount") is not None:
@@ -402,6 +403,11 @@ class Provider(ResearchProvider):
                 mode="READ_ONLY_FIRM_SIMULATION",
                 live_allowed=False,
                 paper_allowed=False,
+            )
+            from .dex_slippage import reference
+
+            proof["execution_reference"] = reference(
+                proof, expected_sell, tokens[sell]["decimals"], tokens[buy]["decimals"]
             )
             if execution_envelope:
                 return Envelope(

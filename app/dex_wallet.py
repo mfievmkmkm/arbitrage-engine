@@ -181,6 +181,10 @@ class Policy:
         ).hexdigest()
         if fingerprint != q["quote_fingerprint"]:
             raise ValueError("WALLET_QUOTE_MUTATED")
+        if q.get("execution_reference") is not None:
+            from .dex_slippage import validate
+
+            validate(q)
 
 
 @dataclass(frozen=True)

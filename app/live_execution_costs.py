@@ -276,7 +276,13 @@ async def read(db, limit=100):
                             inventory_deficit_charge=0,
                             slippage_complete=True,
                         )
-        except (ValueError, TypeError, KeyError, AttributeError, DecimalException) as error:
+        except (
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            DecimalException,
+        ) as error:
             item["reasons"].append(
                 str(error) if isinstance(error, ValueError) else "COST_EVIDENCE_INVALID"
             )
@@ -319,6 +325,15 @@ def render(report):
     if any(r.get("slippage_complete") is False for r in good):
         out.append(
             "Полный wallet slippage не подтверждён; CEX-часть показана отдельно в экспорте."
+        )
+    attributed = [
+        r
+        for r in good
+        if r.get("strategy") == "cex_dex" and r.get("slippage_complete") is True
+    ]
+    if attributed:
+        out.append(
+            f"DEX отклонение от firm-цены: хуже {sum(r.get('wallet_adverse_slippage_usd',0) for r in attributed):.6f} / лучше {sum(r.get('wallet_favorable_slippage_usd',0) for r in attributed):.6f} USDT · уже в cashflow NET."
         )
     for strategy in (
         "futures_futures",

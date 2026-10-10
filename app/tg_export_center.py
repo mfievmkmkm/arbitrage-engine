@@ -1,1 +1,12 @@
-def render():return "<b>EXPORT CENTER</b>\n<code>RESEARCH & AUDIT</code>\n\n📄 Observations CSV\n📄 Trades CSV\n📄 Ledger CSV\n📊 Replay workbook XLSX\n\nExports contain evidence and results; secrets are never included."
+def render():
+    return (
+        "📦 <b>Экспорт и аналитика</b>\n\n"
+        "📄 Наблюдения, найденные и пропущенные сигналы\n"
+        "📄 Paper/LIVE сделки, обе ноги и журнал исполнения\n"
+        "🧾 Фактические комиссии, funding, газ и NET\n"
+        "🔬 Paper/OOS, walk-forward и стресс-сценарии\n"
+        "📊 XLSX и архив CSV с входным отчётом для анализа\n\n"
+        "<i>Экспорт не разрешает торговлю. Секретные поля скрываются; "
+        "файлы содержат финансовую историю — не публикуйте их открыто. "
+        "Это отчёт, не полная резервная копия базы.</i>"
+    )

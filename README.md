@@ -7,6 +7,29 @@
 
 ## Работающий запуск
 
+Последний программный блок: `/walk_forward` (кнопка в Replay) выполняет несколько
+последовательных purged train/test периодов для всех пяти стратегий. Каждый
+период выбирает правила только из завершённой прошлой истории; test позиции не
+повторяются между периодами, одинаковое время открытия не разделяется.
+Неполные/censored/limited периоды не становятся успешным отчётом. Параметры и
+LIVE acceptance не меняются. Подробные периоды включены в XLSX/CSV export.
+
+Новые DEX firm-quotes сохраняют expected-price reference с native decimals и
+digest. Actual receipt сравнивается с ожидаемой ценой: adverse и favorable
+отклонения показаны отдельно и не списываются второй раз из cashflow NET.
+Exact-out `maxSellAmount` не подменяет ожидаемый `sellAmount`; если ожидаемый
+input отсутствует, атрибуция остаётся неполной. Legacy записи не «исправляются»
+выдуманными reference.
+
+Добавлены локальные `app.database_maintenance` (WAL-aware backup, verify,
+non-overwriting inspection recovery copy) и `app.retention` (dry-run по
+умолчанию, backup-before-prune). Финансовые журналы не очищаются по возрасту;
+изменённые после backup наблюдения сохраняются. Восстановленная копия блокирует
+запуск runtime до отдельной операторской сверки — она не является разрешением
+переотправить старые заявки или nonce. Домашняя последовательность проверки:
+[PRELAUNCH_CHECKLIST_RU.md](PRELAUNCH_CHECKLIST_RU.md). Актуальная сверка исходной
+концепции: [ORIGINAL_DESIGN_AUDIT.md](ORIGINAL_DESIGN_AUDIT.md).
+
 `/fund_execution` моделирует IOC/latency для Funding с начислениями на объём каждой ноги, открытый в reported settlement timestamp. История публичных ставок сохраняется из существующих ответов с календарём, зрелостью и coverage; Funding quote отдельно записывает свои base-unit стаканы. Время решения отделено от времени рынка. Непокрытое/противоречивое начисление или незакрытый остаток оставляют итоговый NET неизвестным. Расчёт по entry VWAP — публичная модель, не account income. Run/results и их исходные доказательства входят в audit export; Ledger и LIVE acceptance не меняются.
 
 `/sf_execution` и `/ss_execution` (кнопки в Replay) моделируют последовательные IOC по сохранённым REST/WS-стаканам: задержки, частичные fills, максимум три recovery rounds. Spot/Spot использует подтверждённые в Paper заранее размещённые запасы и отдельные USDT-остатки; повторный снимок не восстанавливает уже использованную глубину. Незакрытые остатки не получают NET. Результаты и исходные book evidence сохраняются атомарно и входят в audit export. Комиссии — фиксированная Paper-модель в quote units, funding исключён; native precision, приватные fills, borrowing и реальная доступность средств не сертифицируются этой проверкой. Старые Spot/Spot позиции без сохранённого inventory evidence исключаются.

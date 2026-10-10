@@ -2,7 +2,24 @@
 
 Дата: 10 октября 2026. Рабочая ветка: `phase-2-discovery`.
 
-## Текущий блок: единый dossier готовности и целостность model evidence
+## Текущий блок: последние доработки до подключения аккаунтов
+
+Проверено: **1619 offline-тестов passed** без предупреждений; 65 новых тестов сверх 1554. Compileall, импорт `app.main`, Black check 17 изменённых/новых Python-файлов и `git diff --check` прошли.
+
+Добавлены три рабочие функции и актуальная матрица исходного ТЗ:
+
+CPU selection выполняется в worker thread, не синхронно в Telegram/monitor event loop. Дополнительный общий лимит 500000 marks на стратегию отказывает в частичной «успешной» выборке. Retention также отказывает при изменении схемы observations после backup.
+
+1. DEX firm-reference → actual receipt attribution для exact-in/out и обоих направлений. Quotes сохраняют expected raw amounts/decimals/scope/time и checksum; wallet boundary сверяет reference перед signing. Exact-out max input не считается ожидаемой ценой. Cashflow NET остаётся прежним: adverse/favorable price deviation объясняет его, не вычитается второй раз. Receipt, frozen wallet snapshot и SQL/result proof продолжают независимо сверяться. Legacy missing reference сохраняет явную неполноту.
+2. `walk_forward` пяти стратегий: expanding train, purge по исходным open/close windows, несколько disjoint test периодов, подбор правил только на train, агрегированный chronological holdout NET/drawdown. Same-open groups не разделяются, censored/insufficient/capped folds не дают успешный full-model статус. `/walk_forward`, выделенная Replay-кнопка, readiness snapshot, XLSX/CSV summary/folds и JSON CLI подключены. Ни promotion, ни LIVE authority не добавлены.
+3. `database_maintenance` использует SQLite online backup с WAL, закрывает/проверяет snapshot, публикует private-permission файл и manifest/checksum. Verify отказывает при изменённом содержимом, конфликте manifest или незафиксированных sidecar writes. Restore только в новое имя; существующая база и её sidecars не перезаписываются. Копия получает recovery marker, который main проверяет до создания private clients. Автоматический restart/trading по восстановленной истории не разрешён.
+4. Retention по умолчанию dry-run. Apply требует созданный и проверенный backup; удаляются только старые scanner observations, идентичные backed-up строкам. Concurrent inserts и edits сохраняются. Execution events/intents/receipts, решения, Paper marks, settlements и результаты не удаляются по возрасту. Операция не вызывает VACUUM и не удаляет backup.
+
+Обновлён ORIGINAL_DESIGN_AUDIT.md: актуальная матрица вместо трактовки раннего исторического checklist как сегодняшних пропусков. Добавлен PRELAUNCH_CHECKLIST_RU.md с локальными командами, ограничениями backup/recovery и порядком домашней проверки. Экран экспорта переведён на русский и явно отличает отчёт от backup.
+
+Это программное закрытие заранее названного последнего блока, а не сертификация trading production. Достаточная живая история, account/wallet scope, delivery/runtime e2e и отдельно разрешённый micro-canary остаются эксплуатационными этапами. Passive queues, auto-withdrawals и внешнее AI-исполнение не входят в выбранную первую версию. Реальные подключения, RPC, signing, заявки и перенос денег не запускались.
+
+## Предыдущий блок: единый dossier готовности и целостность model evidence
 
 Проверено: **1554 offline-теста passed** без предупреждений, compileall, импорт `app.main`, Black check изменённых Python-файлов и `git diff --check`.
 

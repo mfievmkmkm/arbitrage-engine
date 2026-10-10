@@ -92,6 +92,13 @@ def replay_menu(screen="replay"):
         inline_keyboard=[
             [
                 button(
+                    "🔬 Walk-forward · все стратегии",
+                    "walk_forward",
+                    "primary" if screen == "walk_forward" else None,
+                )
+            ],
+            [
+                button(
                     "Фьючерсы ↔ Фьючерсы",
                     "replay",
                     "primary" if screen == "replay" else None,

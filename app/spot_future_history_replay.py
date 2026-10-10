@@ -20,6 +20,7 @@ async def dataset(
     connection=None,
     limit=None,
     mark_limit=None,
+    total_mark_limit=None,
 ):
     if strategy not in (
         "futures_futures",
@@ -44,6 +45,7 @@ async def dataset(
         "cex_dex": "cex_dex_paper_marks",
     }[strategy]
     trades = []
+    total_marks = 0
     excluded = {}
 
     def reject(reason):
@@ -87,6 +89,9 @@ async def dataset(
                 (row["id"], mark_limit + 1) if mark_limit is not None else (row["id"],),
             ) as c:
                 marks = await c.fetchall()
+            total_marks += len(marks)
+            if total_mark_limit is not None and total_marks > total_mark_limit:
+                return [], {"TOTAL_MARK_LIMIT_EXCEEDED": 1}
             if mark_limit is not None and len(marks) > mark_limit:
                 reject("MARK_LIMIT_EXCEEDED")
                 continue
@@ -248,7 +253,7 @@ async def dataset(
     return trades, excluded
 
 
-def simulate(trades, seconds, trailing, target=None):
+def simulate(trades, seconds, trailing, target=None, *, include_exits=False):
     exits = []
     censored = 0
     for trade in trades:
@@ -286,7 +291,11 @@ def simulate(trades, seconds, trailing, target=None):
             peak = max(peak, equity)
             drawdown = max(drawdown, peak - equity)
         result["max_drawdown"] = drawdown
-    return {"metrics": result, "censored": censored}
+    return {
+        "metrics": result,
+        "censored": censored,
+        **({"exits": exits} if include_exits else {}),
+    }
 
 
 def evaluate(

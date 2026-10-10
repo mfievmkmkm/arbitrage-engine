@@ -402,6 +402,10 @@ async def dex(db, trade, meta):
             raise ValueError("COST_DEX_RESULT_CONFLICT")
     checked(row, dict(gross=gross, fees=fees + gas, funding=funded, net=net))
     orders = await details(db, rows)
+    from .dex_slippage import attribute
+
+    slippage = attribute(receipts, p)
+    cex_slippage = sum(r["adverse_slippage_usd"] for r in orders)
     return (
         dict(
             status="RECONCILED",
@@ -417,10 +421,25 @@ async def dex(db, trade, meta):
             gas_raw=str(wallet["gas_raw"]),
             gas_asset="ETH",
             gas_valuation_method=costs["gas_valuation_evidence"]["method"],
-            observed_cex_slippage_usd=sum(r["adverse_slippage_usd"] for r in orders),
-            adverse_slippage_usd=None,
-            slippage_complete=False,
-            slippage_reason="DEX_WALLET_FIRM_REFERENCE_NOT_ATTRIBUTED",
+            observed_cex_slippage_usd=cex_slippage,
+            wallet_adverse_slippage_usd=(
+                slippage["adverse_usdt"] if slippage["complete"] else None
+            ),
+            wallet_favorable_slippage_usd=(
+                slippage["favorable_usdt"] if slippage["complete"] else None
+            ),
+            wallet_slippage_evidence=slippage,
+            adverse_slippage_usd=(
+                cex_slippage + slippage["adverse_usdt"]
+                if slippage["complete"]
+                else None
+            ),
+            slippage_complete=slippage["complete"],
+            slippage_reason=(
+                "FIRM_PRICE_ATTRIBUTED_NOT_EXTRA_NET_CHARGE"
+                if slippage["complete"]
+                else "DEX_WALLET_FIRM_REFERENCE_NOT_ATTRIBUTED"
+            ),
         ),
         orders,
     )

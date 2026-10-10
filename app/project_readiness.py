@@ -1,15 +1,16 @@
 """Read-only delivery audit. Never changes LIVE gates or treats test count as release."""
 
 import time
+import asyncio
 import math
 from pathlib import Path
-from urllib.parse import quote
 from html import escape
 import aiosqlite
 from .live_acceptance import accepted
 from .spot_future_history_replay import dataset, evaluate
 from .live_execution_costs import read as read_costs
 from .readiness_evidence import stress, inventory, digest, finite
+from .walk_forward import evaluate as walk_evaluate
 
 TABLES = {
     "futures_futures": "paper_positions",
@@ -60,16 +61,28 @@ async def read(d, now):
             "SELECT COUNT(*) FROM wallet_tx_intents WHERE phase NOT IN ('FINALIZED_SUCCESS','FINALIZED_REVERT')"
         ) as c:
             wallet_pending = (await c.fetchone())[0]
-    sample, stresses = {}, {}
+    sample, stresses, walks = {}, {}, {}
     for strategy, count in counts.items():
         trades, excluded = (
             await dataset(
-                None, strategy=strategy, connection=d, limit=10000, mark_limit=10000
+                None,
+                strategy=strategy,
+                connection=d,
+                limit=10000,
+                mark_limit=10000,
+                total_mark_limit=500000,
             )
             if count
             else ([], {})
         )
-        report = evaluate(trades, excluded, strategy=strategy) if count else None
+        report = (
+            await asyncio.to_thread(evaluate, trades, excluded, strategy=strategy)
+            if count
+            else None
+        )
+        walks[strategy] = await asyncio.to_thread(
+            walk_evaluate, trades, excluded, strategy=strategy
+        )
         sample[strategy] = dict(
             closed=count,
             eligible=report["eligible"] if report else 0,
@@ -102,6 +115,10 @@ async def read(d, now):
         active_live=active,
         wallet_pending=wallet_pending,
         held_inventory_records=held_inventory,
+        restored_copy="database_recovery_hold" in tables,
+        walk_forward=dict(
+            mode="READ_ONLY_WALK_FORWARD", execution_authority=False, strategies=walks
+        ),
     )
 
 
@@ -114,7 +131,7 @@ async def build(
         raise FileNotFoundError("READINESS_DATABASE_MISSING")
     if now < 0:
         raise ValueError("READINESS_TIME_INVALID")
-    uri = "file:" + quote(str(database), safe="/") + "?mode=ro"
+    uri = database.as_uri() + "?mode=ro"
     async with aiosqlite.connect(uri, uri=True) as d:
         await d.execute("BEGIN")
         evidence = await read(d, now)
@@ -143,6 +160,8 @@ async def build(
     ]
     if active or wallet_pending:
         missing.append("UNRESOLVED_LIVE_OR_WALLET_EXPOSURE")
+    if evidence["restored_copy"]:
+        missing.append("RESTORED_COPY_REQUIRES_OPERATOR_RECONCILIATION")
     result = dict(
         mode="READ_ONLY_PROJECT_AUDIT",
         software_complete=False,
@@ -230,6 +249,11 @@ def render(report):
         if model.get("stale"):
             out.append(
                 "  Последний stress старше 24 часов; это диагностический порог, не допуск."
+            )
+        walk = report.get("walk_forward", {}).get("strategies", {}).get(row["strategy"])
+        if walk:
+            out.append(
+                f"  Walk-forward: {len(walk['folds'])} периодов · {walk['status']}"
             )
         if row["diagnostic_gaps"]:
             from .readiness_evidence import GAP_LABELS
