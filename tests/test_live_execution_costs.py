@@ -8,7 +8,10 @@ from app.live_order_intent import OrderIntent
 from app.exchange_executor import SubmitRequest, SubmitResult
 from app.recovery_market import Reader
 from tests.test_live_entry_dispatch import setup, op
-from tests.test_market_fallback_dispatch import hybrid_setup
+
+# Import the autouse fixture so attribution scenarios use the same synthetic
+# clock as their entry/quote fixtures, independently of SQLite disk latency.
+from tests.test_market_fallback_dispatch import hybrid_setup, synthetic_clock
 
 
 async def closed(tmp_path, hybrid=False, funding=0.001):

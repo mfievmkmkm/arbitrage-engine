@@ -14,6 +14,27 @@ from app.live_acceptance import (
 from app.quote_order_evidence import validate
 
 
+@pytest.fixture(autouse=True)
+def synthetic_clock(monkeypatch):
+    """Fixture quotes age by scenario time, never by the runner's disk speed."""
+    from app.live_entry_dispatch import Coordinator
+    from app.recovery_market import Reader
+
+    clock = [float(int(time.time()))]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    # These constructors capture time.time in their default arguments at import.
+    # Inject the clock explicitly so quotes, claims and validation share it.
+    for cls in (Coordinator, Reader):
+        original = cls.__init__
+
+        def init(*args, _original=original, **kwargs):
+            kwargs.setdefault("clock", time.time)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(cls, "__init__", init)
+    return clock
+
+
 async def hybrid_setup(tmp_path):
     c, clients, positions, sent = await setup(tmp_path)
     c.market_fallback = True
@@ -276,7 +297,7 @@ def test_market_authority_is_checked_again_after_durable_claim(tmp_path):
     asyncio.run(go())
 
 
-def test_old_ioc_quote_does_not_block_fresh_market_quote(tmp_path):
+def test_old_ioc_quote_does_not_block_fresh_market_quote(tmp_path, synthetic_clock):
     async def go():
         c, _, _, sent = await hybrid_setup(tmp_path)
         original = c.snapshots
@@ -286,7 +307,8 @@ def test_old_ioc_quote_does_not_block_fresh_market_quote(tmp_path):
             nonlocal delayed
             if len(sent) == 2 and not delayed:
                 delayed = True
-                await asyncio.sleep(1.6)
+                synthetic_clock[0] += 2.0
+                await asyncio.sleep(0)
             return await original()
 
         c.snapshots = snapshots
