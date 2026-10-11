@@ -46,7 +46,11 @@ class Provider:
             raise ValueError("JUPITER_API_KEY_MISSING")
         await self.start()
         async with self.lock:
-            await asyncio.sleep(max(0, self.next_request - time.monotonic()))
+            delay = max(0, self.next_request - time.monotonic())
+            if delay > 1.1:
+                # A rate-limit cooldown must not delay CEX-only risk exits.
+                raise ValueError("JUPITER_RATE_LIMIT_COOLDOWN")
+            await asyncio.sleep(delay)
             self.next_request = time.monotonic() + 1
             async with self.session.get("https://api.jup.ag/" + path, params=params,
                                         headers={"x-api-key": self.api_key}) as response:

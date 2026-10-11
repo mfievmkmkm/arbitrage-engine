@@ -82,6 +82,17 @@ def test_missing_api_key_makes_no_http_call():
     assert result["reason"] == "JUPITER_API_KEY_MISSING" and not session.calls
 
 
+def test_rate_limit_cooldown_fails_fast_without_delaying_risk_exit():
+    async def go():
+        session = Session({}, status=429)
+        p = Provider("placeholder", session)
+        args = ("solana", USDC, SEEDS["SOL"], "5000000")
+        assert (await p.price(*args))["reason"] == "JUPITER_HTTP_429"
+        assert (await asyncio.wait_for(p.price(*args), .5))["reason"] == "JUPITER_RATE_LIMIT_COOLDOWN"
+        assert len(session.calls) == 1
+    asyncio.run(go())
+
+
 def test_solana_route_validation_and_case_sensitive_identity():
     r = dict(chain_id="solana", stable=USDC, asset=SEEDS["SOL"], stable_decimals=6,
              asset_decimals=9, base="SOL", cex_venue="bybit", cex_symbol="SOL/USDT:USDT",
