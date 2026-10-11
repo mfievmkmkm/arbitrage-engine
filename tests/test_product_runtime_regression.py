@@ -35,6 +35,7 @@ def sf_op():
         safety_pct=0,
         funding_pct=0,
         hypothetical_edge=3,
+        native_plan=dict(valid=True, reason="SYNTHETIC_TEST_PLAN"),
     )
 
 

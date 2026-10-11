@@ -25,6 +25,11 @@ class Engine:
         )
 
     def can_open(self, op):
+        if "native_plan" in op and (
+            not isinstance(op["native_plan"], dict)
+            or op["native_plan"].get("valid") is not True
+        ):
+            return False
         prices = op["prices"]
         spot = (
             prices["spot_buy"]

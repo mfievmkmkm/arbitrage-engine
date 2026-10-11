@@ -42,7 +42,10 @@ class CycleService:
             opened, closed = self.paper.spot_future(
                 rows,
                 self.entry_edge,
-                lambda x: self.entry_enabled and self.allow_open(x),
+                lambda x: self.entry_enabled
+                and isinstance(x.get("native_plan"), dict)
+                and x["native_plan"].get("valid") is True
+                and self.allow_open(x),
             )
             if self.db_path:
                 current = {(x["exchange"], x["base"]) for x in rows}

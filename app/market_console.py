@@ -32,8 +32,19 @@ def render(runtime):
     for i, (edge, name, x) in enumerate(rows, 1):
         symbol = escape(x.get("symbol") or x.get("base", "—"))
         venue = escape(x.get("exchange") or x.get("buy") or x.get("long_venue", ""))
-        label = "Прогноз carry" if name == "funding_arb" else "Оценка NET"
+        label = (
+            "Прогноз carry"
+            if name == "funding_arb"
+            else "Потенциал схождения" if name == "spot_futures" else "Оценка NET"
+        )
+        plan = x.get("native_plan")
+        blocked = (
+            "\n⛔ План заявок заблокирован: "
+            + escape(str(plan.get("reason", "UNVERIFIED")))
+            if isinstance(plan, dict) and plan.get("valid") is not True
+            else ""
+        )
         out.append(
-            f"<b>{i:02d} · {symbol}</b>\n{STRATEGY_LABELS.get(name,escape(name))} · {venue}\n{label}: <b>{edge:+.3f}%</b>"
+            f"<b>{i:02d} · {symbol}</b>\n{STRATEGY_LABELS.get(name,escape(name))} · {venue}\n{label}: <b>{edge:+.3f}%</b>{blocked}"
         )
     return "\n\n".join(out)
