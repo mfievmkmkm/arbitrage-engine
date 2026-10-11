@@ -6,14 +6,19 @@ def home(scanner, paper, risk, runtime, live_stop):
     rs = risk.state
     counts = runtime.counts()
     online = sum(x in scanner.clients for x in scanner.ids)
+    live_status = (
+        "🛑 STOP активен · новые LIVE-входы остановлены"
+        if live_stop.stopped
+        else "STOP снят · допуск каждой стратегии проверяется отдельно"
+    )
     return (
         "⚡ <b>ARBITRAGE ENGINE</b>\n<i>Рынок · позиции · контроль риска</i>\n\n"
         f"<b>Система</b>\n{'🟢 Работает' if not rs.halted else '🔴 Риск: остановка'} · {'⏸ Сканер на паузе' if scanner.paused else '🟢 Сканер активен'}\n"
         f"Площадки: <b>{online}/{len(scanner.ids)}</b> · цикл {age(scanner.last_scan)}\n\n"
         "<b>Возможности сейчас</b>\n"
-        f"Фьючерсы ↔ Фьючерсы: <b>{counts.get('futures_futures',0)}</b>\nСпот ↔ Фьючерсы: <b>{counts.get('spot_futures',0)}</b>\nСпот ↔ Спот: <b>{counts.get('spot_spot',0)}</b>\n\n"
+        f"Фьючерсы ↔ Фьючерсы: <b>{counts.get('futures_futures',0)}</b>\nСпот ↔ Фьючерсы: <b>{counts.get('spot_futures',0)}</b>\nСпот ↔ Спот: <b>{counts.get('spot_spot',0)}</b>\nСтавки funding: <b>{counts.get('funding_arb',0)}</b>\nБиржи ↔ DEX: <b>{counts.get('cex_dex',0)}</b>\n\n"
         f"<b>Paper · учебный счёт</b>\nФьючерсных позиций: {len(paper.positions)}/{paper.max_positions}\nNET за день: <b>{rs.paper_daily_pnl:+.4f} USD</b>\n\n"
-        "<blockquote>🔐 Реальная торговля заблокирована до проверки исполнения и площадок.</blockquote>\n"
+        f"<blockquote>🔐 {live_status}\nДопуски, позиции и ограничения — в LIVE-контроле.</blockquote>\n"
         "<i>Рынок — выбрать возможность. Позиции — следить за выходом. Дневник — разобрать результат.</i>"
     )
 

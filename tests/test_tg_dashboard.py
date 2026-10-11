@@ -13,7 +13,7 @@ class R:
 
 class RT:
     def counts(self):
-        return {"futures_futures": 3}
+        return {"futures_futures": 3, "funding_arb": 4, "cex_dex": 2}
 
 
 def test_home_is_operator_dashboard():
@@ -23,6 +23,19 @@ def test_home_is_operator_dashboard():
     p = SimpleNamespace(positions={}, max_positions=2)
     x = home(s, p, R(), RT(), SimpleNamespace(stopped=False))
     assert "ARBITRAGE ENGINE" in x and "Фьючерсы ↔ Фьючерсы" in x
+    assert "Ставки funding: <b>4</b>" in x
+    assert "Биржи ↔ DEX: <b>2</b>" in x
+    assert "STOP снят" in x and "допуск каждой стратегии" in x
+    assert "Реальная торговля заблокирована" not in x
+
+
+def test_home_reports_active_stop_without_claiming_live_authority():
+    s = SimpleNamespace(ids=[], clients={}, paused=True, last_scan=None)
+    p = SimpleNamespace(positions={}, max_positions=2)
+    x = home(s, p, R(), RT(), SimpleNamespace(stopped=True))
+    assert "STOP активен" in x and "новые LIVE-входы остановлены" in x
+    assert "STOP снят" not in x
+    assert "Сканер на паузе" in x
 
 
 def test_market_uses_executable_net():
