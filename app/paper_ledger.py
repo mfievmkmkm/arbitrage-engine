@@ -63,20 +63,14 @@ async def restore(path, ledger, risk=None):
                 (midnight,),
             ) as c:
                 today += float((await c.fetchone())[0])
-        async with d.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='cex_dex_paper'"
-        ) as c:
-            exists = await c.fetchone()
-        if exists:
-            async with d.execute(
-                "SELECT COALESCE(SUM(net),0) FROM cex_dex_paper WHERE status='CLOSED'"
-            ) as c:
-                ledger.realized += float((await c.fetchone())[0])
-            async with d.execute(
-                "SELECT COALESCE(SUM(net),0) FROM cex_dex_paper WHERE status='CLOSED' AND closed_at>=?",
-                (midnight,),
-            ) as c:
-                today += float((await c.fetchone())[0])
+        for table in ("cex_dex_paper", "cex_dex_virtual_paper"):
+            async with d.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)) as c:
+                exists = await c.fetchone()
+            if exists:
+                async with d.execute(f"SELECT COALESCE(SUM(net),0) FROM {table} WHERE status='CLOSED'") as c:
+                    ledger.realized += float((await c.fetchone())[0])
+                async with d.execute(f"SELECT COALESCE(SUM(net),0) FROM {table} WHERE status='CLOSED' AND closed_at>=?", (midnight,)) as c:
+                    today += float((await c.fetchone())[0])
     if risk is not None:
         risk.on_paper_close(today)
     return ledger

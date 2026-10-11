@@ -68,6 +68,7 @@ class Engine:
         min_edge=0.05,
         trailing=0.2,
         clock=time.time,
+        virtual=False,
     ):
         if (
             not all(
@@ -96,6 +97,13 @@ class Engine:
         self.external_reserved = lambda: 0
         self.allow_open = lambda p: True
         self.on_closed = None
+        if type(virtual) is not bool:
+            raise ValueError("DEX_PAPER_MODE_INVALID")
+        self.virtual = virtual
+
+    def sql(self, statement):
+        # Virtual observations must never become firm execution/OOS evidence.
+        return statement.replace("cex_dex_paper", "cex_dex_virtual_paper") if self.virtual else statement
 
     @property
     def positions(self):
@@ -107,14 +115,14 @@ class Engine:
 
     async def init(self):
         async with aiosqlite.connect(self.path) as d:
-            await d.executescript(SCHEMA + LEDGER_SCHEMA)
+            await d.executescript(self.sql(SCHEMA) + LEDGER_SCHEMA)
             await d.execute(
-                "INSERT OR IGNORE INTO cex_dex_paper_state VALUES(1,0,?)",
+                self.sql("INSERT OR IGNORE INTO cex_dex_paper_state VALUES(1,0,?)"),
                 (json.dumps(self.state),),
             )
             await d.commit()
             async with d.execute(
-                "SELECT version,payload FROM cex_dex_paper_state WHERE id=1"
+                self.sql("SELECT version,payload FROM cex_dex_paper_state WHERE id=1")
             ) as c:
                 self.version, payload = await c.fetchone()
             self.state = json.loads(payload)
@@ -145,7 +153,7 @@ class Engine:
                 p["data_reason"] = "DEX_MARK_TIME_REGRESSION"
                 saved.append(p)
                 continue
-            m = mark(p, x, h)
+            m = self.source.mark(p, x, h) if self.virtual else mark(p, x, h)
             marks.append((p["id"], m))
             p.update(
                 last_mark=m, net=m["net"], funding_reason=h.reason, data_reason="OK"
@@ -167,7 +175,7 @@ class Engine:
                         * 0.02
                         else (
                             "NET_CAPTURE"
-                            if h.verified and m["net"] >= p["entry_edge"] * 0.7
+                            if h.verified and m["net"] >= (max(self.min_edge, p["entry_edge"] * 0.7) if self.virtual else p["entry_edge"] * 0.7)
                             else (
                                 "TRAILING"
                                 if h.verified
@@ -191,6 +199,9 @@ class Engine:
                     del state["positions"][key]
                     closed.append(copy.deepcopy(p))
             saved.append(p)
+        if self.virtual and closed:
+            state["closed_count"] = state.get("closed_count", 0) + len(closed)
+            state["realized_net"] = state.get("realized_net", 0) + sum(p["net"] for p in closed)
         if (
             route is not None
             and entry_enabled
@@ -198,13 +209,17 @@ class Engine:
             and not closed
         ):
             reason = "SHARED_CAPITAL_LOW"
-            if self.used_capital + self.external_reserved() + 12 <= self.budget():
+            reservation = self.source.reserve_for_route(route) if self.virtual else 12
+            decision_detail = {}
+            if self.used_capital + self.external_reserved() + reservation <= self.budget():
                 # Make the reservation visible to the other Paper modules during IO.
-                self.pending = 12
+                self.pending = reservation
                 x = await self.source.entry(route)
                 reason = x.get("reason", "DEX_ENTRY_UNAVAILABLE")
                 if x.get("ok"):
                     p = x["position"]
+                    if self.virtual:
+                        decision_detail = {k: p[k] for k in ("virtual_mode", "cex_venue", "cex_side", "entry_price", "entry_edge", "entry_fees", "fee_source", "dex_reference_bid", "dex_reference_ask", "reserve")}
                     if p["entry_edge"] < self.min_edge:
                         reason = "DEX_MODEL_EDGE_LOW"
                     elif not self.allow_open(p):
@@ -226,22 +241,25 @@ class Engine:
                     reason,
                     dict(
                         label=route.get("label", "DEX"),
-                        mode="DEX_FIRM_PUBLIC_HISTORY_MODEL",
+                        mode="DEX_VIRTUAL_INDICATIVE_MODEL" if self.virtual else "DEX_FIRM_PUBLIC_HISTORY_MODEL",
+                        **decision_detail,
                     ),
                 )
             )
             state["last_decision"] = reason
+            if self.virtual:
+                state["last_detail"] = decision_detail
         async with aiosqlite.connect(self.path) as d:
             await d.execute("BEGIN IMMEDIATE")
             cursor = await d.execute(
-                "UPDATE cex_dex_paper_state SET version=version+1,payload=? WHERE id=1 AND version=?",
+                self.sql("UPDATE cex_dex_paper_state SET version=version+1,payload=? WHERE id=1 AND version=?"),
                 (json.dumps(state), self.version),
             )
             if cursor.rowcount != 1:
                 raise ValueError("DEX_PAPER_CONCURRENT_WRITER")
             for p in saved:
                 await d.execute(
-                    "INSERT INTO cex_dex_paper VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET closed_at=excluded.closed_at,status=excluded.status,net=excluded.net,payload=excluded.payload",
+                    self.sql("INSERT INTO cex_dex_paper VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET closed_at=excluded.closed_at,status=excluded.status,net=excluded.net,payload=excluded.payload"),
                     (
                         p["id"],
                         p["symbol"],
@@ -254,24 +272,24 @@ class Engine:
                 )
             for pid, m in marks:
                 await d.execute(
-                    "INSERT INTO cex_dex_paper_marks(position_id,ts,net,payload) VALUES(?,?,?,?)",
+                    self.sql("INSERT INTO cex_dex_paper_marks(position_id,ts,net,payload) VALUES(?,?,?,?)"),
                     (pid, m["ts"], m["net"], json.dumps(m)),
                 )
             for pid, e in events:
                 async with d.execute(
-                    "SELECT payload FROM cex_dex_paper_events WHERE position_id=? AND venue=? AND ts=?",
+                    self.sql("SELECT payload FROM cex_dex_paper_events WHERE position_id=? AND venue=? AND ts=?"),
                     (pid, e["venue"], e["ts"]),
                 ) as c:
                     old = await c.fetchone()
                 if old and json.loads(old[0]) != e:
                     raise ValueError("DEX_FUNDING_MODEL_EVENT_CONFLICT")
                 await d.execute(
-                    "INSERT OR IGNORE INTO cex_dex_paper_events VALUES(?,?,?,?,?)",
+                    self.sql("INSERT OR IGNORE INTO cex_dex_paper_events VALUES(?,?,?,?,?)"),
                     (pid, e["venue"], e["ts"], e["amount"], json.dumps(e)),
                 )
             for reason, row in decisions:
                 await d.execute(
-                    "INSERT INTO cex_dex_paper_decisions(ts,reason,payload) VALUES(?,?,?)",
+                    self.sql("INSERT INTO cex_dex_paper_decisions(ts,reason,payload) VALUES(?,?,?)"),
                     (self.clock(), reason, json.dumps(row)),
                 )
             for p in closed:
@@ -279,11 +297,11 @@ class Engine:
                     "INSERT INTO ledger VALUES(?,?,?,?,?,?)",
                     (
                         p["closed_at"],
-                        "CEX_DEX_PAPER_NET",
-                        "dex:" + str(p["id"]),
+                        "CEX_DEX_VIRTUAL_PAPER_NET" if self.virtual else "CEX_DEX_PAPER_NET",
+                        ("dex-virtual:" if self.virtual else "dex:") + str(p["id"]),
                         p["cex_venue"],
                         p["net"],
-                        "DEX_FIRM_PUBLIC_HISTORY_MODEL",
+                        p.get("model", "DEX_FIRM_PUBLIC_HISTORY_MODEL"),
                     ),
                 )
             await d.commit()
@@ -310,7 +328,7 @@ class Cycle:
                 ts=self.paper.clock(),
                 paper_allowed=True,
                 live_allowed=False,
-                evidence_mode="DEX_FIRM_PUBLIC_HISTORY_MODEL",
+                evidence_mode="DEX_VIRTUAL_INDICATIVE_MODEL" if self.paper.virtual else "DEX_FIRM_PUBLIC_HISTORY_MODEL",
                 status=p["status"],
                 net=p["net"],
                 reason=p.get("data_reason", "PAPER_MODEL_OPEN"),
@@ -324,7 +342,7 @@ class Cycle:
                     symbol=route.get("label", "DEX"),
                     ts=self.paper.clock(),
                     reason=self.paper.state.get("last_decision", "PAPER_IDLE"),
-                    evidence_mode="DEX_FIRM_PUBLIC_HISTORY_MODEL",
+                    evidence_mode="DEX_VIRTUAL_INDICATIVE_MODEL" if self.paper.virtual else "DEX_FIRM_PUBLIC_HISTORY_MODEL",
                     paper_allowed=False,
                     live_allowed=False,
                 )

@@ -740,7 +740,7 @@ class Monitor:
                 await asyncio.wait_for(self.cycle(), timeout=max(30, self.interval * 3))
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as error:
                 self.supervisor.private_verified = False
                 self.supervisor.restart_clean = False
                 self.supervisor.kill.trip_global("LIVE_MONITOR_FAILURE")
@@ -759,7 +759,7 @@ class Monitor:
                         dict(x, private_verified=False)
                         for x in previous.get("trades", [])
                     ],
-                    "incidents": [self._incident("LIVE_MONITOR_FAILURE")],
+                    "incidents": [self._incident("LIVE_MONITOR_FAILURE", error_type=type(error).__name__)],
                 }
                 try:
                     await self.store.publish(self.latest, self.latest["incidents"], [])

@@ -19,6 +19,7 @@ from .funding_paper import Engine as FundingPaper
 from .funding_paper_source import Source as FundingPaperSource
 from .funding_rate_history import Store as FundingRateHistory
 from .cex_dex_paper_source import Source as DexPaperSource
+from .dex_virtual_paper_source import Source as VirtualDexSource
 from .cex_dex_paper import Engine as DexPaper, Cycle as DexPaperCycle
 from .dex_execution_stress import History as DexHistory
 from .dex_wallet import Journal as WalletJournal, RPC as WalletRPC
@@ -72,6 +73,9 @@ async def build_bundle(
     book_history=None,
     book_record_interval=1,
 ):
+    virtual_enabled = os.getenv("DEX_VIRTUAL_PAPER_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on")
+    if virtual_enabled and ((dex_options or {}).get("live_enabled") is True or any(os.getenv(k, "false").strip().lower() in ("true", "1", "yes", "on") for k in ("LIVE_ENABLED", "DEX_LIVE_ENABLED"))):
+        raise ValueError("DEX_VIRTUAL_RUN_REQUIRES_LIVE_DISABLED")
     clients = await build(ids)
     bundle = None
     try:
@@ -177,7 +181,7 @@ async def build_bundle(
             sr.add("cex_dex", DexCycle(bundle.dex_provider, routes))
             runtime.enabled["cex_dex"] = True
         simulation_routes = json.loads(os.getenv("DEX_SIMULATION_ROUTES_JSON", "[]"))
-        if not simulation_routes:
+        if not simulation_routes or virtual_enabled:
             async with aiosqlite.connect(db_path) as d:
                 async with d.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='cex_dex_paper'"
@@ -191,7 +195,7 @@ async def build_bundle(
                             raise ValueError(
                                 "DEX_OPEN_PAPER_REQUIRES_CONFIGURED_ROUTES"
                             )
-        if simulation_routes:
+        if simulation_routes and not virtual_enabled:
             required = {
                 "chain_id",
                 "sell_token",
@@ -229,6 +233,29 @@ async def build_bundle(
             await bundle.dex_paper.init()
             sr.add("cex_dex", DexPaperCycle(bundle.dex_paper, simulation_routes))
             runtime.enabled["cex_dex"] = True
+        if virtual_enabled:
+            virtual_routes = json.loads(os.getenv("DEX_VIRTUAL_ROUTES_JSON", "[]"))
+            if not bundle.dex_provider:
+                bundle.dex_provider = DexProvider(os.getenv("ZEROX_API_KEY"))
+            bundle.dex_paper = DexPaper(
+                db_path,
+                VirtualDexSource(bundle.dex_provider, virtual_routes,
+                                 funding_service.clients if funding_service else {},
+                                 funding_service, private_clients),
+                capital=float(os.getenv("PAPER_CAPITAL_USD", "50")),
+                max_seconds=float(os.getenv("DEX_PAPER_HOLD_SECONDS", "900")),
+                virtual=True,
+            )
+            await bundle.dex_paper.init()
+            sr.add("cex_dex", DexPaperCycle(bundle.dex_paper, virtual_routes))
+            runtime.enabled["cex_dex"] = True
+        else:
+            async with aiosqlite.connect(db_path) as d:
+                async with d.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cex_dex_virtual_paper'") as c:
+                    if await c.fetchone():
+                        async with d.execute("SELECT COUNT(*) FROM cex_dex_virtual_paper WHERE status!='CLOSED'") as counts:
+                            if (await counts.fetchone())[0]:
+                                raise ValueError("DEX_OPEN_VIRTUAL_PAPER_REQUIRES_ENABLED_MODE")
         bundle.dex_live = await build_dex_live(
             db_path,
             wallet,

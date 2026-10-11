@@ -905,9 +905,8 @@ async def strategy_toggle(q: CallbackQuery):
     if name not in strategy_runtime.enabled:
         return await q.answer("Неизвестная стратегия")
     if name == "cex_dex":
-        return await q.answer(
-            "DEX ожидает подключения и проверки провайдера", show_alert=True
-        )
+        await safe_edit(q.message, await text_for("dex"), keyboard_for("dex"))
+        return await q.answer()
     strategy_runtime.enabled[name] = not strategy_runtime.enabled[name]
     strategy_toggles.save(strategy_runtime.enabled)
     await safe_edit(q.message, await text_for("strategies"), keyboard_for("strategies"))
@@ -1673,7 +1672,7 @@ async def main():
                 await notify_paper_close(
                     position["symbol"],
                     position["net"],
-                    "CEX/DEX Paper: firm quote, газ и история funding",
+                    "CEX/DEX Paper: виртуальная модель, не реальные исполнения" if dpaper.virtual else "CEX/DEX Paper: firm quote, газ и история funding",
                 )
 
             dpaper.on_closed = dex_closed

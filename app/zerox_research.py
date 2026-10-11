@@ -79,6 +79,8 @@ class Provider:
                 "sell_amount_raw": str(amount),
                 "buy_amount_raw": str(raw["buyAmount"]),
                 "network_fee_raw": raw.get("totalNetworkFee"),
+                "min_buy_amount_raw": raw.get("minBuyAmount"),
+                "token_metadata": raw.get("tokenMetadata"),
                 "route": raw.get("route"),
                 "block_number": raw.get("blockNumber"),
                 "ts": time.time(),
