@@ -15,6 +15,24 @@ from app.private_adapter import PrivatePosition
 from app.quote_order_evidence import validate
 
 
+@pytest.fixture(autouse=True)
+def synthetic_clock(monkeypatch):
+    """Synthetic quote freshness follows scenario time, not host scheduling."""
+    from app.recovery_market import Reader
+
+    clock = [float(int(time.time()))]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    for cls in (Coordinator, Reader):
+        original = cls.__init__
+
+        def init(*args, _original=original, **kwargs):
+            kwargs.setdefault("clock", time.time)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(cls, "__init__", init)
+    return clock
+
+
 async def setup(tmp_path):
     diary = Diary(str(tmp_path / "a.db"))
     await diary.init()
@@ -313,7 +331,30 @@ def test_forty_dollar_budget_and_realized_loss_scale_quantity_instead_of_disabli
         c, _, _, sent = await setup(tmp_path)
         c.bankroll = 40
         result = await c.process([op()])
-        assert result["opened"] and max(x[3] * 0.01 * x[4] for x in sent) <= 4
+        assert result.get("opened") is True, result
+        assert max(x[3] * 0.01 * x[4] for x in sent) <= 4
+
+    asyncio.run(go())
+
+
+def test_synthetic_clock_still_rejects_delayed_book_without_sending(
+    tmp_path, synthetic_clock
+):
+    async def go():
+        c, clients, _, sent = await setup(tmp_path)
+        c.bankroll = 40
+        original = clients["b"].fetch_order_book
+
+        async def delayed(*args, **kwargs):
+            book = await original(*args, **kwargs)
+            synthetic_clock[0] += 2
+            return book
+
+        clients["b"].fetch_order_book = delayed
+        result = await c.process([op()])
+        assert result["status"] == "PUBLIC_BOOK_STALE", result
+        assert not result.get("opened") and not sent
+        assert not await c.durable.active()
 
     asyncio.run(go())
 
