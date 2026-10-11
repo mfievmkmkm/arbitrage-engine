@@ -24,7 +24,7 @@ class SecondaryRuntime:
                 )
                 if not service.entry_enabled and not getattr(service, "paper", None):
                     self.runtime.update(name, [])
-                    await asyncio.sleep(self.interval)
+                    await asyncio.sleep(getattr(service, "interval", self.interval))
                     continue
                 rows = await service.cycle()
                 ts = time.time()
@@ -59,7 +59,7 @@ class SecondaryRuntime:
                 logging.getLogger("arbitrage").exception(
                     "Secondary strategy failed: %s", name
                 )
-            await asyncio.sleep(self.interval)
+            await asyncio.sleep(getattr(service, "interval", self.interval))
 
     async def start(self):
         self.running = True

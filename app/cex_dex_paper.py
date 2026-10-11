@@ -249,6 +249,11 @@ class Engine:
             state["last_decision"] = reason
             if self.virtual:
                 state["last_detail"] = decision_detail
+                state["last_route"] = dict(label=route.get("label", route.get("cex_symbol", "DEX")),
+                                          symbol=route.get("cex_symbol"), venue=route.get("cex_venue"), chain=route.get("chain_id"), ts=self.clock())
+                state["checked_count"] = state.get("checked_count", 0) + 1
+                counts = state.setdefault("decision_counts", {})
+                counts[reason] = counts.get(reason, 0) + 1
         async with aiosqlite.connect(self.path) as d:
             await d.execute("BEGIN IMMEDIATE")
             cursor = await d.execute(

@@ -20,6 +20,7 @@ from .funding_paper_source import Source as FundingPaperSource
 from .funding_rate_history import Store as FundingRateHistory
 from .cex_dex_paper_source import Source as DexPaperSource
 from .dex_virtual_paper_source import Source as VirtualDexSource
+from .jupiter_research import Provider as JupiterProvider, Router as VirtualRouter
 from .cex_dex_paper import Engine as DexPaper, Cycle as DexPaperCycle
 from .dex_execution_stress import History as DexHistory
 from .dex_wallet import Journal as WalletJournal, RPC as WalletRPC
@@ -36,6 +37,7 @@ class Bundle:
         self.sf_paper = sf_paper
         self.dex_provider = None
         self.dex_sim_provider = None
+        self.virtual_router = None
         self.ss_paper = None
         self.funding_paper = None
         self.dex_paper = None
@@ -52,6 +54,8 @@ class Bundle:
             await self.dex_provider.close()
         if self.dex_sim_provider:
             await self.dex_sim_provider.close()
+        if self.virtual_router:
+            await self.virtual_router.close()
         if self.wallet_session:
             await self.wallet_session.close()
         if self.dex_live:
@@ -237,9 +241,10 @@ async def build_bundle(
             virtual_routes = json.loads(os.getenv("DEX_VIRTUAL_ROUTES_JSON", "[]"))
             if not bundle.dex_provider:
                 bundle.dex_provider = DexProvider(os.getenv("ZEROX_API_KEY"))
+            bundle.virtual_router = VirtualRouter(bundle.dex_provider, JupiterProvider(os.getenv("JUPITER_API_KEY")))
             bundle.dex_paper = DexPaper(
                 db_path,
-                VirtualDexSource(bundle.dex_provider, virtual_routes,
+                VirtualDexSource(bundle.virtual_router, virtual_routes,
                                  funding_service.clients if funding_service else {},
                                  funding_service, private_clients),
                 capital=float(os.getenv("PAPER_CAPITAL_USD", "50")),
@@ -247,7 +252,9 @@ async def build_bundle(
                 virtual=True,
             )
             await bundle.dex_paper.init()
-            sr.add("cex_dex", DexPaperCycle(bundle.dex_paper, virtual_routes))
+            virtual_cycle = DexPaperCycle(bundle.dex_paper, virtual_routes)
+            virtual_cycle.interval = min(60, max(5, float(os.getenv("DEX_VIRTUAL_SCAN_INTERVAL_SEC", "5"))))
+            sr.add("cex_dex", virtual_cycle)
             runtime.enabled["cex_dex"] = True
         else:
             async with aiosqlite.connect(db_path) as d:
@@ -279,6 +286,8 @@ async def build_bundle(
             await bundle.dex_provider.close()
         if bundle and bundle.dex_sim_provider:
             await bundle.dex_sim_provider.close()
+        if bundle and bundle.virtual_router:
+            await bundle.virtual_router.close()
         if bundle and bundle.wallet_session:
             await bundle.wallet_session.close()
         if bundle and bundle.dex_live:

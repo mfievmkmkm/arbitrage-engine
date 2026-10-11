@@ -1,0 +1,21 @@
+services:
+  bot:
+    build: .
+    command: ["python", "-m", "app.paper_server"]
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    environment:
+      DB_PATH: /data/arbitrage.sqlite3
+      RUNTIME_STATE_PATH: /data/runtime_state.json
+      LIVE_METRICS_PATH: /data/live_metrics.json
+      PAPER_SERVER_ENV: /run/config/bot.env
+    volumes:
+      - ./server-transfer/data:/data
+      - ./server-transfer/bot.env:/run/config/bot.env:ro
+      - ./server-transfer:/transfer:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

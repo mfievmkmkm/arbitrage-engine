@@ -5,3 +5,11 @@ __pycache__/
 .pytest_cache/
 .venv/
 live_acceptance.json
+.env.*
+bot.env
+server-transfer*/
+backup-*/
+virtual_watchlist_report*.json
+runtime_state.json*
+live_metrics.json
+installed-revision.txt

@@ -1,6 +1,6 @@
 """Local setup for virtual DEX Paper. Preserves credentials and database.
 
-No network requests. Use --routes-file for an explicit EVM watchlist.
+No network requests. Use --routes-file for an explicit EVM/Solana watchlist.
 """
 
 import argparse
@@ -58,7 +58,7 @@ def main():
     print("Routes:", len(routes))
     print("Backup:", backup.name)
     print("Wallet funds, approvals and private key are not required.")
-    print("Default route is WETH/Bybit only; no Telegram or Solana discovery.")
+    print("Default route is WETH/Bybit only. Expand with app.build_virtual_watchlist.")
 
 
 if __name__ == "__main__":

@@ -18,10 +18,15 @@ from .public_books import normalize
 from .recovery_market import Reader
 from .spot_future_native_plan import rate
 from .zerox_research import ADDRESS
+from .jupiter_research import mint_valid
+
+
+def token_key(r, token):
+    return token if r["chain_id"] == "solana" else token.lower()
 
 
 def routes_checked(routes):
-    if not isinstance(routes, list) or not routes:
+    if not isinstance(routes, list) or not routes or len(routes) > 32:
         raise ValueError("DEX_VIRTUAL_ROUTES_REQUIRED")
     identities = set()
     for r in routes:
@@ -29,11 +34,14 @@ def routes_checked(routes):
                     "base", "cex_venue", "cex_symbol", "native_symbol", "native_decimals"}
         if not isinstance(r, dict) or not required <= r.keys():
             raise ValueError("DEX_VIRTUAL_ROUTE_INVALID")
-        if type(r["chain_id"]) is not int or r["chain_id"] <= 0:
+        solana = r["chain_id"] == "solana"
+        if not solana and (type(r["chain_id"]) is not int or r["chain_id"] <= 0):
             raise ValueError("DEX_VIRTUAL_CHAIN_INVALID")
-        if any(not isinstance(r[k], str) or not ADDRESS.fullmatch(r[k]) for k in ("stable", "asset")):
+        if solana and r.get("mode", "paired") != "reference":
+            raise ValueError("SOLANA_REFERENCE_ONLY")
+        if any(not (mint_valid(r[k]) if solana else isinstance(r[k], str) and ADDRESS.fullmatch(r[k])) for k in ("stable", "asset")):
             raise ValueError("DEX_VIRTUAL_TOKEN_INVALID")
-        if r["stable"].lower() == r["asset"].lower():
+        if token_key(r, r["stable"]) == token_key(r, r["asset"]):
             raise ValueError("DEX_VIRTUAL_TOKEN_INVALID")
         if any(type(r[k]) is not int or not 0 <= r[k] <= 36 for k in ("stable_decimals", "asset_decimals", "native_decimals")):
             raise ValueError("DEX_VIRTUAL_DECIMALS_INVALID")
@@ -50,6 +58,10 @@ def routes_checked(routes):
         number(r.get("slippage_bps", 20), "DEX_VIRTUAL_SLIPPAGE", False)
         if float(r.get("slippage_bps", 20)) > 100:
             raise ValueError("DEX_VIRTUAL_SLIPPAGE_INVALID")
+        if float(r.get("slippage_bps", 20)) != int(float(r.get("slippage_bps", 20))):
+            raise ValueError("DEX_VIRTUAL_SLIPPAGE_INVALID")
+        if r.get("stable_symbol", "USDT") not in ("USDT", "USDC"):
+            raise ValueError("DEX_VIRTUAL_STABLE_INVALID")
         identity = route_key(r)
         if identity in identities:
             raise ValueError("DEX_VIRTUAL_DUPLICATE_ROUTE")
@@ -58,7 +70,7 @@ def routes_checked(routes):
 
 
 def route_key(r):
-    return (r["chain_id"], r["stable"].lower(), r["asset"].lower(),
+    return (r["chain_id"], token_key(r, r["stable"]), token_key(r, r["asset"]),
             r["cex_venue"], r["cex_symbol"], r.get("mode", "paired"))
 
 
@@ -80,13 +92,16 @@ class Source(HistorySource):
         return max(12, cash + self.cex_cap(r) + 2)
 
     async def price(self, r, sell_asset, amount):
-        q = await self.provider.price(r["chain_id"], r["asset"] if sell_asset else r["stable"],
+        if hasattr(self.provider, "price_route"):
+            q = await self.provider.price_route(r, sell_asset, amount)
+        else:
+            q = await self.provider.price(r["chain_id"], r["asset"] if sell_asset else r["stable"],
                                       r["stable"] if sell_asset else r["asset"], str(amount))
         if not q.get("ok"):
             raise ValueError(q.get("reason", "DEX_VIRTUAL_PRICE_UNAVAILABLE"))
-        if (q.get("chain_id"), q.get("sell_token", "").lower(), q.get("buy_token", "").lower(), str(q.get("sell_amount_raw"))) != (
-            r["chain_id"], (r["asset"] if sell_asset else r["stable"]).lower(),
-            (r["stable"] if sell_asset else r["asset"]).lower(), str(amount)):
+        if (q.get("chain_id"), token_key(r, q.get("sell_token", "")), token_key(r, q.get("buy_token", "")), str(q.get("sell_amount_raw"))) != (
+            r["chain_id"], token_key(r, r["asset"] if sell_asset else r["stable"]),
+            token_key(r, r["stable"] if sell_asset else r["asset"]), str(amount)):
             raise ValueError("DEX_VIRTUAL_PRICE_SCOPE_MISMATCH")
         if not 0 <= self.clock() - float(q["ts"]) <= 15:
             raise ValueError("DEX_VIRTUAL_PRICE_STALE")
@@ -142,6 +157,8 @@ class Source(HistorySource):
 
     async def entry(self, r):
         try:
+            if r["cex_venue"] not in self.public:
+                raise ValueError("DEX_VIRTUAL_CEX_UNAVAILABLE")
             c = self.public[r["cex_venue"]]
             m = market(c, r["cex_symbol"])
             if m["base"] != r["base"]:
@@ -194,7 +211,7 @@ class Source(HistorySource):
                      virtual_asset_qty=base if r.get("mode", "paired") == "paired" else 0,
                      fee_source=fee_source, execution_verified=False, live_allowed=False,
                      dex_reference_bid=dex_bid, dex_reference_ask=dex_ask,
-                     assumptions=["indicative DEX fill with slippage haircut", "USDT valued at 1 USD", "CEX visible book fill", "funding entry-reference notional"])
+                     assumptions=["indicative DEX fill with slippage haircut", r.get("stable_symbol", "USDT") + " and USDT valued at 1 USD", "CEX visible book fill", "funding entry-reference notional"])
             calendar(p, p["opened_at"])
             x = await self.exit(p)
             if not x.get("ok"):

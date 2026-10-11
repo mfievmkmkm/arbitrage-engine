@@ -5,3 +5,16 @@ __pycache__
 *.sqlite3
 .env
 .pytest_cache
+.venv
+.env.*
+bot.env
+server-transfer*
+data
+backups
+backup-*
+*.db
+*.db-*
+*.sqlite3-*
+*.xlsx
+*.zip
+virtual_watchlist_report*.json

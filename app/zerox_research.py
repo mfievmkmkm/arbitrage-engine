@@ -24,7 +24,7 @@ class Provider:
         if self.owned and self.session:
             await self.session.close()
 
-    async def price(self, chain_id, sell_token, buy_token, sell_amount):
+    async def price(self, chain_id, sell_token, buy_token, sell_amount, slippage_bps=None):
         if not self.api_key:
             return {"ok": False, "reason": "DEX_API_KEY_MISSING"}
         if (
@@ -47,6 +47,10 @@ class Provider:
             "buyToken": buy_token,
             "sellAmount": str(amount),
         }
+        if slippage_bps is not None:
+            if type(slippage_bps) is not int or not 0 <= slippage_bps <= 100:
+                return {"ok": False, "reason": "DEX_SLIPPAGE_INVALID"}
+            params["slippageBps"] = str(slippage_bps)
         headers = {"0x-api-key": self.api_key, "0x-version": "v2"}
         try:
             async with self.session.get(

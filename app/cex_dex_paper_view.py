@@ -14,10 +14,19 @@ def render(engine):
             ]
         )
     if getattr(engine, "virtual", False):
-        out[1] = "<i>Виртуальный капитал. Индикативные цены 0x и стаканы CEX; расходы и funding учитываются. Баланс и разрешения настоящего кошелька не требуются. Это модель исполнения, не подтверждение исполнимости.</i>"
+        out[1] = "<i>Виртуальный капитал. Индикативные котировки 0x / Jupiter и стаканы CEX; расходы и funding учитываются. Баланс и разрешения настоящего кошелька не требуются. Это модель исполнения, не подтверждение исполнимости.</i>"
         out.append(f"Капитал модели: {engine.budget():.2f} USD · свободно после общих резервов: {max(0, engine.budget() - engine.used_capital - engine.external_reserved()):.2f} USD")
         out.append(f"Закрыто виртуальных: {engine.state.get('closed_count', 0)} · итоговый NET: {engine.state.get('realized_net', 0):+.4f} USD")
         out.append("Эта история выгружается отдельно и не подтверждает готовность LIVE. Парный режим: виртуальная покупка DEX + шорт CEX. Reference: направленный LONG/SHORT CEX по ориентиру DEX, без хеджа.")
+        routes = getattr(getattr(engine, "source", None), "routes", [])
+        out.append(f"Маршрутов: {len(routes)} · проверок входа: {engine.state.get('checked_count', 0)}")
+        last = engine.state.get("last_route", {})
+        if last:
+            age = max(0, engine.clock() - last["ts"])
+            out.append(f"Последняя проверка: {escape(last['label'])} · {age:.0f} с назад")
+        counts = engine.state.get("decision_counts", {})
+        if counts:
+            out.append("Причины входов/пропусков: " + " · ".join(f"{escape(k)}: {v}" for k, v in sorted(counts.items(), key=lambda x: -x[1])[:3]))
     out.append(
         f"Резерв: {engine.used_capital:.2f} USD · позиций: {len(engine.positions)}"
     )
