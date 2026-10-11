@@ -113,7 +113,10 @@ def backup(source, directory, *, timeout=60):
             original.backup(saved, pages=256, progress=progress, sleep=0.05)
             saved.execute("PRAGMA journal_mode=DELETE")
         details = inspect(temporary)
-        with open(temporary, "rb") as stream:
+        # Windows fsync uses _commit/FlushFileBuffers and needs write access.
+        # r+b preserves the completed SQLite copy without truncating it.
+        with open(temporary, "r+b") as stream:
+            stream.flush()
             os.fsync(stream.fileno())
         os.link(temporary, target)
         manifest = dict(

@@ -51,9 +51,40 @@ def test_online_backup_includes_uncheckpointed_wal_and_is_private(tmp_path):
             check.execute("SELECT payload FROM journal").fetchone()[0]
             == "latest WAL proof"
         )
-    assert os.stat(saved["path"]).st_mode & 0o777 == 0o600
-    assert os.stat(saved["manifest"]).st_mode & 0o777 == 0o600
+    # Windows access is controlled by ACLs, not POSIX permission bits.
+    if os.name == "posix":
+        assert os.stat(saved["path"]).st_mode & 0o777 == 0o600
+        assert os.stat(saved["manifest"]).st_mode & 0o777 == 0o600
     db.close()
+
+
+def test_backup_sync_uses_writable_descriptor_without_changing_content(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "source.db"
+    seed(path)
+    original = path.read_bytes()
+    fsync = os.fsync
+    synced = []
+
+    def require_write_access(fd):
+        # Zero bytes leave data intact but reject read-only descriptors on Unix,
+        # reproducing the Windows requirement even on the Linux test runner.
+        os.write(fd, b"")
+        synced.append(fd)
+        fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", require_write_access)
+    saved = backup(path, tmp_path / "copies")
+    assert len(synced) == 2  # SQLite copy and its manifest.
+    assert verify(saved["path"])["verified"]
+    from contextlib import closing
+
+    with closing(sqlite3.connect(path)) as source, closing(
+        sqlite3.connect(saved["path"])
+    ) as copy:
+        assert list(copy.iterdump()) == list(source.iterdump())
+    assert path.read_bytes() == original
 
 
 def test_unique_backups_never_overwrite_and_source_unchanged(tmp_path):
@@ -98,13 +129,18 @@ def test_symlink_source_or_output_directory_rejected(tmp_path):
     path = tmp_path / "source.db"
     seed(path)
     alias = tmp_path / "alias.db"
-    alias.symlink_to(path)
+    try:
+        alias.symlink_to(path)
+    except OSError as error:
+        if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows account cannot create symlinks (WinError 1314)")
+        raise
     with pytest.raises(ValueError, match="SYMLINK"):
         backup(alias, tmp_path / "copies")
     directory = tmp_path / "real"
     directory.mkdir()
     link = tmp_path / "link"
-    link.symlink_to(directory)
+    link.symlink_to(directory, target_is_directory=True)
     with pytest.raises(ValueError, match="SYMLINK"):
         backup(path, link)
 
