@@ -182,6 +182,13 @@ live_trades = []
 durable = LiveTradeStore(config.db_path)
 strategy_toggles = StrategyToggleStore(config.runtime_state_path + ".strategies.json")
 strategy_runtime.enabled = strategy_toggles.load(strategy_runtime.enabled)
+from .dex_signal_focus import enabled as focus_enabled, focus_toggles, Signals
+if focus_enabled("DEX_CHANNEL_SIGNALS_ONLY") and not focus_enabled("DEX_REFERENCE_FOCUS"):
+    raise ValueError("DEX_CHANNEL_SIGNALS_ONLY_REQUIRES_REFERENCE_FOCUS")
+if focus_enabled("DEX_REFERENCE_FOCUS") and (config.live_enabled or not focus_enabled("DEX_VIRTUAL_PAPER_ENABLED")):
+    raise ValueError("DEX_REFERENCE_FOCUS_REQUIRES_VIRTUAL_PAPER_ONLY")
+if focus_enabled("DEX_REFERENCE_FOCUS"):
+    strategy_runtime.enabled = focus_toggles(strategy_runtime.enabled)
 venue_controller = VenueController(
     VenueModeStore(config.runtime_state_path + ".venues.json"), config.exchanges
 )
@@ -484,6 +491,26 @@ async def start(m: Message):
             reply_markup=menu(),
             parse_mode="HTML",
         )
+
+
+@dp.message(F.text.contains("SHORT?") | F.text.contains("LONG?"))
+async def accept_dex_signal(m: Message):
+    if not m.from_user or not allowed(m.from_user.id):
+        return
+    if not focus_enabled("DEX_CHANNEL_SIGNALS_ONLY"):
+        return await m.answer("Приём сигналов включается переменной DEX_CHANNEL_SIGNALS_ONLY=true.")
+    engine = getattr(secondary, "dex_paper", None)
+    signals = getattr(getattr(engine, "source", None), "signals", None)
+    if signals is None:
+        return await m.answer("Виртуальный DEX Paper ещё не готов.")
+    origin = m.forward_origin
+    if origin is None or getattr(origin, "type", None) != "channel" or (getattr(origin.chat, "username", "") or "").lower() != "mexcdexspreadtracker":
+        return await m.answer("Перешли исходный свежий пост из @MexcDexSpreadTracker через кнопку пересылки Telegram. Скриншоты и скопированный текст не принимаются.")
+    try:
+        signal = signals.add(m.text, engine.source.routes, origin.date.timestamp(), "MexcDexSpreadTracker")
+    except ValueError as exc:
+        return await m.answer(str(exc))
+    await m.answer(f"Сигнал {signal['base']} {'LONG' if signal['side'] == 'buy' else 'SHORT'} принят для Paper. Вход будет только после проверки свежих котировок, расходов и стакана. Принятый сигнал не гарантирует открытие позиции.")
 
 
 @dp.message(
@@ -904,6 +931,8 @@ async def strategy_toggle(q: CallbackQuery):
     name = q.data.split(":", 1)[1]
     if name not in strategy_runtime.enabled:
         return await q.answer("Неизвестная стратегия")
+    if focus_enabled("DEX_REFERENCE_FOCUS") and name != "cex_dex":
+        return await q.answer("Сейчас включён отдельный эксперимент CEX↔DEX. Другие входы отключены переменной DEX_REFERENCE_FOCUS.")
     if name == "cex_dex":
         await safe_edit(q.message, await text_for("dex"), keyboard_for("dex"))
         return await q.answer()
@@ -1672,10 +1701,14 @@ async def main():
                 await notify_paper_close(
                     position["symbol"],
                     position["net"],
-                    "CEX/DEX Paper: виртуальная модель, не реальные исполнения" if dpaper.virtual else "CEX/DEX Paper: firm quote, газ и история funding",
+                    f"CEX/DEX {'виртуальный' if dpaper.virtual else 'firm'} Paper • {position['cex_venue']} • {position.get('cex_side', '?')} • {position.get('exit_reason', 'UNKNOWN')}",
                 )
+                if getattr(dpaper.source, "signals", None):
+                    dpaper.source.signals.closed(position)
 
             dpaper.on_closed = dex_closed
+            if dpaper.virtual and focus_enabled("DEX_REFERENCE_FOCUS"):
+                dpaper.source.signals = Signals(config.runtime_state_path + ".dex_signals.json")
         sf_cycle.on_closed = sf_closed
         await secondary.runtime.start()
         bot = Bot(token=config.token)

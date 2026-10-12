@@ -329,6 +329,12 @@ class Cycle:
 
     async def cycle(self):
         route = self.routes[self.index % len(self.routes)] if self.routes else None
+        from .dex_signal_focus import enabled
+        signals = getattr(self.paper.source, "signals", None)
+        if enabled("DEX_CHANNEL_SIGNALS_ONLY") and signals:
+            active = [r for r in self.routes if signals.get(r)[0] is not None]
+            if active:
+                route = active[self.index % len(active)]
         self.index += 1
         await self.paper.cycle(route, self.entry_enabled)
         rows = [

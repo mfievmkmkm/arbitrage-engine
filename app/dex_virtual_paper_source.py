@@ -19,6 +19,7 @@ from .recovery_market import Reader
 from .spot_future_native_plan import rate
 from .zerox_research import ADDRESS
 from .jupiter_research import mint_valid
+from .dex_signal_focus import enabled, quality
 
 
 def token_key(r, token):
@@ -81,6 +82,8 @@ class Source(HistorySource):
         self.fs, self.clock = funding_service, clock
         self.cycle = SimpleNamespace(public=public)
         self.reader = Reader(public, clock=clock)
+        self.signals = None
+        self.confirmations = {}
 
     @staticmethod
     def cex_cap(r):
@@ -158,6 +161,20 @@ class Source(HistorySource):
     async def entry(self, r):
         diagnostics = {}
         try:
+            signal = None
+            if enabled("DEX_REFERENCE_FOCUS"):
+                if r.get("mode") != "reference":
+                    raise ValueError("DEX_REFERENCE_FOCUS_REFERENCE_ONLY")
+                if self.signals is not None:
+                    _, reason = self.signals.get(r)
+                    if reason == "DEX_SIGNAL_LOSS_COOLDOWN":
+                        raise ValueError(reason)
+            if enabled("DEX_CHANNEL_SIGNALS_ONLY"):
+                if self.signals is None:
+                    raise ValueError("DEX_CHANNEL_SIGNAL_REQUIRED")
+                signal, reason = self.signals.get(r)
+                if reason:
+                    raise ValueError(reason)
             if r["cex_venue"] not in self.public:
                 raise ValueError("DEX_VIRTUAL_CEX_UNAVAILABLE")
             c = self.public[r["cex_venue"]]
@@ -242,6 +259,26 @@ class Source(HistorySource):
             immediate_net = immediate_gross - p["entry_fees"] - qty * x["price"] * x["fee_rate"] - x["gas"] - p["safety"]
             if immediate_net <= -max(cash, notional) * 0.02:
                 raise ValueError("DEX_VIRTUAL_REVERSE_PREFLIGHT_NET_STOP")
+            if enabled("DEX_REFERENCE_FOCUS") and p["virtual_mode"] == "reference":
+                if signal and signal["side"] != side:
+                    raise ValueError("DEX_SIGNAL_DIRECTION_CHANGED")
+                failure = quality(notional, p["entry_edge"], immediate_net, native.market_evidence)
+                diagnostics.update(entry_edge=p["entry_edge"], immediate_net=immediate_net)
+                key = route_key(r)
+                if failure:
+                    self.confirmations.pop(key, None)
+                    raise ValueError(failure)
+                previous = self.confirmations.get(key)
+                identity = (side, signal["timestamp"] if signal else None)
+                self.confirmations[key] = (self.clock(), identity)
+                if not previous or previous[1] != identity or not 2 <= self.clock() - previous[0] <= 60:
+                    raise ValueError("DEX_REFERENCE_CONFIRMATION_REQUIRED")
+                if signal:
+                    # Quote requests can outlive the signal TTL; validate again.
+                    current, reason = self.signals.get(r)
+                    if reason or current != signal:
+                        raise ValueError(reason or "DEX_SIGNAL_CHANGED")
+                    p["channel_signal"] = signal
             if self.clock() - min(q["ts"], reverse["ts"]) > 15 or self.clock() - native.market_evidence["book_ts"] > 1.5:
                 raise ValueError("DEX_VIRTUAL_ENTRY_STALE")
             if self.clock() - x["cex"]["book_ts"] > 1.5 or (gas_book and self.clock() - gas_book["timestamp"] / 1000 > 1.5):

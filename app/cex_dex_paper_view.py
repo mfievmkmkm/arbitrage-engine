@@ -1,4 +1,5 @@
 from html import escape
+from .dex_signal_focus import enabled
 
 
 def render(engine):
@@ -14,6 +15,9 @@ def render(engine):
             ]
         )
     if getattr(engine, "virtual", False):
+        if enabled("DEX_REFERENCE_FOCUS"):
+            out.append("Эксперимент: только CEX↔DEX reference; новые входы остальных стратегий отключены.")
+            out.append("Источник входов: свежие пересланные посты @MexcDexSpreadTracker." if enabled("DEX_CHANNEL_SIGNALS_ONLY") else "Источник входов: собственный сканер reference.")
         out[1] = "<i>Виртуальный капитал. Индикативные котировки 0x / Jupiter и стаканы CEX; расходы и funding учитываются. Баланс и разрешения настоящего кошелька не требуются. Это модель исполнения, не подтверждение исполнимости.</i>"
         out.append(f"Капитал модели: {engine.budget():.2f} USD · свободно после общих резервов: {max(0, engine.budget() - engine.used_capital - engine.external_reserved()):.2f} USD")
         out.append(f"Закрыто виртуальных: {engine.state.get('closed_count', 0)} · итоговый NET: {engine.state.get('realized_net', 0):+.4f} USD")
@@ -42,6 +46,8 @@ def render(engine):
             out.append("Минимум контрактов: " + escape(str(failed["minimum_contracts"])))
         if failed.get("minimum_cost") is not None:
             out.append("Минимальный notional CEX: " + escape(str(failed["minimum_cost"])) + " USD")
+        if "immediate_net" in failed:
+            out.append(f"NET немедленного обратного выхода: {failed['immediate_net']:+.4f} USD · потенциал схождения: {failed['entry_edge']:+.4f} USD")
     if detail:
         out.append(f"Режим: {escape(detail['virtual_mode'])} · {escape(detail['cex_side'])}\nПотенциал NET при схождении: {detail['entry_edge']:+.4f} USD · это не заработанный PNL\nКомиссии входа модели: {detail['entry_fees']:.4f} USD · {escape(detail['fee_source'])}")
     for p in engine.positions.values():
