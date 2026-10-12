@@ -306,6 +306,9 @@ async def text_for(s):
             text += render_dex_paper(secondary.dex_paper)
         return text
     if s == "dex_paper":
+        if secondary and secondary.dex_experiments:
+            from .dex_paper_experiments import render
+            return render(secondary.dex_experiments, strategy_runtime.enabled)
         return render_dex_paper(secondary.dex_paper if secondary else None)
     if s == "dex_stress":
         return render_dex_stress(await build_dex_stress(config.db_path))
