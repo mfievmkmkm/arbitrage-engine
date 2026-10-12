@@ -37,7 +37,7 @@ def prepare_environment(values, volume):
     elif stored.is_file():
         routes = json.loads(stored.read_text(encoding="utf-8"))["routes"]
     else:
-        routes = default_routes("reference", 20)
+        routes = default_routes("reference", 30)
     values["DEX_VIRTUAL_ROUTES_JSON"] = json.dumps(routes_checked(routes), separators=(",", ":"))
     db = data / "arbitrage.sqlite3"
     if not db.exists():

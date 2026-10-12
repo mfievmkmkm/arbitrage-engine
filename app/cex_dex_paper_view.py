@@ -33,6 +33,15 @@ def render(engine):
     if engine.state.get("last_decision"):
         out.append("Последний вход: " + escape(engine.state["last_decision"]))
     detail = engine.state.get("last_detail", {})
+    failed = engine.state.get("last_failure_detail", {})
+    if failed:
+        out.append(f"Количество до округления: {failed['requested_contracts']:.8g} контрактов · маршрут {failed['notional_usd']:.2f} USD")
+        if failed.get("amount_step") is not None:
+            out.append(f"Шаг количества: {failed['amount_step']:.8g} контрактов")
+        if failed.get("minimum_contracts") is not None:
+            out.append("Минимум контрактов: " + escape(str(failed["minimum_contracts"])))
+        if failed.get("minimum_cost") is not None:
+            out.append("Минимальный notional CEX: " + escape(str(failed["minimum_cost"])) + " USD")
     if detail:
         out.append(f"Режим: {escape(detail['virtual_mode'])} · {escape(detail['cex_side'])}\nПотенциал NET при схождении: {detail['entry_edge']:+.4f} USD · это не заработанный PNL\nКомиссии входа модели: {detail['entry_fees']:.4f} USD · {escape(detail['fee_source'])}")
     for p in engine.positions.values():

@@ -211,10 +211,13 @@ class Engine:
             reason = "SHARED_CAPITAL_LOW"
             reservation = self.source.reserve_for_route(route) if self.virtual else 12
             decision_detail = {}
+            failure_detail = {}
             if self.used_capital + self.external_reserved() + reservation <= self.budget():
                 # Make the reservation visible to the other Paper modules during IO.
                 self.pending = reservation
                 x = await self.source.entry(route)
+                if self.virtual and not x.get("ok"):
+                    failure_detail = x.get("diagnostics", {})
                 reason = x.get("reason", "DEX_ENTRY_UNAVAILABLE")
                 if x.get("ok"):
                     p = x["position"]
@@ -243,12 +246,14 @@ class Engine:
                         label=route.get("label", "DEX"),
                         mode="DEX_VIRTUAL_INDICATIVE_MODEL" if self.virtual else "DEX_FIRM_PUBLIC_HISTORY_MODEL",
                         **decision_detail,
+                        **({"diagnostics": failure_detail} if self.virtual and failure_detail else {}),
                     ),
                 )
             )
             state["last_decision"] = reason
             if self.virtual:
                 state["last_detail"] = decision_detail
+                state["last_failure_detail"] = failure_detail
                 state["last_route"] = dict(label=route.get("label", route.get("cex_symbol", "DEX")),
                                           symbol=route.get("cex_symbol"), venue=route.get("cex_venue"), chain=route.get("chain_id"), ts=self.clock())
                 state["checked_count"] = state.get("checked_count", 0) + 1

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from .cex_dex_paper import mark as paired_mark
 from .cex_dex_paper_source import Source as HistorySource, calendar
 from .exchange_executor import SubmitRequest
-from .native_order_plan import market, number, format_value
+from .native_order_plan import market, number, format_value, quantum
 from .public_books import normalize
 from .recovery_market import Reader
 from .spot_future_native_plan import rate
@@ -156,6 +156,7 @@ class Source(HistorySource):
         return r
 
     async def entry(self, r):
+        diagnostics = {}
         try:
             if r["cex_venue"] not in self.public:
                 raise ValueError("DEX_VIRTUAL_CEX_UNAVAILABLE")
@@ -173,7 +174,17 @@ class Source(HistorySource):
                 sizing = await asyncio.wait_for(c.fetch_order_book(r["cex_symbol"], limit=20), 8)
                 cap_price = float(number(sizing["asks"][0][0], "DEX_VIRTUAL_SIZING_PRICE"))
                 hedge_base = min(base, self.cex_cap(r) / cap_price)
-            contracts = float(format_value(c, r["cex_symbol"], Decimal(str(hedge_base)) / number(m["contractSize"], "CONTRACT_SIZE"), "amount"))
+            size = number(m["contractSize"], "CONTRACT_SIZE")
+            requested = Decimal(str(hedge_base)) / size
+            step = quantum(c, m)
+            diagnostics = dict(symbol=r["cex_symbol"], venue=r["cex_venue"],
+                               requested_contracts=float(requested), notional_usd=cash,
+                               amount_step=float(step / size) if step is not None else None,
+                               minimum_contracts=(m.get("limits", {}).get("amount") or {}).get("min"),
+                               minimum_cost=(m.get("limits", {}).get("cost") or {}).get("min"))
+            if step is not None and Decimal(str(hedge_base)) < step:
+                raise ValueError("DEX_VIRTUAL_AMOUNT_BELOW_NATIVE_STEP")
+            contracts = float(format_value(c, r["cex_symbol"], requested, "amount"))
             qty = contracts * float(m["contractSize"])
             if qty > base:
                 raise ValueError("DEX_VIRTUAL_HEDGE_ROUNDING_UP")
@@ -241,7 +252,7 @@ class Source(HistorySource):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return dict(ok=False, reason=str(exc) if isinstance(exc, ValueError) else "DEX_VIRTUAL_ENTRY_UNAVAILABLE")
+            return dict(ok=False, reason=str(exc) if isinstance(exc, ValueError) else "DEX_VIRTUAL_ENTRY_UNAVAILABLE", diagnostics=diagnostics)
 
     async def exit(self, p):
         try:
