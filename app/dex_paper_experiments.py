@@ -34,6 +34,7 @@ async def build(bundle, runtime, db_path, state_path, notify, allowed, capital=2
             raise ValueError("DEX_EXPERIMENT_ROUTES_REQUIRED:" + venue)
         source = Source(original.provider, routes, original.public, original.fs, original.private, original.clock, max_notional=300)
         source.focus, source.signals_only, source.entry_venues = True, signals_only, {venue}
+        source.adaptive = True
         source.signals = Signals(state_path + "." + name + ".signals.json", source.clock)
         engine = Engine(db_path, source, capital=capital, max_seconds=900, virtual=True,
                         namespace="channel" if signals_only else "bybit", clock=source.clock)
@@ -121,6 +122,8 @@ REASONS = {
     "DEX_SIGNAL_DIRECTION_CHANGED": "Рынок больше не подтверждает направление сигнала",
     "DEX_SIGNAL_LOSS_COOLDOWN": "Пауза по токену после убытка",
     "DEX_PAPER_OPEN": "Виртуальная позиция открыта",
+    "RECOVERY_BOOK_SLIPPAGE_TOO_HIGH": "Проскальзывание стакана выше лимита — подбираем меньшую сумму",
+    "RECOVERY_LIQUIDITY_LOW": "Недостаточно глубины стакана — подбираем меньшую сумму",
     "RECOVERY_BOOK_STALE": "Стакан устарел — вход пропущен",
     "JUPITER_PRICE_IMPACT_LIMIT": "Размер слишком сильно влияет на цену DEX",
     "RISK_OR_VENUE_DISABLED": "Вход отключён или достигнут лимит риска",
@@ -153,11 +156,16 @@ def render_mode(name, engine, enabled):
     d = s.get("last_failure_detail", {})
     if "entry_edge" in d:
         out.append(f"Потенциальный NET: {d['entry_edge']:+.4f} USD\nNET немедленного обратного выхода: {d['immediate_net']:+.4f} USD")
+    if d.get("size_attempts"):
+        out.append("<b>Подбор суммы</b>\n" + "\n".join(f"${a['notional_usd']:.2f} · {escape(reason_text(a['reason']))}" for a in d["size_attempts"]))
     if d.get("amount_step") is not None:
         out.append(f"Шаг биржи: {d['amount_step']:.8g} контрактов · запрошено {d['requested_contracts']:.8g}")
     reader = getattr(engine, "channel_reader", None)
     if reader:
         out.append("<b>Сигналы канала</b>\n" + escape(reader.status) + f"\nПрочитано {reader.metrics['received']} · принято {reader.metrics['accepted']}\n" + escape(reader.metrics['last'][:250]))
+    history = s.get("signal_checks", [])[-5:]
+    if history:
+        out.append("<b>Последние проверки сигналов</b>\n" + "\n".join(f"{escape(h['symbol'])} · {max(0,engine.clock()-h['ts']):.0f} с назад · {escape(reason_text(h['reason']))}" for h in history))
     reasons = sorted(s.get("decision_counts",{}).items(), key=lambda x:-x[1])[:4]
     if reasons:
         out.append("<b>Основные причины</b>\n" + "\n".join(f"{escape(reason_text(r))}: {n}" for r,n in reasons))

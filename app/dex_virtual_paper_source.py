@@ -91,6 +91,8 @@ class Source(HistorySource):
         self.entry_venues = None
         self.blocked_until = lambda r: 0
         self.consumed_signal = lambda r: 0
+        self.adaptive = False
+        self.adaptive_sizes = {}
 
     def venue_allowed(self, venue):
         return venue in self.entry_venues if self.entry_venues is not None else entry_venue_allowed(venue)
@@ -169,6 +171,34 @@ class Source(HistorySource):
         return r
 
     async def entry(self, r):
+        if not self.adaptive or r.get("mode") != "reference":
+            return await self._entry(r)
+        key = route_key(r)
+        signal = self.signals.get(r)[0] if self.signals_only and self.signals else None
+        identity = signal["timestamp"] if signal else None
+        ceiling = min(float(r["notional_usd"]), float(signal.get("max_notional_usd", r["notional_usd"])) if signal else float(r["notional_usd"]))
+        cached = self.adaptive_sizes.get(key)
+        cash = cached[2] if cached and cached[1] == identity and 0 <= self.clock()-cached[0] <= 60 else ceiling
+        retryable = {"JUPITER_PRICE_IMPACT_LIMIT", "RECOVERY_BOOK_SLIPPAGE_TOO_HIGH", "RECOVERY_LIQUIDITY_LOW", "DEX_REFERENCE_ROUNDTRIP_TOO_COSTLY"}
+        attempts = []
+        # One quote attempt per cycle: never delay risk exits with a sizing loop.
+        result = await self._entry(dict(r, notional_usd=cash, max_notional_usd=min(self.cex_cap(r),cash)))
+        attempts.append(dict(ts=self.clock(), notional_usd=cash, reason=result.get("reason", "DEX_PAPER_OPEN")))
+        if result.get("reason") in retryable and cash / 2 >= 10:
+            self.adaptive_sizes[key] = (self.clock(), identity, cash/2)
+            self.confirmations.pop(key, None)
+        elif result.get("reason") == "DEX_REFERENCE_CONFIRMATION_REQUIRED":
+            self.adaptive_sizes[key] = (self.clock(), identity, cash)
+        else:
+            self.adaptive_sizes.pop(key, None)
+        result.setdefault("diagnostics", {}).update(size_attempts=attempts, target_notional_usd=ceiling)
+        if result.get("ok"):
+            result["position"]["size_attempts"] = attempts
+        if signal:
+            result["diagnostics"].update(signal_timestamp=signal["timestamp"], signal_base=signal["base"])
+        return result
+
+    async def _entry(self, r):
         diagnostics = {}
         try:
             if self.blocked_until(r) > self.clock():
@@ -288,7 +318,7 @@ class Source(HistorySource):
                     self.confirmations.pop(key, None)
                     raise ValueError(failure)
                 previous = self.confirmations.get(key)
-                identity = (side, signal["timestamp"] if signal else None)
+                identity = (side, signal["timestamp"] if signal else None, cash)
                 self.confirmations[key] = (self.clock(), identity)
                 if not previous or previous[1] != identity or not 2 <= self.clock() - previous[0] <= 60:
                     raise ValueError("DEX_REFERENCE_CONFIRMATION_REQUIRED")

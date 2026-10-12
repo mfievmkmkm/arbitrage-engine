@@ -29,6 +29,10 @@ def parse_signal(text):
     direction = re.search(r"\b(LONG|SHORT)\?\s*#([A-Za-z0-9_]+)", text)
     chain = re.search(r"#(SOLANA|ETHEREUM|BASE)\b", text, re.I)
     address = re.search(r"\b0x[a-fA-F0-9]{40}\b", text) if chain and chain[1].upper() != "SOLANA" else re.search(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b", text)
+    if direction and not chain and "Aligned in" not in text:
+        network = re.search(r"#([A-Za-z0-9_]+)\s+Dep:", text, re.I)
+        if network:
+            raise ValueError("Сеть " + network[1].upper() + " пока не поддерживается для DEX-котировок")
     if not direction or not chain or not address or "Aligned in" in text:
         raise ValueError("Нужен исходный LONG?/SHORT? сигнал с сетью и адресом токена, не отчёт Aligned.")
     result = dict(base=direction[2].upper(), side="buy" if direction[1] == "LONG" else "sell",
