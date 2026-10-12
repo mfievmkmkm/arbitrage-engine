@@ -48,7 +48,8 @@ async def generate(existing, clients, provider, seeds, notional=20):
             continue
         try:
             token = await provider.token(mint)
-            if token.get("symbol") not in (base, "WSOL" if base == "SOL" else base):
+            ticker = token.get("symbol")
+            if not isinstance(ticker, str) or ticker.upper() not in (base.upper(), "WSOL" if base.upper() == "SOL" else base.upper()):
                 raise ValueError("CONFIGURED_MINT_SYMBOL_MISMATCH")
             q = await provider.price("solana", USDC, mint, str(int(notional * 10**6)))
             if not q.get("ok"):

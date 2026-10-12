@@ -55,7 +55,11 @@ async def expand_watchlist(values, data):
     if preset not in ("none", "core", "channel"):
         raise ValueError("RAILWAY_PAPER_WATCHLIST_PRESET_INVALID")
     stored = data / "watchlist.json"
-    if preset == "none" or stored.exists():
+    revision = values.get("DEX_VIRTUAL_WATCHLIST_REVISION", "1")
+    if not revision or len(revision) > 64 or not all(c.isalnum() or c in "_-" for c in revision):
+        raise ValueError("RAILWAY_PAPER_WATCHLIST_REVISION_INVALID")
+    cached = json.loads(stored.read_text(encoding="utf-8")) if stored.exists() else None
+    if preset == "none" or (cached and cached.get("revision", "1") == revision):
         return
     if not values.get("JUPITER_API_KEY"):
         raise ValueError("JUPITER_API_KEY_REQUIRED_FOR_WATCHLIST")
@@ -70,20 +74,36 @@ async def expand_watchlist(values, data):
         if not clients:
             raise ValueError("WATCHLIST_CEX_CONNECTIONS_UNAVAILABLE")
         seeds = SEEDS if preset == "channel" else {k: SEEDS[k] for k in ("SOL", "JUP")}
-        routes, report = await generate(json.loads(values["DEX_VIRTUAL_ROUTES_JSON"]), clients, provider, seeds)
-        # Don't cache a fully failed Solana scan forever. Restart can retry after
-        # API issues are fixed; existing positions/routes remain untouched.
+        existing = json.loads(values["DEX_VIRTUAL_ROUTES_JSON"])
+        if cached:
+            from .dex_virtual_paper_source import route_key
+            preserved = list(routes_checked(cached["routes"]))
+            keys = {route_key(r) for r in preserved}
+            for r in existing:
+                if route_key(r) not in keys:
+                    preserved.append(r)
+                    keys.add(route_key(r))
+            existing = routes_checked(preserved)
+        routes, report = await generate(existing, clients, provider, seeds)
+        # An optional failed discovery must not stop already configured Paper
+        # routes. Don't cache a failure as a successful refresh revision.
         if not any(row["status"] == "CONFIGURED" for row in report):
             for row in report:
                 print("Watchlist:", row["base"], row.get("reason", "SKIPPED"), flush=True)
-            raise ValueError("RAILWAY_PAPER_NO_SOLANA_ROUTES: use preset none for Ethereum only")
+            print("Watchlist: no accepted new Solana quotes; continuing existing virtual routes.", flush=True)
+            return
         temporary = data / (".watchlist-" + uuid.uuid4().hex + ".tmp")
         try:
             with temporary.open("x", encoding="utf-8") as stream:
-                json.dump(dict(routes=routes, report=report), stream, ensure_ascii=False)
+                json.dump(dict(routes=routes, report=report, revision=revision), stream, ensure_ascii=False)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.link(temporary, stored)
+            if cached:
+                # Refresh extends the existing route list. Open model positions
+                # keep their original identities and quantities.
+                os.replace(temporary, stored)
+            else:
+                os.link(temporary, stored)
         finally:
             temporary.unlink(missing_ok=True)
         values["DEX_VIRTUAL_ROUTES_JSON"] = json.dumps(routes, separators=(",", ":"))

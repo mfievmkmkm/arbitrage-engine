@@ -38,7 +38,7 @@ class Session:
 def quote(**changes):
     return dict(inputMint=USDC, outputMint=SEEDS["SOL"], inAmount="5000000",
                 outAmount="25000000", otherAmountThreshold="24950000", swapMode="ExactIn",
-                slippageBps=20, priceImpact=-.05, routePlan=[dict(percent=100)], **changes)
+                slippageBps=20, priceImpact=-.05, router="metis", routePlan=[dict(percent=100)], **changes)
 
 
 def test_quote_only_http_contract_preserves_solana_case_and_has_no_wallet():
@@ -52,6 +52,7 @@ def test_quote_only_http_contract_preserves_solana_case_and_has_no_wallet():
         assert call["params"]["inputMint"] == USDC
         assert not {"taker", "receiver"} & call["params"].keys()
         assert call["params"]["slippageBps"] == "20"
+        assert call["params"]["excludeRouters"] == "jupiterz,dflow,okx"
         assert result["price_impact_pct"] == "-0.0005"
     asyncio.run(go())
 
@@ -66,6 +67,8 @@ def test_quote_only_http_contract_preserves_solana_case_and_has_no_wallet():
     ("priceImpact", "nan", "IMPACT"),
     ("slippageBps", 50, "SLIPPAGE"),
     ("routePlan", [], "ROUTE"),
+    ("router", "jupiterz", "ROUTE"),
+    ("otherAmountThreshold", "24900000", "SLIPPAGE"),
 ])
 def test_unsafe_or_mismatched_quotes_are_rejected(field, value, reason):
     async def go():
@@ -115,7 +118,7 @@ def test_watchlist_uses_only_exact_native_markets_preserves_existing_routes():
 
         class P:
             async def token(self, mint):
-                return dict(id=mint, symbol="USDC" if mint == USDC else "SOL", decimals=6 if mint == USDC else 9)
+                return dict(id=mint, symbol="USDC" if mint == USDC else "sol", decimals=6 if mint == USDC else 9)
 
             async def price(self, chain, sell, buy, amount):
                 return dict(ok=True, min_buy_amount_raw="123456")

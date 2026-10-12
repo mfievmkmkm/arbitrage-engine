@@ -80,7 +80,8 @@ class Provider:
                 raise ValueError("SOLANA_SLIPPAGE_INVALID")
             start = self.clock()
             raw = await self.get("swap/v2/order", dict(inputMint=sell, outputMint=buy,
-                                amount=str(amount), swapMode="ExactIn", slippageBps=str(slippage_bps)))
+                                amount=str(amount), swapMode="ExactIn", slippageBps=str(slippage_bps),
+                                excludeRouters="jupiterz,dflow,okx"))
             if not isinstance(raw, dict) or raw.get("error") or raw.get("errorCode"):
                 raise ValueError("JUPITER_QUOTE_UNAVAILABLE")
             if (raw.get("inputMint"), raw.get("outputMint"), str(raw.get("inAmount")), raw.get("swapMode")) != (sell, buy, str(amount), "ExactIn"):
@@ -90,15 +91,22 @@ class Provider:
             out, minimum = raw.get("outAmount"), raw.get("otherAmountThreshold")
             if not all(isinstance(x, str) and x.isdigit() and int(x) > 0 for x in (out, minimum)) or int(minimum) > int(out):
                 raise ValueError("JUPITER_RESPONSE_AMOUNT_INVALID")
-            if not raw.get("routePlan") or raw.get("slippageBps") != slippage_bps:
-                raise ValueError("JUPITER_ROUTE_OR_SLIPPAGE_INVALID")
+            # Reference experiments use an AMM quote with a declared route,
+            # rather than accepting router-dependent RFQ response semantics.
+            if raw.get("router") != "metis" or not isinstance(raw.get("routePlan"), list) or not raw["routePlan"]:
+                raise ValueError("JUPITER_ROUTE_UNSUPPORTED")
+            if type(raw.get("slippageBps")) not in (int, float) or raw["slippageBps"] != slippage_bps:
+                raise ValueError("JUPITER_SLIPPAGE_MISMATCH")
+            expected_minimum = int(Decimal(out) * (Decimal(1) - Decimal(slippage_bps) / 10000))
+            if int(minimum) < expected_minimum:
+                raise ValueError("JUPITER_MINIMUM_SLIPPAGE_MISMATCH")
             impact = Decimal(str(raw["priceImpact"])) / 100 if raw.get("priceImpact") is not None else Decimal(str(raw.get("priceImpactPct")))
             if not impact.is_finite() or abs(impact) > Decimal("0.01"):
                 raise ValueError("JUPITER_PRICE_IMPACT_LIMIT")
             return dict(ok=True, provider="Jupiter V2", chain_id="solana", sell_token=sell,
                         buy_token=buy, sell_amount_raw=str(amount), buy_amount_raw=out,
                         min_buy_amount_raw=minimum, network_fee_raw=None, token_metadata=None,
-                        price_impact_pct=str(impact), route=raw["routePlan"], block_number=raw.get("contextSlot"),
+                        price_impact_pct=str(impact), router="metis", route=raw["routePlan"], block_number=raw.get("contextSlot"),
                         ts=start, mode="RESEARCH_INDICATIVE", paper_allowed=False, live_allowed=False)
         except asyncio.CancelledError:
             raise

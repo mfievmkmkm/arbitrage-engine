@@ -107,7 +107,34 @@ def test_automatic_watchlist_failure_is_not_cached_forever(monkeypatch, tmp_path
     monkeypatch.setattr(factory, "build", build)
     monkeypatch.setattr(factory, "close", close)
     monkeypatch.setattr(builder, "generate", generate)
-    with pytest.raises(ValueError, match="NO_SOLANA_ROUTES"):
-        asyncio.run(expand_watchlist(values, data))
+    asyncio.run(expand_watchlist(values, data))
     assert not (data / "watchlist.json").exists()
     assert (data / "arbitrage.sqlite3").is_file()
+
+
+def test_explicit_watchlist_refresh_extends_existing_routes(monkeypatch, tmp_path):
+    import app.public_client_factory as factory
+    import app.build_virtual_watchlist as builder
+    values = environment(tmp_path, JUPITER_API_KEY="placeholder", DEX_VIRTUAL_WATCHLIST_PRESET="channel")
+    data = prepare_environment(values, tmp_path)
+    routes = json.loads(values["DEX_VIRTUAL_ROUTES_JSON"])
+    (data / "watchlist.json").write_text(json.dumps(dict(routes=routes, revision="1")))
+    values["DEX_VIRTUAL_WATCHLIST_REVISION"] = "2"
+
+    async def build(*args):
+        return {"bybit": object()}
+
+    async def close(*args):
+        pass
+
+    async def generate(existing, *args):
+        assert existing == routes
+        return existing + [dict(existing[0], cex_venue="mexc")], [dict(base="SOL", status="CONFIGURED")]
+
+    monkeypatch.setattr(factory, "build", build)
+    monkeypatch.setattr(factory, "close", close)
+    monkeypatch.setattr(builder, "generate", generate)
+    asyncio.run(expand_watchlist(values, data))
+    saved = json.loads((data / "watchlist.json").read_text())
+    assert saved["revision"] == "2" and saved["routes"][0] == routes[0]
+    assert len(saved["routes"]) == 2
