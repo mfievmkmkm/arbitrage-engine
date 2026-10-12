@@ -92,3 +92,28 @@ def test_discovery_exact_mint_scope_cache_and_channel_extension(tmp_path):
         with pytest.raises(ValueError):await d.ensure('mexc','FAKE',token)
         assert d.path.exists()
     asyncio.run(go())
+
+
+def test_discovery_restart_restores_cached_routes_with_each_portfolio_size(tmp_path):
+    import json
+    from test_dex_virtual_paper import ROUTE
+    async def go():
+        engines={name:SimpleNamespace(state={"experiment_config":{"venue":venue,"notional":size}},
+                   source=SimpleNamespace(routes=[]))
+                 for name,venue,size in (("dex_channel","mexc",100),("dex_bybit","bybit",80))}
+        path=tmp_path/"routes.json"
+        cached={name:[dict(ROUTE,cex_venue=e.state["experiment_config"]["venue"],mode="reference",notional_usd=20,max_notional_usd=20)]
+                for name,e in engines.items()}
+        path.write_text(json.dumps(cached))
+        d=Discovery(engines,path)
+        async def idle():
+            await asyncio.Event().wait()
+        d.run=idle
+        await d.start()
+        assert engines['dex_channel'].source.routes[0]['notional_usd']==100
+        assert engines['dex_bybit'].source.routes[0]['notional_usd']==80
+        await d.stop()
+        await d.start()
+        assert all(len(e.source.routes)==1 for e in engines.values())
+        await d.stop()
+    asyncio.run(go())

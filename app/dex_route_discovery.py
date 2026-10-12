@@ -83,7 +83,7 @@ class Discovery:
                     venue = e.state["experiment_config"]["venue"]
                     if r["cex_venue"] != venue or r.get("mode") != "reference":
                         raise ValueError("WATCHLIST_CACHE_SCOPE_INVALID")
-                    self.add(e, dict(r, notional_usd=engine.state["experiment_config"].get("notional", 100), max_notional_usd=engine.state["experiment_config"].get("notional", 100)))
+                    self.add(e, dict(r, notional_usd=e.state["experiment_config"]["notional"], max_notional_usd=e.state["experiment_config"]["notional"]))
         self.task = asyncio.create_task(self.run())
 
     async def stop(self):
