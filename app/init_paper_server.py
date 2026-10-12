@@ -13,10 +13,14 @@ from .paper_server import validate
 
 
 def initialize(env_path, db_path):
-    env, db = Path(env_path), Path(db_path).absolute()
+    env = Path(env_path)
     if not env.is_file() or env.is_symlink():
         raise ValueError("FRESH_PAPER_ENV_REQUIRED")
-    values = dotenv_values(env)
+    return initialize_values(dotenv_values(env), db_path)
+
+
+def initialize_values(values, db_path):
+    db = Path(db_path).absolute()
     validate(values)
     try:
         if int(values.get("ADMIN_ID") or 0) <= 0:

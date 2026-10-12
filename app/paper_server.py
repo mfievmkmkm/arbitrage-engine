@@ -29,6 +29,11 @@ def main():
     # The volume must already contain the migrated database: don't silently
     # start a fresh ledger when a mount/path was misspelled.
     db = Path(os.getenv("DB_PATH", "/data/arbitrage.sqlite3"))
+    run_database(db)
+
+
+def run_database(db):
+    db = Path(db).absolute()
     if not db.is_file() or db.is_symlink():
         raise ValueError("PAPER_SERVER_MIGRATED_DATABASE_REQUIRED")
     with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True) as connection:
