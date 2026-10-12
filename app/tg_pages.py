@@ -6,12 +6,14 @@ def strategies(runtime):
         "funding_arb": "Ставки funding",
         "cex_dex": "CEX ↔ DEX",
     }
+    if "dex_channel" in getattr(runtime, "enabled", {}):
+        labels.update(dex_channel="Канал → MEXC · независимый Paper", dex_bybit="Автопоиск → Bybit · независимый Paper")
     out = ["<b>СТРАТЕГИИ</b>", "Сканер · Paper · реальная торговля", ""]
     for name, label in labels.items():
         enabled = getattr(runtime, "enabled", {}).get(name, False)
         mode = (
             "Paper"
-            if name in ("futures_futures", "spot_futures", "spot_spot", "funding_arb")
+            if name in ("futures_futures", "spot_futures", "spot_spot", "funding_arb", "dex_channel", "dex_bybit")
             else "Firm Paper / исследование"
         )
         out.append(

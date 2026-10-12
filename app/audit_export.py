@@ -10,6 +10,16 @@ from .export_service import write_csv
 from .secret_redaction import redact
 
 TABLES = {
+    "DEX channel trades": "cex_dex_virtual_paper_channel",
+    "DEX channel marks": "cex_dex_virtual_paper_channel_marks",
+    "DEX channel decisions": "cex_dex_virtual_paper_channel_decisions",
+    "DEX channel events": "cex_dex_virtual_paper_channel_events",
+    "DEX channel state": "cex_dex_virtual_paper_channel_state",
+    "DEX Bybit trades": "cex_dex_virtual_paper_bybit",
+    "DEX Bybit marks": "cex_dex_virtual_paper_bybit_marks",
+    "DEX Bybit decisions": "cex_dex_virtual_paper_bybit_decisions",
+    "DEX Bybit events": "cex_dex_virtual_paper_bybit_events",
+    "DEX Bybit state": "cex_dex_virtual_paper_bybit_state",
     "Market books": "market_books",
     "Execution replay runs": "execution_replay_runs",
     "Execution replay results": "execution_replay_results",

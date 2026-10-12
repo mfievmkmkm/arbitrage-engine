@@ -3,6 +3,8 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 STRATEGY_LABELS = {
+    "dex_channel": "Канал → MEXC · свой Paper $50",
+    "dex_bybit": "Автопоиск → Bybit · свой Paper $50",
     "futures_futures": "Фьючерсы ↔ Фьючерсы",
     "spot_futures": "Спот ↔ Фьючерсы",
     "spot_spot": "Спот ↔ Спот",

@@ -183,12 +183,19 @@ durable = LiveTradeStore(config.db_path)
 strategy_toggles = StrategyToggleStore(config.runtime_state_path + ".strategies.json")
 strategy_runtime.enabled = strategy_toggles.load(strategy_runtime.enabled)
 from .dex_signal_focus import enabled as focus_enabled, focus_toggles, Signals
-if focus_enabled("DEX_CHANNEL_SIGNALS_ONLY") and not focus_enabled("DEX_REFERENCE_FOCUS"):
+dual_paper = focus_enabled("DEX_DUAL_PAPER_ENABLED")
+if not dual_paper and focus_enabled("DEX_CHANNEL_SIGNALS_ONLY") and not focus_enabled("DEX_REFERENCE_FOCUS"):
     raise ValueError("DEX_CHANNEL_SIGNALS_ONLY_REQUIRES_REFERENCE_FOCUS")
-if focus_enabled("DEX_REFERENCE_FOCUS") and (config.live_enabled or not focus_enabled("DEX_VIRTUAL_PAPER_ENABLED")):
+if (dual_paper or focus_enabled("DEX_REFERENCE_FOCUS")) and (config.live_enabled or not focus_enabled("DEX_VIRTUAL_PAPER_ENABLED")):
     raise ValueError("DEX_REFERENCE_FOCUS_REQUIRES_VIRTUAL_PAPER_ONLY")
-if focus_enabled("DEX_REFERENCE_FOCUS"):
+if dual_paper:
+    strategy_runtime.enabled.setdefault("dex_channel", False)
+    strategy_runtime.enabled.setdefault("dex_bybit", False)
+elif focus_enabled("DEX_REFERENCE_FOCUS"):
     strategy_runtime.enabled = focus_toggles(strategy_runtime.enabled)
+if not dual_paper:
+    strategy_runtime.enabled.pop("dex_channel", None)
+    strategy_runtime.enabled.pop("dex_bybit", None)
 venue_controller = VenueController(
     VenueModeStore(config.runtime_state_path + ".venues.json"), config.exchanges
 )
@@ -239,12 +246,19 @@ async def text_for(s):
     if s == "status":
         return render_system_center(scanner, strategy_runtime, secondary)
     if s == "strategies":
-        return render_strategy_console(strategy_runtime)
+        body = render_strategy_console(strategy_runtime)
+        if secondary and secondary.dex_experiments:
+            from .dex_paper_experiments import render
+            body += "\n\n" + render(secondary.dex_experiments, strategy_runtime.enabled)
+        return body
     if s == "strategy_stats":
         return render_strategy_stats(await strategy_diary_summary(config.db_path))
     if s == "capital":
         return render_capital(bankroll)
     if s == "dex":
+        if secondary and secondary.dex_experiments:
+            from .dex_paper_experiments import render
+            return render(secondary.dex_experiments, strategy_runtime.enabled)
         if secondary and secondary.dex_paper:
             return render_dex_paper(secondary.dex_paper)
         rows = strategy_runtime.top("cex_dex")
@@ -497,9 +511,11 @@ async def start(m: Message):
 async def accept_dex_signal(m: Message):
     if not m.from_user or not allowed(m.from_user.id):
         return
-    if not focus_enabled("DEX_CHANNEL_SIGNALS_ONLY"):
+    if not dual_paper and not focus_enabled("DEX_CHANNEL_SIGNALS_ONLY"):
         return await m.answer("Приём сигналов включается переменной DEX_CHANNEL_SIGNALS_ONLY=true.")
-    engine = getattr(secondary, "dex_paper", None)
+    engine = (getattr(secondary, "dex_experiments", {}).get("dex_channel") if dual_paper else getattr(secondary, "dex_paper", None))
+    if dual_paper and not strategy_runtime.enabled.get("dex_channel", False):
+        return await m.answer("Включи «Канал → MEXC» в разделе «Стратегии», затем перешли свежий сигнал.")
     signals = getattr(getattr(engine, "source", None), "signals", None)
     if signals is None:
         return await m.answer("Виртуальный DEX Paper ещё не готов.")
@@ -931,7 +947,7 @@ async def strategy_toggle(q: CallbackQuery):
     name = q.data.split(":", 1)[1]
     if name not in strategy_runtime.enabled:
         return await q.answer("Неизвестная стратегия")
-    if focus_enabled("DEX_REFERENCE_FOCUS") and name != "cex_dex":
+    if not dual_paper and focus_enabled("DEX_REFERENCE_FOCUS") and name != "cex_dex":
         return await q.answer("Сейчас включён отдельный эксперимент CEX↔DEX. Другие входы отключены переменной DEX_REFERENCE_FOCUS.")
     if name == "cex_dex":
         await safe_edit(q.message, await text_for("dex"), keyboard_for("dex"))
@@ -1130,6 +1146,8 @@ async def main():
         await durable.init()
         await paper.restore()
         await restore_ledger(config.db_path, bankroll, risk)
+        from .dex_paper_experiments import require_monitoring
+        await require_monitoring(config.db_path, dual_paper)
         readers, private_clients = build_private_readers()
         spot_private_clients = build_spot_clients()
 
@@ -1710,6 +1728,13 @@ async def main():
             if dpaper.virtual and focus_enabled("DEX_REFERENCE_FOCUS"):
                 dpaper.source.signals = Signals(config.runtime_state_path + ".dex_signals.json")
         sf_cycle.on_closed = sf_closed
+        if dual_paper:
+            from .dex_paper_experiments import build as build_experiments
+            secondary.dex_experiments = await build_experiments(
+                secondary, strategy_runtime, config.db_path, config.runtime_state_path,
+                notify_paper_close,
+                lambda p: not scanner.paused and all(venue_controller.get(p["cex_venue"])[k] for k in ("paper", "scan")),
+            )
         await secondary.runtime.start()
         bot = Bot(token=config.token)
         notification_bot = bot

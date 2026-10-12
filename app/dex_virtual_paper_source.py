@@ -84,6 +84,14 @@ class Source(HistorySource):
         self.reader = Reader(public, clock=clock)
         self.signals = None
         self.confirmations = {}
+        self.focus = enabled("DEX_REFERENCE_FOCUS")
+        self.signals_only = enabled("DEX_CHANNEL_SIGNALS_ONLY")
+        self.entry_venues = None
+        self.blocked_until = lambda r: 0
+        self.consumed_signal = lambda r: 0
+
+    def venue_allowed(self, venue):
+        return venue in self.entry_venues if self.entry_venues is not None else entry_venue_allowed(venue)
 
     @staticmethod
     def cex_cap(r):
@@ -161,22 +169,26 @@ class Source(HistorySource):
     async def entry(self, r):
         diagnostics = {}
         try:
-            if not entry_venue_allowed(r["cex_venue"]):
+            if self.blocked_until(r) > self.clock():
+                raise ValueError("DEX_SIGNAL_LOSS_COOLDOWN")
+            if not self.venue_allowed(r["cex_venue"]):
                 raise ValueError("DEX_VIRTUAL_ENTRY_VENUE_DISABLED")
             signal = None
-            if enabled("DEX_REFERENCE_FOCUS"):
+            if self.focus:
                 if r.get("mode") != "reference":
                     raise ValueError("DEX_REFERENCE_FOCUS_REFERENCE_ONLY")
                 if self.signals is not None:
                     _, reason = self.signals.get(r)
                     if reason == "DEX_SIGNAL_LOSS_COOLDOWN":
                         raise ValueError(reason)
-            if enabled("DEX_CHANNEL_SIGNALS_ONLY"):
+            if self.signals_only:
                 if self.signals is None:
                     raise ValueError("DEX_CHANNEL_SIGNAL_REQUIRED")
                 signal, reason = self.signals.get(r)
                 if reason:
                     raise ValueError(reason)
+                if signal["timestamp"] <= self.consumed_signal(r):
+                    raise ValueError("DEX_CHANNEL_SIGNAL_ALREADY_USED")
             if r["cex_venue"] not in self.public:
                 raise ValueError("DEX_VIRTUAL_CEX_UNAVAILABLE")
             c = self.public[r["cex_venue"]]
@@ -261,7 +273,7 @@ class Source(HistorySource):
             immediate_net = immediate_gross - p["entry_fees"] - qty * x["price"] * x["fee_rate"] - x["gas"] - p["safety"]
             if immediate_net <= -max(cash, notional) * 0.02:
                 raise ValueError("DEX_VIRTUAL_REVERSE_PREFLIGHT_NET_STOP")
-            if enabled("DEX_REFERENCE_FOCUS") and p["virtual_mode"] == "reference":
+            if self.focus and p["virtual_mode"] == "reference":
                 if signal and signal["side"] != side:
                     raise ValueError("DEX_SIGNAL_DIRECTION_CHANGED")
                 failure = quality(notional, p["entry_edge"], immediate_net, native.market_evidence)

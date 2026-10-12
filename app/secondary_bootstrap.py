@@ -41,6 +41,7 @@ class Bundle:
         self.ss_paper = None
         self.funding_paper = None
         self.dex_paper = None
+        self.dex_experiments = {}
         self.wallet_session = None
         self.dex_live = None
         self.book_recorder = None

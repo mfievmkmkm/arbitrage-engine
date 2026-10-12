@@ -69,6 +69,7 @@ class Engine:
         trailing=0.2,
         clock=time.time,
         virtual=False,
+        namespace=None,
     ):
         if (
             not all(
@@ -100,10 +101,14 @@ class Engine:
         if type(virtual) is not bool:
             raise ValueError("DEX_PAPER_MODE_INVALID")
         self.virtual = virtual
+        if namespace not in (None, "channel", "bybit") or (namespace and not virtual):
+            raise ValueError("DEX_PAPER_NAMESPACE_INVALID")
+        self.namespace = namespace
 
     def sql(self, statement):
         # Virtual observations must never become firm execution/OOS evidence.
-        return statement.replace("cex_dex_paper", "cex_dex_virtual_paper") if self.virtual else statement
+        table = "cex_dex_virtual_paper" + ("_" + self.namespace if self.namespace else "")
+        return statement.replace("cex_dex_paper", table) if self.virtual else statement
 
     @property
     def positions(self):
@@ -202,6 +207,18 @@ class Engine:
         if self.virtual and closed:
             state["closed_count"] = state.get("closed_count", 0) + len(closed)
             state["realized_net"] = state.get("realized_net", 0) + sum(p["net"] for p in closed)
+            if self.namespace:
+                for p in closed:
+                    key = json.dumps(p["virtual_route_key"], separators=(",", ":"))
+                    if p["net"] < 0:
+                        state.setdefault("route_cooldowns", {})[key] = p["closed_at"] + 600
+                    state["wins"] = state.get("wins", 0) + int(p["net"] > 0)
+                    state["net_peak"] = max(state.get("net_peak", 0), state["realized_net"])
+                    state["closed_drawdown"] = max(state.get("closed_drawdown", 0), state["net_peak"] - state["realized_net"])
+                    day = int(p["closed_at"] // 86400)
+                    if state.get("day") != day:
+                        state.update(day=day, day_net=0)
+                    state["day_net"] += p["net"]
         if (
             route is not None
             and entry_enabled
@@ -236,6 +253,9 @@ class Engine:
                             id=pid, closed_at=None, status="OPEN", net=0, best_net=0
                         )
                         state["positions"][str(pid)] = p
+                        if self.namespace and p.get("channel_signal"):
+                            key = json.dumps(p["virtual_route_key"], separators=(",", ":"))
+                            state.setdefault("consumed_signals", {})[key] = p["channel_signal"]["timestamp"]
                         saved.append(p)
                         reason = "DEX_PAPER_OPEN"
             # Never persist the route: it contains the wallet address.
@@ -307,8 +327,8 @@ class Engine:
                     "INSERT INTO ledger VALUES(?,?,?,?,?,?)",
                     (
                         p["closed_at"],
-                        "CEX_DEX_VIRTUAL_PAPER_NET" if self.virtual else "CEX_DEX_PAPER_NET",
-                        ("dex-virtual:" if self.virtual else "dex:") + str(p["id"]),
+                        "CEX_DEX_" + self.namespace.upper() + "_EXPERIMENT_NET" if self.namespace else ("CEX_DEX_VIRTUAL_PAPER_NET" if self.virtual else "CEX_DEX_PAPER_NET"),
+                        ("dex-" + self.namespace + ":" if self.namespace else ("dex-virtual:" if self.virtual else "dex:")) + str(p["id"]),
                         p["cex_venue"],
                         p["net"],
                         p.get("model", "DEX_FIRM_PUBLIC_HISTORY_MODEL"),
@@ -330,10 +350,10 @@ class Cycle:
     async def cycle(self):
         route = self.routes[self.index % len(self.routes)] if self.routes else None
         from .dex_signal_focus import enabled, entry_venue_allowed
-        allowed_routes = [r for r in self.routes if entry_venue_allowed(r["cex_venue"])]
+        allowed_routes = [r for r in self.routes if (self.paper.source.venue_allowed(r["cex_venue"]) if hasattr(self.paper.source, "venue_allowed") else entry_venue_allowed(r["cex_venue"]))]
         route = allowed_routes[self.index % len(allowed_routes)] if allowed_routes else None
         signals = getattr(self.paper.source, "signals", None)
-        if enabled("DEX_CHANNEL_SIGNALS_ONLY") and signals:
+        if getattr(self.paper.source, "signals_only", enabled("DEX_CHANNEL_SIGNALS_ONLY")) and signals:
             active = [r for r in allowed_routes if signals.get(r)[0] is not None]
             if active:
                 route = active[self.index % len(active)]
@@ -341,7 +361,7 @@ class Cycle:
         await self.paper.cycle(route, self.entry_enabled)
         rows = [
             dict(
-                strategy="cex_dex",
+                strategy="dex_" + self.paper.namespace if self.paper.namespace else "cex_dex",
                 symbol=p["symbol"],
                 ts=self.paper.clock(),
                 paper_allowed=True,
