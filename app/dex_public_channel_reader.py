@@ -67,8 +67,18 @@ class Reader:
         self.task = None
         self.status = "Ожидает запуска публичного чтения"
         self.seen = set()
+        self.metrics = dict(received=0, accepted=0, last="Нет новых сигналов")
 
     async def start(self):
+        async with aiosqlite.connect(self.engine.path) as d:
+            await d.execute("CREATE TABLE IF NOT EXISTS dex_channel_reader_state(id INTEGER PRIMARY KEY,payload TEXT)")
+            async with d.execute("SELECT payload FROM dex_channel_reader_state WHERE id=1") as c:
+                row = await c.fetchone()
+                if row:
+                    saved = json.loads(row[0])
+                    self.seen = set(saved["seen"])
+                    self.metrics = saved["metrics"]
+            await d.commit()
         self.task = asyncio.create_task(self.run())
 
     async def stop(self):
@@ -88,15 +98,31 @@ class Reader:
         detail = dict(channel=CHANNEL, message_id=post["id"], timestamp=post["timestamp"], source="PUBLIC_TELEGRAM_PREVIEW")
         reason = "DEX_CHANNEL_PUBLIC_ACCEPTED"
         try:
+            resolver = getattr(self.engine.source, "resolve_signal", None)
+            if resolver:
+                await resolver(post["text"], post["timestamp"])
             s = self.engine.source.signals.add(post["text"], self.engine.source.routes, post["timestamp"], "PUBLIC_TELEGRAM_PREVIEW:" + CHANNEL)
             detail.update(base=s["base"], side=s["side"], chain_id=s["chain_id"], asset=s["asset"])
             self.status = "Читает публично · последний сигнал " + s["base"]
+            self.metrics["accepted"] += 1
+            self.metrics["last"] = s["base"] + " · принят для проверки входа"
         except ValueError as exc:
             reason = "DEX_CHANNEL_PUBLIC_SKIPPED"
             detail["reason"] = str(exc)
+            from .dex_signal_focus import parse_signal
+            try:
+                base = parse_signal(post["text"])["base"]
+            except ValueError:
+                base = "Сигнал"
+            self.metrics["last"] = base + " · пропущен: " + str(exc)
+        self.metrics["received"] += 1
+        self.metrics["last_post"] = post["id"]
+        self.metrics["last_at"] = self.engine.clock()
         async with aiosqlite.connect(self.engine.path) as d:
             await d.execute(self.engine.sql("INSERT INTO cex_dex_paper_decisions(ts,reason,payload) VALUES(?,?,?)"),
                             (self.engine.clock(), reason, json.dumps(detail)))
+            await d.execute("CREATE TABLE IF NOT EXISTS dex_channel_reader_state(id INTEGER PRIMARY KEY,payload TEXT)")
+            await d.execute("INSERT OR REPLACE INTO dex_channel_reader_state VALUES(1,?)", (json.dumps(dict(seen=sorted(self.seen), metrics=self.metrics)),))
             await d.commit()
 
     async def run(self):

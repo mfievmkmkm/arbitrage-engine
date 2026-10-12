@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+import math
 from pathlib import Path
 
 
@@ -30,9 +31,16 @@ def parse_signal(text):
     address = re.search(r"\b0x[a-fA-F0-9]{40}\b", text) if chain and chain[1].upper() != "SOLANA" else re.search(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b", text)
     if not direction or not chain or not address or "Aligned in" in text:
         raise ValueError("Нужен исходный LONG?/SHORT? сигнал с сетью и адресом токена, не отчёт Aligned.")
-    return dict(base=direction[2].upper(), side="buy" if direction[1] == "LONG" else "sell",
+    result = dict(base=direction[2].upper(), side="buy" if direction[1] == "LONG" else "sell",
                 chain_id={"SOLANA": "solana", "ETHEREUM": 1, "BASE": 8453}[chain[1].upper()],
                 asset=address[0], venue="mexc")
+    size = re.search(r"Max Size[^\n]*\(\$([\d,.]+)\s*([KkMm]?)\)", text)
+    if size:
+        limit = float(size[1].replace(",", "")) * {"": 1, "k": 1000, "m": 1000000}[size[2].lower()]
+        if not math.isfinite(limit) or limit <= 0:
+            raise ValueError("CHANNEL_SIZE_INVALID")
+        result["max_notional_usd"] = limit
+    return result
 
 
 class Signals:

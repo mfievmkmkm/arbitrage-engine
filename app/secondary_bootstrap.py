@@ -43,6 +43,7 @@ class Bundle:
         self.dex_paper = None
         self.dex_experiments = {}
         self.public_channel_reader = None
+        self.route_discovery = None
         self.wallet_session = None
         self.dex_live = None
         self.book_recorder = None
@@ -50,6 +51,8 @@ class Bundle:
     async def close(self):
         if self.public_channel_reader:
             await self.public_channel_reader.stop()
+        if self.route_discovery:
+            await self.route_discovery.stop()
         await self.runtime.stop()
         await close(self.clients)
         if self.book_recorder:

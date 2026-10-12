@@ -24,24 +24,28 @@ async def require_monitoring(db_path, enabled):
                     raise ValueError("DEX_OPEN_EXPERIMENT_REQUIRES_DEX_DUAL_PAPER_ENABLED")
 
 
-async def build(bundle, runtime, db_path, state_path, notify, allowed):
+async def build(bundle, runtime, db_path, state_path, notify, allowed, capital=250, notional=100, notify_open=None):
     original = bundle.dex_paper.source
     engines = {}
     for name, venue, signals_only in (("dex_channel", "mexc", True), ("dex_bybit", "bybit", False)):
-        routes = [dict(copy.deepcopy(r), notional_usd=20, max_notional_usd=20)
+        routes = [dict(copy.deepcopy(r), notional_usd=notional, max_notional_usd=notional)
                   for r in original.routes if r["cex_venue"] == venue and r.get("mode") == "reference"]
         if not routes:
             raise ValueError("DEX_EXPERIMENT_ROUTES_REQUIRED:" + venue)
-        source = Source(original.provider, routes, original.public, original.fs, original.private, original.clock)
+        source = Source(original.provider, routes, original.public, original.fs, original.private, original.clock, max_notional=300)
         source.focus, source.signals_only, source.entry_venues = True, signals_only, {venue}
         source.signals = Signals(state_path + "." + name + ".signals.json", source.clock)
-        engine = Engine(db_path, source, capital=50, max_seconds=900, virtual=True,
+        engine = Engine(db_path, source, capital=capital, max_seconds=900, virtual=True,
                         namespace="channel" if signals_only else "bybit", clock=source.clock)
         await engine.init()
-        settings = dict(starting_capital=50, notional=20, venue=venue, signals_only=signals_only)
-        if engine.state.get("experiment_config", settings) != settings:
+        settings = dict(starting_capital=capital, notional=notional, venue=venue, signals_only=signals_only)
+        previous = engine.state.get("experiment_config")
+        migration = previous == dict(starting_capital=50, notional=20, venue=venue, signals_only=signals_only) and capital == 250 and notional == 100
+        if previous and previous != settings and not migration:
             raise ValueError("DEX_EXPERIMENT_CONFIG_CHANGED:" + name)
-        if "experiment_config" not in engine.state:
+        if previous != settings:
+            if migration:
+                engine.state.setdefault("capital_changes", []).append(dict(ts=source.clock(), amount=200, reason="VIRTUAL_TOPUP_50_TO_250_NOT_PROFIT", old=previous))
             engine.state["experiment_config"] = settings
             async with aiosqlite.connect(db_path) as d:
                 c = await d.execute(engine.sql("UPDATE cex_dex_paper_state SET version=version+1,payload=? WHERE id=1 AND version=?"),
@@ -60,6 +64,10 @@ async def build(bundle, runtime, db_path, state_path, notify, allowed):
             await notify(p["symbol"], p["net"], label + " • " + ("LONG" if p["cex_side"] == "buy" else "SHORT") + " • " + p["exit_reason"])
 
         engine.on_closed = closed
+        if notify_open:
+            async def opened(p, label=LABELS[name]):
+                await notify_open(p, label)
+            engine.on_opened = opened
         service = Cycle(engine, routes)
         service.interval = 5
         bundle.runtime.add(name, service)
@@ -75,23 +83,87 @@ def daily_open_allowed(engine):
 
 
 def render(engines, enabled):
-    out = ["<b>Сравнение CEX↔DEX · виртуальные деньги</b>",
-           "У каждого режима свой старт $50 и целевая сделка $20. Цены и расходы берутся из свежих котировок; reference без хеджа."]
+    out = ["📊 <b>ДВА PAPER-РЕЖИМА</b>",
+           "У каждого свой виртуальный капитал и размер сделки с ограничением по ликвидности. Балансы и результаты независимы."]
     for name, e in engines.items():
         s = e.state
         count = s.get("closed_count", 0)
         floating = sum(p.get("net", 0) for p in e.positions.values())
-        out.append(f"<b>{LABELS[name]}</b> · {'🟢 входы включены' if enabled.get(name) else '⚫ входы выключены'}\n"
-                   f"Баланс после закрытий: ${e.budget():.4f} · свободно: ${max(0, e.budget()-e.used_capital):.2f}\n"
-                   f"Закрытый NET: {s.get('realized_net',0):+.4f} USD · текущий NET позиций: {floating:+.4f} USD\n"
-                   f"Сделок: {count} · прибыльных: {s.get('wins',0)} · позиций: {len(e.positions)}\n"
-                   f"Просадка по закрытым сделкам: ${s.get('closed_drawdown',0):.4f}\n"
-                   f"Маршрутов: {len(e.source.routes)} · проверок: {s.get('checked_count',0)}\n"
-                   f"Последняя проверка: {escape(s.get('last_decision','ещё не было'))}")
+        out.append(f"{'📨' if name == 'dex_channel' else '🔎'} <b>{LABELS[name]}</b>\n"
+                   f"{'🟢 Новые входы включены' if enabled.get(name) else '⚪ Новые входы выключены'}\n"
+                   f"Капитал ${e.capital:.0f} · сделка до ${s['experiment_config']['notional']:.0f}\n"
+                   f"Баланс ${e.budget():.2f} · доступно ${max(0,e.budget()-e.used_capital):.2f}\n"
+                   f"Результат закрытых: <b>{s.get('realized_net',0):+.4f} USD</b>\n"
+                   f"Открыто {len(e.positions)} · текущий NET {floating:+.4f} USD\n"
+                   f"Закрыто {count} · прибыльных {s.get('wins',0)} · проверок {s.get('checked_count',0)}\n"
+                   f"Рынков {len(e.source.routes)} · {escape(reason_text(s.get('last_decision','')))}")
         if not daily_open_allowed(e):
             out.append("Новые входы остановлены: дневной лимит потерь 5% собственного стартового капитала или недостаточный баланс.")
         if name == "dex_channel":
             reader = getattr(e, "channel_reader", None)
             out.append("Чтение канала: " + escape(reader.status if reader else "публичное чтение не включено; доступны пересылки"))
-    out.append("Выключение запрещает новые входы, открытые позиции продолжают сопровождаться. Старый общий Paper сохраняется отдельно. Разные токены и площадки влияют на сравнение.")
+            if reader:
+                m = reader.metrics
+                out.append(f"Постов-сигналов прочитано: {m['received']} · принято: {m['accepted']}\nПоследний: {escape(m['last'][:180])}")
+    out.append("Выбери режим ниже для сделок, причин пропусков и списка рынков. Кошелёк и реальные ордера не используются. Отключение входов сохраняет сопровождение открытых позиций.")
+    return "\n\n".join(out)
+
+
+REASONS = {
+    "DEX_CHANNEL_SIGNAL_REQUIRED": "Ждём свежий подходящий сигнал канала",
+    "DEX_CHANNEL_SIGNAL_ALREADY_USED": "Этот сигнал уже использован",
+    "DEX_REFERENCE_REWARD_TOO_SMALL": "После расходов недостаточно потенциальной прибыли",
+    "DEX_MODEL_EDGE_LOW": "Недостаточный NET после расходов",
+    "DEX_VIRTUAL_AMOUNT_BELOW_NATIVE_STEP": "Сумма после округления меньше минимального шага биржи",
+    "DEX_REFERENCE_BOOK_TOO_WIDE": "Слишком широкий разрыв покупки и продажи в стакане",
+    "DEX_REFERENCE_ROUNDTRIP_TOO_COSTLY": "Обратный выход слишком дорогой",
+    "DEX_REFERENCE_CONFIRMATION_REQUIRED": "Проверяем подтверждение второй котировкой",
+    "DEX_SIGNAL_DIRECTION_CHANGED": "Рынок больше не подтверждает направление сигнала",
+    "DEX_SIGNAL_LOSS_COOLDOWN": "Пауза по токену после убытка",
+    "DEX_PAPER_OPEN": "Виртуальная позиция открыта",
+    "RECOVERY_BOOK_STALE": "Стакан устарел — вход пропущен",
+    "JUPITER_PRICE_IMPACT_LIMIT": "Размер слишком сильно влияет на цену DEX",
+    "RISK_OR_VENUE_DISABLED": "Вход отключён или достигнут лимит риска",
+    "SHARED_CAPITAL_LOW": "Недостаточно свободного виртуального баланса",
+}
+
+
+def reason_text(reason):
+    return REASONS.get(reason, "Ещё нет проверок" if not reason else "Вход пропущен: " + reason)
+
+
+def render_mode(name, engine, enabled):
+    s = engine.state
+    out = [f"{'📨' if name == 'dex_channel' else '🔎'} <b>{LABELS[name]}</b>",
+           f"{'🟢 Входы включены' if enabled else '⚪ Входы выключены'} · только виртуальные деньги",
+           f"Выделенный капитал: ${engine.capital:.0f}\nЦелевая сделка: ${s['experiment_config']['notional']:.0f}\nБаланс после закрытий: ${engine.budget():.4f}\nВременный резерв проверки / позиции: ${engine.used_capital:.2f}",
+           f"<b>Результаты</b>\nЗакрытый NET: {s.get('realized_net',0):+.4f} USD\nЗакрыто: {s.get('closed_count',0)} · прибыльных: {s.get('wins',0)}\nПросадка по закрытым: ${s.get('closed_drawdown',0):.4f}"]
+    if s.get("capital_changes"):
+        out.append("Виртуальный капитал увеличен с $50 до $250. Добавленные $200 не считаются прибылью; прежний NET сохранён.")
+    if engine.positions:
+        out.append("<b>Открытые позиции</b>")
+        for p in engine.positions.values():
+            out.append(f"{escape(p['symbol'])} · {'LONG' if p['cex_side']=='buy' else 'SHORT'}\nРазмер: ${p['base_qty']*p['entry_price']:.2f} · NET сейчас: {p['net']:+.4f} USD\nВозраст: {max(0,engine.clock()-p['opened_at']):.0f} с · {escape(p.get('data_reason','OK'))}")
+    else:
+        out.append("<b>Открытых позиций нет</b>")
+    out.append("<b>Последняя проверка</b>\n" + escape(reason_text(s.get("last_decision", ""))))
+    route = s.get("last_route")
+    if route:
+        out.append(f"{escape(route['symbol'])} · {max(0,engine.clock()-route['ts']):.0f} с назад")
+    d = s.get("last_failure_detail", {})
+    if "entry_edge" in d:
+        out.append(f"Потенциальный NET: {d['entry_edge']:+.4f} USD\nNET немедленного обратного выхода: {d['immediate_net']:+.4f} USD")
+    if d.get("amount_step") is not None:
+        out.append(f"Шаг биржи: {d['amount_step']:.8g} контрактов · запрошено {d['requested_contracts']:.8g}")
+    reader = getattr(engine, "channel_reader", None)
+    if reader:
+        out.append("<b>Сигналы канала</b>\n" + escape(reader.status) + f"\nПрочитано {reader.metrics['received']} · принято {reader.metrics['accepted']}\n" + escape(reader.metrics['last'][:250]))
+    reasons = sorted(s.get("decision_counts",{}).items(), key=lambda x:-x[1])[:4]
+    if reasons:
+        out.append("<b>Основные причины</b>\n" + "\n".join(f"{escape(reason_text(r))}: {n}" for r,n in reasons))
+    out.append("<b>Рынки</b>\n" + escape(", ".join(r['base'] for r in engine.source.routes)))
+    out.append(f"Сделка до ${s['experiment_config']['notional']:.0f}: фактический размер зависит от шага биржи, стакана и Max Size сигнала. Ожидаемый NET — прогноз после расходов, а не заработанная прибыль.")
+    discovery = getattr(engine, "discovery", None)
+    if discovery:
+        out.append("Подбор маршрутов: " + escape(discovery.status))
     return "\n\n".join(out)

@@ -43,11 +43,11 @@ def test_public_signal_freshness_scope_dedup_and_isolation(tmp_path):
     asyncio.run(go())
 
 
-def test_unavailable_public_preview_never_creates_a_signal():
+def test_unavailable_public_preview_never_creates_a_signal(tmp_path):
     from types import SimpleNamespace
     async def go():
         async def fetch():return "<html><h1>Site Unavailable</h1></html>"
-        reader = Reader(SimpleNamespace(), lambda: True, fetch)
+        reader = Reader(SimpleNamespace(path=str(tmp_path/"empty.db"),sql=lambda s:s), lambda: True, fetch)
         await reader.start()
         for _ in range(5):
             await asyncio.sleep(0)

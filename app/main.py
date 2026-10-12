@@ -526,6 +526,9 @@ async def accept_dex_signal(m: Message):
     if origin is None or getattr(origin, "type", None) != "channel" or (getattr(origin.chat, "username", "") or "").lower() != "mexcdexspreadtracker":
         return await m.answer("Перешли исходный свежий пост из @MexcDexSpreadTracker через кнопку пересылки Telegram. Скриншоты и скопированный текст не принимаются.")
     try:
+        resolver = getattr(engine.source, "resolve_signal", None)
+        if resolver:
+            await resolver(m.text, origin.date.timestamp())
         signal = signals.add(m.text, engine.source.routes, origin.date.timestamp(), "MexcDexSpreadTracker")
     except ValueError as exc:
         return await m.answer(str(exc))
@@ -880,6 +883,16 @@ def keyboard_for(screen):
             ]
         )
     if screen in ("dex", "dex_paper", "dex_wallet", "dex_stress"):
+        if screen in ("dex", "dex_paper") and secondary and secondary.dex_experiments:
+            return InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📨 Канал → MEXC", callback_data="dex_mode:dex_channel", style="primary"),
+                 InlineKeyboardButton(text="🔎 Bybit · автопоиск", callback_data="dex_mode:dex_bybit", style="primary")],
+                [InlineKeyboardButton(text="⚙️ Включить / выключить", callback_data="strategies")],
+                [InlineKeyboardButton(text="📒 Дневник / экспорт", callback_data="export")],
+                [InlineKeyboardButton(text="🧪 Replay и проверки", callback_data="dex_replay"), InlineKeyboardButton(text="⛓ Кошелёк", callback_data="dex_wallet")],
+                [InlineKeyboardButton(text="⏱ Задержки / fills", callback_data="dex_stress"), InlineKeyboardButton(text="🏁 Готовность", callback_data="readiness")],
+                [InlineKeyboardButton(text="↻ Обновить", callback_data="dex_paper"), InlineKeyboardButton(text="‹ Главное меню", callback_data="home")],
+            ])
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -922,6 +935,24 @@ def keyboard_for(screen):
     if screen in ("live_positions", "incidents", "live_checks"):
         return back_menu(screen, "live")
     return back_menu(screen)
+
+
+@dp.callback_query(F.data.startswith("dex_mode:"))
+async def dex_mode_page(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer("Нет доступа")
+    name = q.data.split(":",1)[1]
+    engines = getattr(secondary, "dex_experiments", {})
+    if name not in engines:
+        return await q.answer("Режим ещё не готов")
+    from .dex_paper_experiments import render_mode
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚙️ Входы: включить / выключить",callback_data="strategy:"+name)],
+        [InlineKeyboardButton(text="📒 Экспорт дневника",callback_data="export")],
+        [InlineKeyboardButton(text="↻ Обновить",callback_data=q.data), InlineKeyboardButton(text="‹ Сравнение режимов",callback_data="dex_paper")],
+    ])
+    await safe_edit(q.message, render_mode(name, engines[name], strategy_runtime.enabled.get(name,False)), keyboard)
+    await q.answer()
 
 
 @dp.callback_query(F.data.startswith("opp:"))
@@ -997,6 +1028,19 @@ async def notify_paper_close(symbol, net, reason):
         )
     except Exception:
         log.exception("Paper notification failed")
+
+
+async def notify_dex_open(position, label):
+    if notification_bot is None:
+        return
+    p = position
+    try:
+        await notification_bot.send_message(config.admin_id,
+            f"🟢 PAPER · позиция открыта\n{label}\n{p['symbol']} · {'LONG' if p['cex_side']=='buy' else 'SHORT'}\n"
+            f"Размер: ${p['base_qty']*p['entry_price']:.2f}\nЦена модели: {p['entry_price']:.8g}\n"
+            f"Потенциал NET при схождении: {p['entry_edge']:+.4f} USD\nЭто виртуальная сделка; потенциальный NET ещё не заработан.")
+    except Exception:
+        log.exception("Paper open notification failed")
 
 
 def paper_entry_reason(op):
@@ -1737,7 +1781,14 @@ async def main():
                 secondary, strategy_runtime, config.db_path, config.runtime_state_path,
                 notify_paper_close,
                 lambda p: not scanner.paused and all(venue_controller.get(p["cex_venue"])[k] for k in ("paper", "scan")),
+                notify_open=notify_dex_open,
             )
+            from .dex_route_discovery import Discovery
+            secondary.route_discovery = Discovery(secondary.dex_experiments, config.runtime_state_path + ".dex_routes.json")
+            for engine in secondary.dex_experiments.values():
+                engine.discovery = secondary.route_discovery
+            secondary.dex_experiments["dex_channel"].source.resolve_signal = secondary.route_discovery.signal
+            await secondary.route_discovery.start()
             if focus_enabled("DEX_CHANNEL_PUBLIC_READER_ENABLED"):
                 from .dex_public_channel_reader import Reader as PublicChannelReader
                 secondary.public_channel_reader = PublicChannelReader(

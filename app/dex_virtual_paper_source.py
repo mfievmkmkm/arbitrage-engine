@@ -26,7 +26,7 @@ def token_key(r, token):
     return token if r["chain_id"] == "solana" else token.lower()
 
 
-def routes_checked(routes):
+def routes_checked(routes, max_notional=30):
     if not isinstance(routes, list) or not routes or len(routes) > 32:
         raise ValueError("DEX_VIRTUAL_ROUTES_REQUIRED")
     identities = set()
@@ -51,10 +51,10 @@ def routes_checked(routes):
         if r.get("mode", "paired") not in ("paired", "reference"):
             raise ValueError("DEX_VIRTUAL_MODE_INVALID")
         amount = number(r.get("notional_usd", 5), "DEX_VIRTUAL_NOTIONAL")
-        if amount > 30:
+        if amount > max_notional:
             raise ValueError("DEX_VIRTUAL_MICRO_LIMIT")
         cap = number(r.get("max_notional_usd", min(30, float(amount) * (1.1 if r.get("mode", "paired") == "paired" else 1))), "DEX_VIRTUAL_CEX_CAP")
-        if cap > 30:
+        if cap > max_notional:
             raise ValueError("DEX_VIRTUAL_MICRO_LIMIT")
         number(r.get("slippage_bps", 20), "DEX_VIRTUAL_SLIPPAGE", False)
         if float(r.get("slippage_bps", 20)) > 100:
@@ -76,8 +76,10 @@ def route_key(r):
 
 
 class Source(HistorySource):
-    def __init__(self, provider, routes, public, funding_service, private=None, clock=time.time):
-        self.provider, self.routes = provider, routes_checked(routes)
+    def __init__(self, provider, routes, public, funding_service, private=None, clock=time.time, max_notional=30):
+        if not math.isfinite(max_notional) or not 0 < max_notional <= 300:
+            raise ValueError("DEX_VIRTUAL_NOTIONAL_LIMIT_INVALID")
+        self.provider, self.routes = provider, routes_checked(routes, max_notional)
         self.public, self.private = public, private or {}
         self.fs, self.clock = funding_service, clock
         self.cycle = SimpleNamespace(public=public)
@@ -196,6 +198,9 @@ class Source(HistorySource):
             if m["base"] != r["base"]:
                 raise ValueError("DEX_VIRTUAL_CEX_BASE_MISMATCH")
             cash = float(number(r.get("notional_usd", 5), "DEX_VIRTUAL_NOTIONAL"))
+            if signal and signal.get("max_notional_usd"):
+                cash = min(cash, signal["max_notional_usd"])
+                r = dict(r, notional_usd=cash, max_notional_usd=min(self.cex_cap(r), cash))
             amount = int(Decimal(str(cash)) * 10 ** r["stable_decimals"])
             q = await self.price(r, False, amount)
             raw_qty = int(q["virtual_min_buy_raw"])

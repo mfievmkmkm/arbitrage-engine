@@ -10,6 +10,7 @@ from .export_service import write_csv
 from .secret_redaction import redact
 
 TABLES = {
+    "Channel reader state": "dex_channel_reader_state",
     "DEX channel trades": "cex_dex_virtual_paper_channel",
     "DEX channel marks": "cex_dex_virtual_paper_channel_marks",
     "DEX channel decisions": "cex_dex_virtual_paper_channel_decisions",

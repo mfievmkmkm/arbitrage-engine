@@ -98,6 +98,7 @@ class Engine:
         self.external_reserved = lambda: 0
         self.allow_open = lambda p: True
         self.on_closed = None
+        self.on_opened = None
         if type(virtual) is not bool:
             raise ValueError("DEX_PAPER_MODE_INVALID")
         self.virtual = virtual
@@ -141,7 +142,7 @@ class Engine:
 
     async def _cycle(self, route, entry_enabled):
         state = copy.deepcopy(self.state)
-        saved, marks, events, closed, decisions = [], [], [], [], []
+        saved, marks, events, closed, decisions, opened = [], [], [], [], [], []
         for key, p in list(state["positions"].items()):
             pending = p["status"] == "EXIT_ACCOUNTING_PENDING"
             until = p["exit_at"] if pending else self.clock()
@@ -257,6 +258,7 @@ class Engine:
                             key = json.dumps(p["virtual_route_key"], separators=(",", ":"))
                             state.setdefault("consumed_signals", {})[key] = p["channel_signal"]["timestamp"]
                         saved.append(p)
+                        opened.append(copy.deepcopy(p))
                         reason = "DEX_PAPER_OPEN"
             # Never persist the route: it contains the wallet address.
             decisions.append(
@@ -340,6 +342,9 @@ class Engine:
         if self.on_closed:
             for p in closed:
                 await self.on_closed(p)
+        if self.on_opened:
+            for p in opened:
+                await self.on_opened(p)
         return closed
 
 
@@ -357,6 +362,12 @@ class Cycle:
             active = [r for r in allowed_routes if signals.get(r)[0] is not None]
             if active:
                 route = active[self.index % len(active)]
+        elif getattr(self.paper.source, "focus", False):
+            from .dex_virtual_paper_source import route_key
+            confirmations = getattr(self.paper.source, "confirmations", {})
+            pending = [r for r in allowed_routes if route_key(r) in confirmations and 2 <= self.paper.clock() - confirmations[route_key(r)][0] <= 60]
+            if pending:
+                route = pending[0]
         self.index += 1
         await self.paper.cycle(route, self.entry_enabled)
         rows = [
