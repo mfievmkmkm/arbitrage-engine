@@ -2,6 +2,8 @@
 
 Код для Docker Compose подготовлен; сервер в этой инструкции ещё не запущен.
 Нужен Linux VPS с SSH, установленными Git, Docker Engine и Compose plugin.
+Если старую историю переносить не нужно, используйте раздел «Новый эксперимент
+с телефона» ниже: он явно создаёт отдельную базу, не отключая проверку её наличия.
 Домен и входящие HTTP-порты не нужны: бот использует Telegram polling.
 Сервер должен иметь исходящий доступ к выбранным биржам, 0x и Jupiter.
 
@@ -97,3 +99,51 @@ docker compose -f compose.paper.yaml run --rm --no-deps bot python -m app.databa
 остановить бот, сделать backup, обновить согласованную ревизию, затем
 `docker compose -f compose.paper.yaml up -d --build`. Данные не удалять.
 После изменения `bot.env` нужен `docker compose -f compose.paper.yaml restart bot`.
+
+## Новый эксперимент с телефона, без старой базы
+
+Старый бот на Windows должен быть остановлен. Создать VPS Ubuntu 24.04,
+подключиться по SSH с телефона и установить Git/Docker/Compose по документации
+провайдера. После клонирования проекта:
+
+```bash
+cd ~/arbitrage-engine
+mkdir -p server-transfer/data
+cp -n paper-server.env.example server-transfer/bot.env
+chmod 700 server-transfer server-transfer/data
+chmod 600 server-transfer/bot.env
+nano server-transfer/bot.env
+```
+
+Обязательно заполнить BOT_TOKEN и ADMIN_ID (числовой Telegram ID). Для Ethereum
+котировок нужен ZEROX_API_KEY, для Solana — JUPITER_API_KEY. BYBIT_API_KEY и
+BYBIT_API_SECRET необязательны для виртуального режима; если ключи недоступны,
+комиссии будут публичным допущением. Токен Telegram можно при необходимости
+перевыпустить через BotFather: прежний токен тогда перестанет работать.
+Не указывать seed/private key кошелька и не включать LIVE.
+
+```bash
+docker compose -f compose.paper.yaml build
+docker compose -f compose.paper.yaml run --rm --no-deps bot python -m app.init_paper_server --fresh --bot-stopped
+```
+
+Инициализация разрешена только с двумя явными подтверждениями, проверяет настройки
+и требует пустую папку данных. Повторный запуск не перезапишет базу. Создаётся
+отдельный эксперимент с начальным капиталом PAPER_CAPITAL_USD; старые позиции,
+резервы и результаты не переносятся. Обычный server entrypoint по-прежнему
+отказывается запускаться без базы.
+
+Если добавлен Jupiter ключ, расширить список монет **до запуска бота**:
+
+```bash
+docker compose -f compose.paper.yaml run --rm --no-deps -v "$PWD/server-transfer:/setup" bot python -m app.build_virtual_watchlist --env /setup/bot.env --preset channel --venues bybit,mexc --output /setup/virtual_watchlist_report.json --apply
+docker compose -f compose.paper.yaml up -d
+docker compose -f compose.paper.yaml logs --tail 80 bot
+```
+
+Дополнительный `/setup` — временная writable-копия того же bind mount для
+помощника настройки; во время штатной работы `bot.env` смонтирован read-only.
+Если Jupiter ключа ещё нет, пропустить команду сборки watchlist и запустить
+только настроенный Ethereum маршрут после добавления 0x ключа.
+Срок начала проверок/входов зависит от доступности API с сервера и NET, а не
+от успешности Docker build. В Telegram проверить DEX → Paper → Обновить.
