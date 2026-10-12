@@ -90,5 +90,8 @@ def render(engines, enabled):
                    f"Последняя проверка: {escape(s.get('last_decision','ещё не было'))}")
         if not daily_open_allowed(e):
             out.append("Новые входы остановлены: дневной лимит потерь 5% собственного стартового капитала или недостаточный баланс.")
+        if name == "dex_channel":
+            reader = getattr(e, "channel_reader", None)
+            out.append("Чтение канала: " + escape(reader.status if reader else "публичное чтение не включено; доступны пересылки"))
     out.append("Выключение запрещает новые входы, открытые позиции продолжают сопровождаться. Старый общий Paper сохраняется отдельно. Разные токены и площадки влияют на сравнение.")
     return "\n\n".join(out)

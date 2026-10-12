@@ -42,11 +42,14 @@ class Bundle:
         self.funding_paper = None
         self.dex_paper = None
         self.dex_experiments = {}
+        self.public_channel_reader = None
         self.wallet_session = None
         self.dex_live = None
         self.book_recorder = None
 
     async def close(self):
+        if self.public_channel_reader:
+            await self.public_channel_reader.stop()
         await self.runtime.stop()
         await close(self.clients)
         if self.book_recorder:

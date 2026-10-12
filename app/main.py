@@ -1735,6 +1735,14 @@ async def main():
                 notify_paper_close,
                 lambda p: not scanner.paused and all(venue_controller.get(p["cex_venue"])[k] for k in ("paper", "scan")),
             )
+            if focus_enabled("DEX_CHANNEL_PUBLIC_READER_ENABLED"):
+                from .dex_public_channel_reader import Reader as PublicChannelReader
+                secondary.public_channel_reader = PublicChannelReader(
+                    secondary.dex_experiments["dex_channel"],
+                    lambda: strategy_runtime.enabled.get("dex_channel", False) and not scanner.paused,
+                )
+                secondary.dex_experiments["dex_channel"].channel_reader = secondary.public_channel_reader
+                await secondary.public_channel_reader.start()
         await secondary.runtime.start()
         bot = Bot(token=config.token)
         notification_bot = bot
