@@ -1,10 +1,29 @@
 import asyncio
 import pytest
 from app.dex_signal_focus import Signals, quality, focus_toggles
+from app.dex_signal_focus import entry_venue_allowed
 
 MINT = "MukLDtJ8Cx9DxLbeyLRSWPSposTMWuwHANbuaudpump"
 TEXT = f"🔴 SHORT? #OTC [DEX_DRIVEN] Spread -6.97% detected\n#SOLANA Dep 🟢\n{MINT}"
 ROUTE = dict(chain_id="solana", asset=MINT, base="OTC", cex_venue="mexc", mode="reference")
+
+
+def test_venue_filter_blocks_before_io_and_keeps_exit_available(monkeypatch):
+    from test_dex_virtual_paper import source
+    monkeypatch.setenv("DEX_VIRTUAL_ENTRY_VENUES", "mexc")
+    assert entry_venue_allowed("mexc") and not entry_venue_allowed("bybit")
+    async def go():
+        s, r, public, provider, now = source("reference")
+        assert (await s.entry(r))["reason"] == "DEX_VIRTUAL_ENTRY_VENUE_DISABLED"
+        assert not provider.calls
+        monkeypatch.setenv("DEX_VIRTUAL_ENTRY_VENUES", "bybit")
+        position = (await s.entry(r))["position"]
+        monkeypatch.setenv("DEX_VIRTUAL_ENTRY_VENUES", "mexc")
+        assert (await s.exit(position))["ok"]
+    asyncio.run(go())
+    monkeypatch.setenv("DEX_VIRTUAL_ENTRY_VENUES", "unknown")
+    with pytest.raises(ValueError):
+        entry_venue_allowed("bybit")
 
 
 def test_signal_scope_age_dedup_and_restart_cooldown(tmp_path):

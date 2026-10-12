@@ -19,7 +19,7 @@ from .recovery_market import Reader
 from .spot_future_native_plan import rate
 from .zerox_research import ADDRESS
 from .jupiter_research import mint_valid
-from .dex_signal_focus import enabled, quality
+from .dex_signal_focus import enabled, quality, entry_venue_allowed
 
 
 def token_key(r, token):
@@ -161,6 +161,8 @@ class Source(HistorySource):
     async def entry(self, r):
         diagnostics = {}
         try:
+            if not entry_venue_allowed(r["cex_venue"]):
+                raise ValueError("DEX_VIRTUAL_ENTRY_VENUE_DISABLED")
             signal = None
             if enabled("DEX_REFERENCE_FOCUS"):
                 if r.get("mode") != "reference":

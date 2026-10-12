@@ -329,10 +329,12 @@ class Cycle:
 
     async def cycle(self):
         route = self.routes[self.index % len(self.routes)] if self.routes else None
-        from .dex_signal_focus import enabled
+        from .dex_signal_focus import enabled, entry_venue_allowed
+        allowed_routes = [r for r in self.routes if entry_venue_allowed(r["cex_venue"])]
+        route = allowed_routes[self.index % len(allowed_routes)] if allowed_routes else None
         signals = getattr(self.paper.source, "signals", None)
         if enabled("DEX_CHANNEL_SIGNALS_ONLY") and signals:
-            active = [r for r in self.routes if signals.get(r)[0] is not None]
+            active = [r for r in allowed_routes if signals.get(r)[0] is not None]
             if active:
                 route = active[self.index % len(active)]
         self.index += 1

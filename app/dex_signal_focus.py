@@ -14,6 +14,16 @@ def focus_toggles(values):
     return {k: k == "cex_dex" for k in values}
 
 
+def entry_venue_allowed(venue):
+    configured = os.getenv("DEX_VIRTUAL_ENTRY_VENUES", "").strip()
+    if not configured:
+        return True
+    venues = {v.strip().lower() for v in configured.split(",") if v.strip()}
+    if not venues or not venues <= {"bybit", "mexc", "binance", "okx", "bitget", "gate", "gateio"}:
+        raise ValueError("DEX_VIRTUAL_ENTRY_VENUES_INVALID")
+    return venue.lower() in venues
+
+
 def parse_signal(text):
     direction = re.search(r"\b(LONG|SHORT)\?\s*#([A-Za-z0-9_]+)", text)
     chain = re.search(r"#(SOLANA|ETHEREUM|BASE)\b", text, re.I)

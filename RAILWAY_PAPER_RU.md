@@ -73,6 +73,20 @@ Solana отклонены, журнал сообщает причины и пр�
 Документация: https://docs.railway.com/volumes и https://docs.railway.com/pricing/free-trial
 ## Отдельный эксперимент по сигналам канала
 
+Для параллельного сравнения нужны два Railway-сервиса с отдельными BOT_TOKEN
+и отдельными Volume /data. Один токен нельзя запускать в двух polling-процессах.
+У каждого сервиса независимый виртуальный капитал и история; капитал экспериментов
+нельзя складывать и считать одним общим портфелем. API-ключи можно задать каждому
+сервису локально в Variables, секреты не включать в репозиторий.
+
+Канал: DEX_REFERENCE_FOCUS=true, DEX_CHANNEL_SIGNALS_ONLY=true,
+DEX_VIRTUAL_ENTRY_VENUES=mexc. Самостоятельный поиск Bybit:
+DEX_REFERENCE_FOCUS=true, DEX_CHANNEL_SIGNALS_ONLY=false,
+DEX_VIRTUAL_ENTRY_VENUES=bybit. Фильтр площадок ограничивает только новые входы,
+не препятствует выходам уже сохранённых позиций. Он не создаёт новые маршруты.
+На новом отдельном Volume требуется однократно PAPER_SERVER_FRESH_START=true;
+после инициализации установить false. Существующую базу не сбрасывать.
+
 В Variables задать `DEX_REFERENCE_FOCUS=true` и `DEX_CHANNEL_SIGNALS_ONLY=true`,
 затем Deploy. Требуются `DEX_VIRTUAL_PAPER_ENABLED=true` и все LIVE-флаги false.
 Новые входы остальных стратегий отключаются; существующие позиции продолжают

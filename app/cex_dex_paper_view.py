@@ -1,5 +1,6 @@
 from html import escape
 from .dex_signal_focus import enabled
+import os
 
 
 def render(engine):
@@ -23,6 +24,8 @@ def render(engine):
         out.append(f"Закрыто виртуальных: {engine.state.get('closed_count', 0)} · итоговый NET: {engine.state.get('realized_net', 0):+.4f} USD")
         out.append("Эта история выгружается отдельно и не подтверждает готовность LIVE. Парный режим: виртуальная покупка DEX + шорт CEX. Reference: направленный LONG/SHORT CEX по ориентиру DEX, без хеджа.")
         routes = getattr(getattr(engine, "source", None), "routes", [])
+        if os.getenv("DEX_VIRTUAL_ENTRY_VENUES", "").strip():
+            out.append("Площадки новых входов: " + escape(os.environ["DEX_VIRTUAL_ENTRY_VENUES"]))
         out.append(f"Маршрутов: {len(routes)} · проверок входа: {engine.state.get('checked_count', 0)}")
         last = engine.state.get("last_route", {})
         if last:
