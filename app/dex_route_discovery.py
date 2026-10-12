@@ -3,9 +3,10 @@ import asyncio
 import json
 from pathlib import Path
 from .build_virtual_watchlist import USDC, SEEDS, eligible_markets
-from .dex_virtual_paper_source import routes_checked, route_key
+from .dex_virtual_paper_source import routes_checked, route_key, token_key
 from .dex_signal_focus import parse_signal
 from .jupiter_research import mint_valid
+from .dex_network_registry import stable_config
 
 BYBIT_BASES = ("JTO", "RAY", "ORCA", "WIF", "BONK", "PYTH", "FARTCOIN", "POPCAT", "TRUMP", "PENGU")
 
@@ -21,7 +22,7 @@ class Discovery:
             return
         if len(engine.source.routes) >= 24:
             raise ValueError("WATCHLIST_ROUTE_LIMIT_24")
-        if any(r["base"] == route["base"] and r["asset"] != route["asset"] for r in engine.source.routes):
+        if any(r["chain_id"] == route["chain_id"] and r["base"] == route["base"] and token_key(r,r["asset"]) != token_key(route,route["asset"]) for r in engine.source.routes):
             raise ValueError("WATCHLIST_SYMBOL_IDENTITY_CONFLICT")
         routes_checked([route], 300)
         engine.source.routes.append(route)
@@ -55,9 +56,11 @@ class Discovery:
         if not 0 <= engine.clock() - timestamp <= 90:
             raise ValueError("Сигнал старше 90 секунд")
         if s["chain_id"] != "solana":
-            # EVM admission still requires a configured decimal/token registry.
-            if not any(r["chain_id"] == s["chain_id"] and r["asset"].lower() == s["asset"].lower() for r in engine.source.routes):
-                raise ValueError("Для нового EVM-токена пока нужен проверенный реестр; автоподбор сейчас Solana")
+            await self.ensure_evm("mexc", s)
+            try:
+                await self.ensure_evm("bybit", s)
+            except ValueError:
+                pass
             return
         await self.ensure("mexc", s["base"], s["asset"])
         # Explicit identity may also extend the independent Bybit scan, if listed.
@@ -65,6 +68,33 @@ class Discovery:
             await self.ensure("bybit", s["base"], s["asset"])
         except ValueError:
             pass
+
+    async def ensure_evm(self, venue, signal):
+        async with self.lock:
+            engine = self.engines["dex_channel" if venue == "mexc" else "dex_bybit"]
+            chain, asset, base = signal["chain_id"], signal["asset"], signal["base"]
+            if any(r["chain_id"]==chain and r["asset"].lower()==asset.lower() and r["base"]==base for r in engine.source.routes):
+                return
+            client = engine.source.public.get(venue)
+            symbols = eligible_markets(client, base) if client else []
+            if len(symbols)!=1:
+                raise ValueError("Нет однозначного активного USDT-фьючерса для этого токена")
+            network, stable_address = stable_config(chain)
+            provider = engine.source.provider.evm
+            if not provider.api_key:
+                raise ValueError("Для EVM-котировок нужен ZEROX_API_KEY")
+            token = await provider.token(network, asset)
+            stable = await provider.token(network, stable_address)
+            if token['symbol'].upper()!=base or stable['symbol'].upper() not in ('USDC','USDT'):
+                raise ValueError("Тикер по точному EVM-контракту не совпадает с рынком")
+            amount=engine.state['experiment_config']['notional']
+            route=dict(chain_id=chain,stable=stable_address,stable_symbol=stable['symbol'],
+                       asset=asset,stable_decimals=stable['decimals'],asset_decimals=token['decimals'],
+                       base=base,cex_venue=venue,cex_symbol=symbols[0],native_symbol='ETH/USDT:USDT',
+                       native_decimals=18,mode='reference',notional_usd=amount,max_notional_usd=amount,
+                       label=f'{base} · {venue} · {network}',identity_source='EXPLICIT_EVM_CONTRACT_PUBLIC_METADATA_PAPER_ONLY')
+            self.add(engine,route)
+            self.save()
 
     def save(self):
         content = {name: e.source.routes for name, e in self.engines.items()}

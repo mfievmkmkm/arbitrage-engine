@@ -24,6 +24,24 @@ class Provider:
         if self.owned and self.session:
             await self.session.close()
 
+    async def token(self, network, address):
+        if not ADDRESS.fullmatch(address):
+            raise ValueError("TOKEN_ADDRESSES_INVALID")
+        await self.start()
+        async with self.session.get(f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{address}/info",
+                                    headers={"Accept":"application/json"}) as response:
+            if response.status != 200:
+                raise ValueError("Метаданные токена недоступны: Gecko HTTP " + str(response.status))
+            raw = await response.json()
+        data = raw.get("data", {})
+        attr = data.get("attributes", {})
+        if data.get("id", "").lower() != (network+"_"+address).lower() or attr.get("address", "").lower() != address.lower():
+            raise ValueError("EVM_TOKEN_METADATA_SCOPE_MISMATCH")
+        decimals = attr.get("decimals")
+        if type(decimals) is not int or not 0 <= decimals <= 36 or not isinstance(attr.get("symbol"), str):
+            raise ValueError("EVM_TOKEN_METADATA_INVALID")
+        return dict(symbol=attr["symbol"], decimals=decimals)
+
     async def price(self, chain_id, sell_token, buy_token, sell_amount, slippage_bps=None):
         if not self.api_key:
             return {"ok": False, "reason": "DEX_API_KEY_MISSING"}

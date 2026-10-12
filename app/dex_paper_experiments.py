@@ -156,6 +156,8 @@ def render_mode(name, engine, enabled):
     d = s.get("last_failure_detail", {})
     if "entry_edge" in d:
         out.append(f"Потенциальный NET: {d['entry_edge']:+.4f} USD\nNET немедленного обратного выхода: {d['immediate_net']:+.4f} USD")
+    if "entry_edge" in d and d["entry_edge"] <= 0:
+        out.append("Вход невыгоден уже по расчёту: схождение к ориентиру DEX не покрывает модельные расходы. Сумма больше не превращает отрицательный NET в положительный.")
     if d.get("size_attempts"):
         out.append("<b>Подбор суммы</b>\n" + "\n".join(f"${a['notional_usd']:.2f} · {escape(reason_text(a['reason']))}" for a in d["size_attempts"]))
     if d.get("amount_step") is not None:
