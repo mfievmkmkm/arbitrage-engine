@@ -814,16 +814,26 @@ async def funding_close_action(q: CallbackQuery):
     )
 
 
+export_lock = asyncio.Lock()
+
+
 async def send_export(message):
-    with tempfile.TemporaryDirectory(prefix="arbitrage-export-") as directory:
-        workbook, archive = await build_audit_export(config.db_path, directory)
-        await message.answer_document(
-            FSInputFile(workbook),
-            caption="Дневник: наблюдения, решения, позиции, исполнения и состояние восстановления. До 50 000 строк на таблицу.",
-        )
-        await message.answer_document(
-            FSInputFile(archive), caption="Те же данные в CSV."
-        )
+    if export_lock.locked():
+        await message.answer("Выгрузка уже готовится. Повторно нажимать не нужно.")
+        return
+    async with export_lock:
+        await message.answer("Готовлю облегчённый дневник: сделки, состояния и последние проверки. Без тяжёлого Excel.")
+        try:
+            from .compact_audit_export import build
+            with tempfile.TemporaryDirectory(prefix="arbitrage-export-") as directory:
+                archive = await build(config.db_path, directory)
+                await message.answer_document(
+                    FSInputFile(archive),
+                    caption="Дневник CSV/ZIP: сделки всех режимов; состояния и последние проверки DEX. До 5000 последних строк на таблицу. Покрытие и ограничения — в manifest.json. База не изменена.",
+                )
+        except Exception as exc:
+            log.exception("Compact audit export failed (%s)", type(exc).__name__)
+            await message.answer("Не удалось выгрузить дневник: " + type(exc).__name__ + ". История сохранена. Пришли логи Railway с Compact audit export failed; не запускай экспорт много раз подряд.")
 
 
 def keyboard_for(screen):
