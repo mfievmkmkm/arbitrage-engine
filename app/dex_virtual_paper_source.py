@@ -93,6 +93,10 @@ class Source(HistorySource):
         self.consumed_signal = lambda r: 0
         self.adaptive = False
         self.adaptive_sizes = {}
+        self.policy_version = 1
+        self.identity_gate = None
+        self.fast_exit = False
+        self.exit_reader = Reader(public, timeout=1.4, clock=clock, max_slippage=.20)
 
     def venue_allowed(self, venue):
         return venue in self.entry_venues if self.entry_venues is not None else entry_venue_allowed(venue)
@@ -189,6 +193,11 @@ class Source(HistorySource):
             self.confirmations.pop(key, None)
         elif result.get("reason") == "DEX_REFERENCE_CONFIRMATION_REQUIRED":
             self.adaptive_sizes[key] = (self.clock(), identity, cash)
+        elif self.policy_version == 2 and result.get("reason") in {"RECOVERY_BOOK_STALE", "DEX_VIRTUAL_ENTRY_UNAVAILABLE", "DEX_VIRTUAL_ENTRY_STALE"}:
+            self.adaptive_sizes[key] = (self.clock(), identity, cash)
+        elif self.policy_version == 2 and not result.get("ok"):
+            # Keep the reduced size until this signal expires; don't restart at the ceiling.
+            self.adaptive_sizes[key] = (self.clock(), identity, cash)
         else:
             self.adaptive_sizes.pop(key, None)
         result.setdefault("diagnostics", {}).update(size_attempts=attempts, target_notional_usd=ceiling)
@@ -227,6 +236,11 @@ class Source(HistorySource):
             m = market(c, r["cex_symbol"])
             if m["base"] != r["base"]:
                 raise ValueError("DEX_VIRTUAL_CEX_BASE_MISMATCH")
+            identity_evidence = None
+            if self.policy_version == 2:
+                if self.identity_gate is None:
+                    raise ValueError("DEX_CEX_IDENTITY_UNVERIFIED")
+                identity_evidence = await self.identity_gate.verify(r)
             cash = float(number(r.get("notional_usd", 5), "DEX_VIRTUAL_NOTIONAL"))
             if signal and signal.get("max_notional_usd"):
                 cash = min(cash, signal["max_notional_usd"])
@@ -319,9 +333,19 @@ class Source(HistorySource):
                     raise ValueError(failure)
                 previous = self.confirmations.get(key)
                 identity = (side, signal["timestamp"] if signal else None, cash)
-                self.confirmations[key] = (self.clock(), identity)
+                self.confirmations[key] = (self.clock(), identity, native.reference_price, p["entry_edge"])
                 if not previous or previous[1] != identity or not 2 <= self.clock() - previous[0] <= 60:
                     raise ValueError("DEX_REFERENCE_CONFIRMATION_REQUIRED")
+                if self.policy_version == 2:
+                    from .dex_reference_policy import entry_quality, risk_plan
+                    failure = entry_quality(notional, p['entry_edge'], immediate_net)
+                    if failure:
+                        raise ValueError(failure)
+                    favorable = (native.reference_price-previous[2]) * (1 if side=='buy' else -1)
+                    if favorable <= 0 or p['entry_edge'] > previous[3] * .98:
+                        raise ValueError("DEX_V2_CONVERGENCE_UNCONFIRMED")
+                    p['reference_policy'] = risk_plan(notional, p['entry_edge'])
+                    p['cex_identity'] = identity_evidence
                 if signal:
                     # Quote requests can outlive the signal TTL; validate again.
                     current, reason = self.signals.get(r)
@@ -338,15 +362,20 @@ class Source(HistorySource):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            diagnostics['error_type'] = type(exc).__name__
             return dict(ok=False, reason=str(exc) if isinstance(exc, ValueError) else "DEX_VIRTUAL_ENTRY_UNAVAILABLE", diagnostics=diagnostics)
 
     async def exit(self, p):
         try:
+            fast = self.fast_exit and 'id' in p and p.get('reference_policy',{}).get('version')==2
             r = self.route(p)
             if float(market(self.public[r["cex_venue"]], r["cex_symbol"])["contractSize"]) != p["contract_size"]:
                 raise ValueError("DEX_VIRTUAL_CONTRACT_CHANGED")
             # Refresh reverse executable-size indicative price even for reference mode.
-            if p["virtual_mode"] == "reference":
+            if p["virtual_mode"] == "reference" and fast:
+                # CEX-only positions: DEX API latency must not block risk pricing.
+                q = dict(ok=False, reason="DEX_REFERENCE_SKIPPED_FAST_RISK_EXIT", mode="DEX_VIRTUAL_INDICATIVE_MODEL")
+            elif p["virtual_mode"] == "reference":
                 try:
                     q = await self.price(r, True, p["asset_amount_raw"])
                 except Exception as exc:
@@ -356,12 +385,17 @@ class Source(HistorySource):
                              mode="DEX_VIRTUAL_INDICATIVE_MODEL", execution_verified=False)
             else:
                 q = await self.price(r, True, p["asset_amount_raw"])
-            fee, _ = await self.fee(r)
+            if fast and p['virtual_mode']=='reference':
+                fee = p['entry_fee_pct'] / 100
+            else:
+                fee, _ = await self.fee(r)
             gas, gas_price, gas_book = await self.gas(r, q)
-            native = await self.reader.quote(r["cex_venue"], SubmitRequest(r["cex_symbol"], "buy" if p["cex_side"] == "sell" else "sell", p["cex_contracts"], "market", reduce_only=True), p["contract_size"])
+            reader = self.exit_reader if fast and p['virtual_mode']=='reference' else self.reader
+            native = await reader.quote(r["cex_venue"], SubmitRequest(r["cex_symbol"], "buy" if p["cex_side"] == "sell" else "sell", p["cex_contracts"], "market", reduce_only=True), p["contract_size"])
             if q.get("ok") and not 0 <= self.clock() - q["ts"] <= 15:
                 raise ValueError("DEX_VIRTUAL_EXIT_STALE")
             return dict(ok=True, ts=self.clock(), dex=q, cex=native.market_evidence,
+                        fee_source='ENTRY_RATE_ASSUMPTION_FAST_EXIT' if fast and p['virtual_mode']=='reference' else 'REFRESHED_EXIT_RATE',
                         price=native.reference_price, fee_rate=fee, gas=gas,
                         gas_price=gas_price, gas_book=gas_book,
                         cash=float(Decimal(q["virtual_min_buy_raw"]) / Decimal(10 ** p["stable_decimals"])) if p["virtual_mode"] == "paired" else p["entry_cash"])
@@ -374,4 +408,5 @@ class Source(HistorySource):
         result = paired_mark(p, x, h)
         result.update(mode="DEX_VIRTUAL_INDICATIVE_MODEL", virtual_mode=p["virtual_mode"],
                       execution_verified=False, live_allowed=False, fee_source=p["fee_source"])
+        result['exit_fee_source'] = x.get('fee_source', 'LEGACY')
         return result

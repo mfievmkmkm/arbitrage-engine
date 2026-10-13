@@ -147,7 +147,14 @@ class Engine:
             pending = p["status"] == "EXIT_ACCOUNTING_PENDING"
             until = p["exit_at"] if pending else self.clock()
             # Historical IO precedes the fresh actionable exit quotes.
-            h = await self.source.settlements(p, until)
+            if getattr(self.source, 'policy_version', 1) == 2:
+                try:
+                    h = await asyncio.wait_for(self.source.settlements(p, until), 1)
+                except asyncio.TimeoutError:
+                    from .funding_paper_source import History
+                    h = History(False, 0, (), 'FUNDING_HISTORY_TIMEOUT', p['opened_at'])
+            else:
+                h = await self.source.settlements(p, until)
             x = p["exit_quote"] if pending else await self.source.exit(p)
             if not x.get("ok"):
                 p["data_reason"] = x.get("reason", "DEX_EXIT_UNAVAILABLE")
@@ -193,6 +200,9 @@ class Engine:
                     )
                 )
             )
+            if not pending and p.get('reference_policy', {}).get('version') == 2:
+                from .dex_reference_policy import exit_reason
+                reason = exit_reason(p, m, h.verified)
             if reason:
                 p.update(
                     status="EXIT_ACCOUNTING_PENDING",
@@ -210,6 +220,10 @@ class Engine:
             state["realized_net"] = state.get("realized_net", 0) + sum(p["net"] for p in closed)
             if self.namespace:
                 for p in closed:
+                    if getattr(self.source, 'policy_version', 1) == 2:
+                        from .dex_reference_policy import record_close, record_version_stats
+                        record_close(state, p)
+                        record_version_stats(state, p)
                     key = json.dumps(p["virtual_route_key"], separators=(",", ":"))
                     if p["net"] < 0:
                         state.setdefault("route_cooldowns", {})[key] = p["closed_at"] + 600
@@ -355,6 +369,15 @@ class Engine:
 class Cycle:
     def __init__(self, paper, routes):
         self.paper, self.routes, self.index, self.entry_enabled = paper, routes, 0, True
+        self.scan_interval = 5 if getattr(paper.source,'policy_version',1)==2 else 30
+
+    @property
+    def interval(self):
+        return 1 if self.paper.positions and getattr(self.paper.source,'policy_version',1)==2 else self.scan_interval
+
+    @interval.setter
+    def interval(self, value):
+        self.scan_interval = value
 
     async def cycle(self):
         route = self.routes[self.index % len(self.routes)] if self.routes else None
@@ -373,7 +396,7 @@ class Cycle:
             if pending:
                 route = pending[0]
         self.index += 1
-        await self.paper.cycle(route, self.entry_enabled)
+        await self.paper.cycle(None if self.paper.positions else route, self.entry_enabled)
         rows = [
             dict(
                 strategy="dex_" + self.paper.namespace if self.paper.namespace else "cex_dex",

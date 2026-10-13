@@ -25,7 +25,7 @@ def test_independent_portfolios_restart_toggles_and_exports(tmp_path, monkeypatc
         bundle = SimpleNamespace(dex_paper=old, runtime=sr)
         notices = []
         async def notify(*args):notices.append(args)
-        engines = await build(bundle, runtime, str(db), str(tmp_path / "runtime"), notify, lambda p: True, capital=50, notional=20)
+        engines = await build(bundle, runtime, str(db), str(tmp_path / "runtime"), notify, lambda p: True, capital=50, notional=20, strategy_version=1)
         channel, bybit = engines["dex_channel"], engines["dex_bybit"]
         assert runtime.enabled["spot_futures"]  # existing functions and switches remain
         assert not runtime.enabled["dex_channel"] and not runtime.enabled["dex_bybit"]
@@ -53,7 +53,7 @@ def test_independent_portfolios_restart_toggles_and_exports(tmp_path, monkeypatc
         assert notices[0][2].startswith("Автопоиск → Bybit")
         assert "Баланс $50.00" in render(engines, runtime.enabled)
         await require_monitoring(db, False)
-        rebuilt = await build(bundle, runtime, str(db), str(tmp_path / "runtime"), notify, lambda p: True, capital=50, notional=20)
+        rebuilt = await build(bundle, runtime, str(db), str(tmp_path / "runtime"), notify, lambda p: True, capital=50, notional=20, strategy_version=1)
         assert rebuilt["dex_bybit"].budget() == bybit.budget()
         assert rebuilt["dex_channel"].budget() == 50
         assert rebuilt["dex_bybit"].state["wins"] == 1
@@ -82,7 +82,7 @@ def test_signal_consumption_and_loss_cooldown_survive_missing_callback(tmp_path)
         runtime = StrategyRuntime()
         bundle = SimpleNamespace(dex_paper=old, runtime=SecondaryRuntime(runtime, None, db))
         async def notify(*args):pass
-        engines = await build(bundle, runtime, str(db), str(tmp_path / "runtime"), notify, lambda p: True, capital=50, notional=20)
+        engines = await build(bundle, runtime, str(db), str(tmp_path / "runtime"), notify, lambda p: True, capital=50, notional=20, strategy_version=1)
         channel = engines["dex_channel"]
         runtime.enabled["dex_channel"] = True
         route = channel.source.routes[0]
@@ -99,7 +99,7 @@ def test_signal_consumption_and_loss_cooldown_survive_missing_callback(tmp_path)
         closed = await channel.cycle(None, False)
         assert closed and closed[0]["net"] < 0 and closed[0]["exit_reason"] == "NET_STOP"
         assert channel.budget() < 50 and engines["dex_bybit"].budget() == 50
-        recovered = await build(bundle, runtime, str(db), str(tmp_path / "runtime"), notify, lambda p: True, capital=50, notional=20)
+        recovered = await build(bundle, runtime, str(db), str(tmp_path / "runtime"), notify, lambda p: True, capital=50, notional=20, strategy_version=1)
         channel = recovered["dex_channel"]
         assert channel.source.consumed_signal(route) == 100
         assert (await channel.source.entry(route))["reason"] == "DEX_SIGNAL_LOSS_COOLDOWN"

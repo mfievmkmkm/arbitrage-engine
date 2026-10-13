@@ -24,7 +24,7 @@ async def require_monitoring(db_path, enabled):
                     raise ValueError("DEX_OPEN_EXPERIMENT_REQUIRES_DEX_DUAL_PAPER_ENABLED")
 
 
-async def build(bundle, runtime, db_path, state_path, notify, allowed, capital=250, notional=100, notify_open=None):
+async def build(bundle, runtime, db_path, state_path, notify, allowed, capital=250, notional=100, notify_open=None, strategy_version=2):
     original = bundle.dex_paper.source
     engines = {}
     for name, venue, signals_only in (("dex_channel", "mexc", True), ("dex_bybit", "bybit", False)):
@@ -35,16 +35,33 @@ async def build(bundle, runtime, db_path, state_path, notify, allowed, capital=2
         source = Source(original.provider, routes, original.public, original.fs, original.private, original.clock, max_notional=300)
         source.focus, source.signals_only, source.entry_venues = True, signals_only, {venue}
         source.adaptive = True
+        source.policy_version = strategy_version
+        source.fast_exit = strategy_version == 2
+        if strategy_version == 2:
+            from .dex_cex_identity import Gate
+            source.identity_gate = Gate(source.public, source.private, source.clock)
         source.signals = Signals(state_path + "." + name + ".signals.json", source.clock)
         engine = Engine(db_path, source, capital=capital, max_seconds=900, virtual=True,
                         namespace="channel" if signals_only else "bybit", clock=source.clock)
         await engine.init()
+        policy_changed = strategy_version == 2 and engine.state.get('policy_version') != 2
+        if policy_changed:
+            from .dex_reference_policy import record_close, record_version_stats
+            engine.state['policy_stats'] = {}
+            async with aiosqlite.connect(db_path) as d:
+                async with d.execute(engine.sql("SELECT payload FROM cex_dex_paper WHERE status='CLOSED' ORDER BY closed_at")) as c:
+                    for row in await c.fetchall():
+                        position = json.loads(row[0])
+                        record_close(engine.state, position)
+                        record_version_stats(engine.state, position)
+            engine.state['policy_version'] = 2
+            engine.state['policy_changed_at'] = source.clock()
         settings = dict(starting_capital=capital, notional=notional, venue=venue, signals_only=signals_only)
         previous = engine.state.get("experiment_config")
         migration = previous == dict(starting_capital=50, notional=20, venue=venue, signals_only=signals_only) and capital == 250 and notional == 100
         if previous and previous != settings and not migration:
             raise ValueError("DEX_EXPERIMENT_CONFIG_CHANGED:" + name)
-        if previous != settings:
+        if previous != settings or policy_changed:
             if migration:
                 engine.state.setdefault("capital_changes", []).append(dict(ts=source.clock(), amount=200, reason="VIRTUAL_TOPUP_50_TO_250_NOT_PROFIT", old=previous))
             engine.state["experiment_config"] = settings
@@ -57,7 +74,8 @@ async def build(bundle, runtime, db_path, state_path, notify, allowed, capital=2
             engine.version += 1
         engine.budget = lambda e=engine: max(0, e.capital + e.state.get("realized_net", 0))
         engine.allow_open = lambda p, e=engine, n=name: runtime.enabled.get(n, False) and allowed(p) and daily_open_allowed(e)
-        source.blocked_until = lambda r, e=engine: e.state.get("route_cooldowns", {}).get(json.dumps(route_key(r), separators=(",", ":")), 0)
+        from .dex_reference_policy import blocked_until
+        source.blocked_until = lambda r, e=engine: max(e.state.get("route_cooldowns", {}).get(json.dumps(route_key(r), separators=(",", ":")), 0), blocked_until(e.state,r) if strategy_version == 2 else 0)
         source.consumed_signal = lambda r, e=engine: e.state.get("consumed_signals", {}).get(json.dumps(route_key(r), separators=(",", ":")), 0)
 
         async def closed(p, e=engine, label=LABELS[name]):
@@ -80,7 +98,7 @@ async def build(bundle, runtime, db_path, state_path, notify, allowed, capital=2
 def daily_open_allowed(engine):
     state = engine.state
     return engine.budget() > 0 and (state.get("day") != int(engine.clock() // 86400)
-                                  or state.get("day_net", 0) > -engine.capital * .05)
+                                  or state.get("day_net", 0) > -engine.capital * (.02 if getattr(engine.source,'policy_version',1)==2 else .05))
 
 
 def render(engines, enabled):
@@ -99,18 +117,26 @@ def render(engines, enabled):
                    f"Закрыто {count} · прибыльных {s.get('wins',0)} · проверок {s.get('checked_count',0)}\n"
                    f"Рынков {len(e.source.routes)} · {escape(reason_text(s.get('last_decision','')))}")
         if not daily_open_allowed(e):
-            out.append("Новые входы остановлены: дневной лимит потерь 5% собственного стартового капитала или недостаточный баланс.")
+            out.append("Новые входы остановлены: дневной лимит потерь или недостаточный баланс.")
         if name == "dex_channel":
             reader = getattr(e, "channel_reader", None)
             out.append("Чтение канала: " + escape(reader.status if reader else "публичное чтение не включено; доступны пересылки"))
             if reader:
                 m = reader.metrics
                 out.append(f"Постов-сигналов прочитано: {m['received']} · принято: {m['accepted']}\nПоследний: {escape(m['last'][:180])}")
+        if getattr(e.source,'policy_version',1)==2:
+            v2 = s.get('policy_stats',{}).get('2',{})
+            out.append(f"Новые правила v2: закрыто {v2.get('closed',0)} · NET {v2.get('net',0):+.4f} USD. Общий итог выше включает старую версию.")
     out.append("Выбери режим ниже для сделок, причин пропусков и списка рынков. Кошелёк и реальные ордера не используются. Отключение входов сохраняет сопровождение открытых позиций.")
     return "\n\n".join(out)
 
 
 REASONS = {
+    "DEX_CEX_IDENTITY_UNVERIFIED": "Биржа не подтвердила сеть и контракт токена — вход запрещён",
+    "DEX_V2_REWARD_RISK_LOW": "Потенциальная прибыль недостаточна относительно лимита риска",
+    "DEX_V2_EXIT_COST_HIGH": "Расходы немедленного выхода слишком велики относительно стопа",
+    "DEX_V2_REFERENCE_GAP_EXTREME": "Разрыв больше 10% — подозрительный ориентир, вход запрещён",
+    "DEX_V2_CONVERGENCE_UNCONFIRMED": "Нет подтверждения сжатия разрыва и движения CEX к DEX",
     "DEX_CHANNEL_SIGNAL_REQUIRED": "Ждём свежий подходящий сигнал канала",
     "DEX_CHANNEL_SIGNAL_ALREADY_USED": "Этот сигнал уже использован",
     "DEX_REFERENCE_REWARD_TOO_SMALL": "После расходов недостаточно потенциальной прибыли",
@@ -143,6 +169,9 @@ def render_mode(name, engine, enabled):
            f"<b>Результаты</b>\nЗакрытый NET: {s.get('realized_net',0):+.4f} USD\nЗакрыто: {s.get('closed_count',0)} · прибыльных: {s.get('wins',0)}\nПросадка по закрытым: ${s.get('closed_drawdown',0):.4f}"]
     if s.get("capital_changes"):
         out.append("Виртуальный капитал увеличен с $50 до $250. Добавленные $200 не считаются прибылью; прежний NET сохранён.")
+    if getattr(engine.source,'policy_version',1)==2:
+        out.append("<b>Правила v2</b>\nПодтверждение контракта биржей и начала схождения. Цель NET 0,75% размера (минимум $0,20), стоп-порог 0,75%. Трейлинг включается после половины цели (минимум $0,15). Выход без прогресса через 3 минуты, максимум 10 минут. Два убытка по активу за сутки блокируют новые входы до следующего дня UTC. Дневной лимит $5. Пороги не гарантируют результат исполнения.")
+        out.append("Старые сделки и NET сохранены. Новые позиции помечены v2; открытые старые сопровождаются по своей версии. Частота проверок выхода около 1 секунды плюс задержка API. Funding проверяется отдельно; комиссия быстрого выхода моделируется по ставке входа.")
     if engine.positions:
         out.append("<b>Открытые позиции</b>")
         for p in engine.positions.values():
@@ -176,4 +205,10 @@ def render_mode(name, engine, enabled):
     discovery = getattr(engine, "discovery", None)
     if discovery:
         out.append("Подбор маршрутов: " + escape(discovery.status))
-    return "\n\n".join(out)
+    visible = []
+    for section in out:
+        if len("\n\n".join(visible + [section])) > 3750:
+            visible.append("Полные подробности — в экспорте дневника.")
+            break
+        visible.append(section)
+    return "\n\n".join(visible)

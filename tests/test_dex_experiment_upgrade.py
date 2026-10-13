@@ -19,17 +19,17 @@ def test_virtual_topup_is_once_and_preserves_net_positions_and_history(tmp_path)
         old=Engine(db,s,virtual=True,clock=s.clock);await old.init()
         runtime=StrategyRuntime();bundle=SimpleNamespace(dex_paper=old,runtime=SecondaryRuntime(runtime,None,db))
         async def notify(*args):pass
-        engines=await build(bundle,runtime,str(db),str(tmp_path/"state"),notify,lambda p:True,capital=50,notional=20)
+        engines=await build(bundle,runtime,str(db),str(tmp_path/"state"),notify,lambda p:True,capital=50,notional=20, strategy_version=1)
         runtime.enabled['dex_bybit']=True
         e=engines['dex_bybit'];await e.cycle(e.source.routes[0]);now[0]+=5;await e.cycle(e.source.routes[0])
         assert e.positions
         original=dict(next(iter(e.positions.values())))
-        upgraded=await build(bundle,runtime,str(db),str(tmp_path/"state"),notify,lambda p:True)
+        upgraded=await build(bundle,runtime,str(db),str(tmp_path/"state"),notify,lambda p:True, strategy_version=1)
         e=upgraded['dex_bybit']
         assert e.capital==250 and e.budget()==250 and len(e.state['capital_changes'])==1
         assert next(iter(e.positions.values()))['base_qty']==original['base_qty']
         assert e.source.routes[0]['notional_usd']==100
-        again=await build(bundle,runtime,str(db),str(tmp_path/"state"),notify,lambda p:True)
+        again=await build(bundle,runtime,str(db),str(tmp_path/"state"),notify,lambda p:True, strategy_version=1)
         assert len(again['dex_bybit'].state['capital_changes'])==1
         view=render_mode('dex_bybit',e,True)
         assert '$250' in view and '$100' in view and 'Основные причины' in view

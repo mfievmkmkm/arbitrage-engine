@@ -39,7 +39,7 @@ def executable(rows, contracts):
     raise ValueError("RECOVERY_LIQUIDITY_LOW")
 
 
-def validate_evidence(request, venue, now=None):
+def validate_evidence(request, venue, now=None, max_slippage=MAX_SLIPPAGE):
     e = request.market_evidence
     if not isinstance(e, dict) or e.get("source") != "PUBLIC_REST_RECOVERY_V1":
         raise ValueError("RECOVERY_EVIDENCE_REQUIRED")
@@ -78,7 +78,9 @@ def validate_evidence(request, venue, now=None):
         raise ValueError("RECOVERY_SIDE_INVALID")
     price, worst = executable(rows, contracts)
     best = rows[0][0]
-    if abs(worst - best) / best > MAX_SLIPPAGE:
+    if not math.isfinite(max_slippage) or not 0 <= max_slippage <= .20:
+        raise ValueError("RECOVERY_SLIPPAGE_CONFIG_INVALID")
+    if abs(worst - best) / best > max_slippage:
         raise ValueError("RECOVERY_BOOK_SLIPPAGE_TOO_HIGH")
     if not math.isclose(
         float(number(request.reference_price, "REFERENCE_PRICE")), price, rel_tol=1e-12
@@ -88,8 +90,9 @@ def validate_evidence(request, venue, now=None):
 
 
 class Reader:
-    def __init__(self, public_clients, timeout=8, clock=time.time):
+    def __init__(self, public_clients, timeout=8, clock=time.time, max_slippage=MAX_SLIPPAGE):
         self.clients, self.timeout, self.clock = public_clients, timeout, clock
+        self.max_slippage = max_slippage
 
     async def quote(self, venue, request, contract_size):
         client = self.clients.get(venue)
@@ -129,7 +132,7 @@ class Reader:
             asks=asks,
         )
         prepared = replace(request, reference_price=price, market_evidence=evidence)
-        validate_evidence(prepared, venue, self.clock())
+        validate_evidence(prepared, venue, self.clock(), self.max_slippage)
         validate_request(client, prepared)
         return prepared
 
