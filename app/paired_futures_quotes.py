@@ -33,6 +33,8 @@ async def refresh(row, scanner, position=None):
         result = evaluate(a, b, scanner.notional, 1.5, base_qty=native.base_qty)
         if result is None:
             raise ValueError('PAIRED_BOOK_DEPTH_OR_AGE')
+        if result['base_qty'] * max(result['entry_buy'],result['entry_sell']) > scanner.notional + 1e-8:
+            raise ValueError('PAIRED_NOTIONAL_CAP_EXCEEDED')
     rates = []
     for venue in (buy, sell):
         market = scanner.clients[venue].market(symbol)
@@ -50,6 +52,8 @@ async def refresh(row, scanner, position=None):
     prices = (result['entry_buy'], result['entry_sell'], result['exit_buy'], result['exit_sell'])
     result['entry_fee_usd'] = result['base_qty'] * (prices[0]*rates[0] + prices[1]*rates[1])
     result['exit_fee_usd'] = result['base_qty'] * (prices[2]*rates[0] + prices[3]*rates[1])
+    result['entry_fee_components']={buy:result['base_qty']*prices[0]*rates[0],sell:result['base_qty']*prices[1]*rates[1]}
+    result['exit_fee_components']={buy:result['base_qty']*prices[2]*rates[0],sell:result['base_qty']*prices[3]*rates[1]}
     if not position:
         result['funding_known'] = row.get('funding_known', False)
         await attach(result, scanner.funding, scanner.hold_seconds)

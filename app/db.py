@@ -19,6 +19,7 @@ class Diary:
             await d.execute(
                 "CREATE TABLE IF NOT EXISTS signal_decisions(id INTEGER PRIMARY KEY,ts REAL,strategy TEXT,symbol TEXT,buy TEXT,sell TEXT,action TEXT,reason TEXT,payload TEXT)"
             )
+            await d.execute('CREATE INDEX IF NOT EXISTS idx_signal_decisions_strategy_id ON signal_decisions(strategy,id)')
             async with d.execute("PRAGMA table_info(paper_positions)") as c:
                 columns = {x[1] for x in await c.fetchall()}
             for name in ("base_qty", "entry_fees_usd", "safety_usd"):

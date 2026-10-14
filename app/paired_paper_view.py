@@ -21,6 +21,8 @@ REASONS = {
     'DEX_VIRTUAL_GAS_BUDGET_LIMIT':'Газ выше лимита модели $0.25 на операцию',
     'DEX_VIRTUAL_TOKEN_TAX_UNSUPPORTED':'Не подтверждены нулевые налоги на обмен/перевод токена',
     'DEX_VIRTUAL_NOTIONAL_OR_RESIDUAL_LIMIT':'Размер хеджа или остаток токена превышает лимит',
+    'PAIRED_NOTIONAL_CAP_EXCEEDED':'Свежий VWAP превышает лимит размера ноги',
+    'DEX_PAIRED_BASE_QUANTUM_MISMATCH':'Шаг контракта биржи несовместим с количеством знаков токена',
 }
 
 
@@ -32,7 +34,7 @@ async def render(path, paper, scanner, risk, runtime, dex, bundle):
     async with aiosqlite.connect(path) as db:
         async with db.execute("SELECT COUNT(*),COALESCE(SUM(current_net_usd),0),COALESCE(SUM(current_net_usd>0),0) FROM paper_positions WHERE status='CLOSED' AND paired_policy IS NOT NULL") as c:
             count, net, wins = await c.fetchone()
-        async with db.execute("SELECT reason,COUNT(*) FROM (SELECT reason FROM signal_decisions WHERE strategy='futures_futures' AND json_extract(payload,'$.paired_paper')=1 ORDER BY id DESC LIMIT 1000) GROUP BY reason ORDER BY COUNT(*) DESC LIMIT 3") as c:
+        async with db.execute("SELECT reason,COUNT(*) FROM (SELECT reason,payload FROM signal_decisions WHERE strategy='futures_futures' ORDER BY id DESC LIMIT 1000) WHERE CASE WHEN json_valid(payload) THEN json_extract(payload,'$.paired_paper') ELSE 0 END=1 GROUP BY reason ORDER BY COUNT(*) DESC LIMIT 3") as c:
             counts = await c.fetchall()
     out = ['🧪 <b>ПАРНЫЙ АРБИТРАЖ · PAPER</b>',
            'Две встречные позиции. Доход — сжатие спреда после расходов. Все режимы на виртуальных деньгах; LIVE выключен.',

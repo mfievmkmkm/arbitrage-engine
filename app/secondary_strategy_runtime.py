@@ -16,13 +16,24 @@ class SecondaryRuntime:
     def add(self, name, service):
         self.services[name] = service
 
+    @staticmethod
+    def idle_paper(service):
+        paper=getattr(service,'paper',None)
+        if paper is None:return True
+        # Unknown module shapes continue running rather than abandoning risk.
+        if hasattr(paper,'positions'):return not paper.positions
+        inner=getattr(paper,'sf',None)
+        if inner is not None and hasattr(inner,'positions'):return not inner.positions
+        return False
+
     async def _loop(self, name, service):
         while self.running:
             try:
                 service.entry_enabled = (
                     self.runtime.enabled.get(name, True) and not self.paused()
                 )
-                if not service.entry_enabled and not getattr(service, "paper", None):
+                if not service.entry_enabled and (not getattr(service, "paper", None)
+                        or (getattr(service,'idle_when_disabled',False) and self.idle_paper(service))):
                     self.runtime.update(name, [])
                     await asyncio.sleep(getattr(service, "interval", self.interval))
                     continue

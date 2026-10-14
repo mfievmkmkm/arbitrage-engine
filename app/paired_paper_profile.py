@@ -50,3 +50,43 @@ async def futures_cooldown(path, symbol, now=None):
     if rows and now - rows[0][1] < (3600 if rows[0][0] < 0 else 600):
         return 'PAIRED_ASSET_COOLDOWN'
     return None
+
+
+async def require_monitoring(path, enabled):
+    """An env change cannot abandon open paired positions on redeploy."""
+    if enabled:
+        return
+    import aiosqlite
+    async with aiosqlite.connect(path) as db:
+        async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_positions'") as c:
+            if await c.fetchone():
+                async with db.execute('PRAGMA table_info(paper_positions)') as columns:
+                    has_policy='paired_policy' in {r[1] for r in await columns.fetchall()}
+                if has_policy:
+                    async with db.execute("SELECT COUNT(*) FROM paper_positions WHERE status!='CLOSED' AND paired_policy IS NOT NULL") as count:
+                        if (await count.fetchone())[0]:
+                            raise ValueError('OPEN_PAIRED_FUTURES_REQUIRES_PAIRED_PAPER_ENABLED')
+        async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cex_dex_virtual_paper_paired'") as c:
+            if not await c.fetchone():
+                return
+        async with db.execute("SELECT COUNT(*) FROM cex_dex_virtual_paper_paired WHERE status!='CLOSED'") as c:
+            if (await c.fetchone())[0]:
+                raise ValueError('OPEN_PAIRED_DEX_REQUIRES_PAIRED_PAPER_ENABLED')
+
+
+def load_pause(path):
+    target=Path(str(path)+'.paper_controls.json')
+    if not target.exists():return False
+    data=json.loads(target.read_text(encoding='utf-8'))
+    if type(data.get('paused')) is not bool:
+        raise ValueError('PAPER_PAUSE_STATE_INVALID')
+    return data['paused']
+
+
+def save_pause(path, paused):
+    if type(paused) is not bool:raise ValueError('PAPER_PAUSE_STATE_INVALID')
+    target=Path(str(path)+'.paper_controls.json')
+    target.parent.mkdir(parents=True,exist_ok=True)
+    tmp=target.with_suffix('.tmp')
+    tmp.write_text(json.dumps(dict(paused=paused)),encoding='utf-8')
+    tmp.replace(target)

@@ -31,6 +31,8 @@ def mark(p, x, h):
         ts=x["ts"],
         base_qty=p["base_qty"],
         gross=gross,
+        dex_pnl=dex_pnl,
+        cex_pnl=future_pnl,
         entry_fees=p["entry_fees"],
         exit_fees=fees,
         safety=p["safety"],

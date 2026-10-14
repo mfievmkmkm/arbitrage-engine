@@ -96,6 +96,7 @@ class Source(HistorySource):
         self.policy_version = 1
         self.identity_gate = None
         self.fast_exit = False
+        self.native_paired_inventory = False
         self.exit_reader = Reader(public, timeout=1.4, clock=clock, max_slippage=.20)
 
     def venue_allowed(self, venue):
@@ -268,6 +269,24 @@ class Source(HistorySource):
             qty = contracts * float(m["contractSize"])
             if qty > base:
                 raise ValueError("DEX_VIRTUAL_HEDGE_ROUNDING_UP")
+            rounding_discard = 0
+            if r.get('mode','paired')=='paired' and self.native_paired_inventory:
+                residual_value=(base-qty)*cash/base
+                diagnostics.update(dex_base_qty=base,hedge_base_qty=qty,rounding_residual_usd=residual_value,
+                                   suggested_notional_usd=min(cash,cash*qty/base+.01))
+                if residual_value > .05:
+                    raise ValueError('DEX_VIRTUAL_NOTIONAL_OR_RESIDUAL_LIMIT')
+                native_raw=Decimal(str(contracts))*number(m['contractSize'],'CONTRACT_SIZE')*(10**r['asset_decimals'])
+                if native_raw != native_raw.to_integral_value():
+                    raise ValueError('DEX_PAIRED_BASE_QUANTUM_MISMATCH')
+                rounding_discard=raw_qty-int(native_raw)
+                if rounding_discard < 0:
+                    raise ValueError('DEX_VIRTUAL_HEDGE_ROUNDING_UP')
+                # Conservative Paper write-off, never a fabricated refund.
+                # Cash remains the full quoted spend; model inventory equals
+                # the native hedge. The full indicative quote remains saved.
+                raw_qty=int(native_raw)
+                base=qty
             reverse = await self.price(r, True, raw_qty)
             dex_bid = float(Decimal(reverse["virtual_min_buy_raw"]) / Decimal(10 ** r["stable_decimals"])) / base
             dex_ask = cash / base
@@ -300,9 +319,12 @@ class Source(HistorySource):
                      virtual_mode=r.get("mode", "paired"), virtual_route_key=list(route_key(r)),
                      virtual_identity=[r[k] for k in ("base", "stable_decimals", "asset_decimals", "native_symbol", "native_decimals")],
                      virtual_asset_qty=base if r.get("mode", "paired") == "paired" else 0,
+                     rounding_discard_raw=str(rounding_discard),
                      fee_source=fee_source, execution_verified=False, live_allowed=False,
                      dex_reference_bid=dex_bid, dex_reference_ask=dex_ask,
                      assumptions=["indicative DEX fill with slippage haircut", r.get("stable_symbol", "USDT") + " and USDT valued at 1 USD", "CEX visible book fill", "funding entry-reference notional"])
+            if rounding_discard:
+                p['assumptions'].append('DEX rounding surplus conservatively written off; no refund credited; model inventory equals native hedge')
             calendar(p, p["opened_at"])
             x = await self.exit(p)
             if not x.get("ok"):

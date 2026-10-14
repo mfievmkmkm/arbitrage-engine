@@ -186,6 +186,9 @@ from .dex_signal_focus import enabled as focus_enabled, focus_toggles, Signals
 dual_paper = focus_enabled("DEX_DUAL_PAPER_ENABLED")
 paired_paper = config.paired_paper_enabled
 paper.paired_mode = paired_paper
+if paired_paper:
+    from .paired_paper_profile import load_pause
+    scanner.paused = load_pause(config.runtime_state_path)
 paired_lock = asyncio.Lock()
 if paired_paper and not dual_paper:
     raise ValueError('PAIRED_EXPERIMENT_REQUIRES_DUAL_MONITORING')
@@ -207,6 +210,9 @@ venue_controller = VenueController(
 
 
 def menu():
+    if paired_paper:
+        from .paper_console import main_menu as paper_menu
+        return paper_menu(scanner.paused)
     return main_menu(scanner.paused)
 
 
@@ -240,7 +246,10 @@ def fmt_paper():
 
 
 async def text_for(s):
-    if paired_paper and s in ('home', 'dex', 'dex_paper') and secondary:
+    if paired_paper and s in ('home','paper','strategy_stats','diary','capital','status','risk','export','strategies','paper_settings','paper_checks','paper_archive','paper_modes_more') and secondary:
+        from .paper_console import render
+        return await render(s,config.db_path,paper,scanner,risk,strategy_runtime,secondary)
+    if paired_paper and s in ('dex', 'dex_paper','futures_detail') and secondary:
         from .paired_paper_view import render
         return await render(config.db_path, paper, scanner, risk, strategy_runtime,
                             getattr(secondary, 'dex_paired', None), secondary)
@@ -607,6 +616,9 @@ async def commands(m: Message):
         return
     if s in ("pause", "resume"):
         scanner.paused = s == "pause"
+        if paired_paper:
+            from .paired_paper_profile import save_pause
+            save_pause(config.runtime_state_path,scanner.paused)
         s = "status"
     if s == "live_stop":
         command_stop(live_stop)
@@ -644,6 +656,11 @@ async def commands(m: Message):
     F.data.in_(
         {
             "home",
+            "paper_settings",
+            "paper_checks",
+            "paper_archive",
+            "paper_modes_more",
+            "futures_detail",
             "top",
             "paper",
             "diary",
@@ -705,7 +722,10 @@ async def callbacks(q: CallbackQuery):
     await q.answer()
     if s in ("pause", "resume"):
         scanner.paused = s == "pause"
-        s = "status"
+        if paired_paper:
+            from .paired_paper_profile import save_pause
+            save_pause(config.runtime_state_path,scanner.paused)
+        s = "home" if paired_paper else "status"
     if s == "live_stop":
         command_stop(live_stop)
         s = "live"
@@ -850,6 +870,11 @@ async def send_export(message):
 
 
 def keyboard_for(screen):
+    if paired_paper:
+        from .paper_console import keyboard
+        result = keyboard(screen,strategy_runtime.enabled,scanner.paused)
+        if result is not None:
+            return result
     if paired_paper and screen in ('dex', 'dex_paper'):
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text='⚙️ Парные режимы', callback_data='strategies'),
@@ -1047,6 +1072,11 @@ async def venue_action(q: CallbackQuery):
     text = venue_detail(
         name, scanner.health.snapshot().get(name, {}), venue_controller.get(name)
     )
+    if paired_paper:
+        from .paper_console import venue
+        text,keyboard=venue(name,scanner.health.snapshot().get(name,{}),venue_controller.get(name))
+        await safe_edit(q.message,text,keyboard)
+        return await q.answer()
     await safe_edit(q.message, text, venue_control(name, venue_controller.get(name)))
     await q.answer()
 
@@ -1292,6 +1322,8 @@ async def main():
         await durable.init()
         await paper.restore()
         await restore_ledger(config.db_path, bankroll, risk)
+        from .paired_paper_profile import require_monitoring as require_paired_monitoring
+        await require_paired_monitoring(config.db_path, paired_paper)
         from .dex_paper_experiments import require_monitoring
         await require_monitoring(config.db_path, dual_paper)
         readers, private_clients = build_private_readers()
@@ -1909,6 +1941,10 @@ async def main():
                 )
                 secondary.dex_experiments["dex_channel"].channel_reader = secondary.public_channel_reader
                 await secondary.public_channel_reader.start()
+        if paired_paper:
+            for name,service in secondary.runtime.services.items():
+                if name in ('spot_futures','spot_spot','funding_arb','cex_dex','dex_channel','dex_bybit','dex_paired'):
+                    service.idle_when_disabled = True
         await secondary.runtime.start()
         bot = Bot(token=config.token)
         notification_bot = bot

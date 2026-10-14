@@ -31,6 +31,11 @@ class Settlements:
         calendar = position.funding_calendar or {}
         if set(calendar) != {'long_next', 'short_next', 'long_interval', 'short_interval'}:
             return History(False, 0, (), 'PAIRED_FUNDING_CALENDAR_UNKNOWN', position.opened_at)
+        if (not math.isfinite(until) or until < position.opened_at
+                or any(not isinstance(x, (int, float)) or not math.isfinite(x) for x in calendar.values())
+                or any(calendar[prefix+'_next'] <= position.opened_at
+                       or not 0 < calendar[prefix+'_interval'] <= 24 for prefix in ('long','short'))):
+            return History(False, 0, (), 'PAIRED_FUNDING_CALENDAR_INVALID', position.opened_at)
         if until < min(calendar['long_next'], calendar['short_next']):
             return History(True, 0, (), 'NO_SETTLEMENT_DUE', until)
         row = dict(symbol=position.symbol, buy=position.buy, sell=position.sell,

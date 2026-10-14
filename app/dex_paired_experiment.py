@@ -1,5 +1,6 @@
 """Isolated two-leg virtual DEX BUY / CEX SHORT; no wallet or order writes."""
 import json
+import math
 from .dex_virtual_paper_source import Source, route_key
 from .dex_cex_identity import Gate
 from .cex_dex_paper import Engine, Cycle
@@ -19,6 +20,7 @@ class PairedSource(Source):
         super().__init__(original.provider, routes, original.public, original.fs,
                          original.private, original.clock, max_notional=300)
         self.focus = self.signals_only = False
+        self.native_paired_inventory = True
         self.identity_gate = Gate(self.public, self.private, self.clock)
 
     async def entry(self, route):
@@ -26,7 +28,17 @@ class PairedSource(Source):
             evidence = await self.identity_gate.verify(route)
         except ValueError as exc:
             return dict(ok=False, reason=str(exc))
-        result = await super().entry(route)
+        candidate=dict(route)
+        attempts=[]
+        for _ in range(3):
+            result = await super().entry(candidate)
+            attempts.append(dict(notional_usd=candidate['notional_usd'],reason=result.get('reason','PAIRED_ENTRY_OK')))
+            suggested=(result.get('diagnostics') or {}).get('suggested_notional_usd')
+            if (result.get('ok') or result.get('reason')!='DEX_VIRTUAL_NOTIONAL_OR_RESIDUAL_LIMIT'
+                    or suggested is None or not 10 <= suggested < candidate['notional_usd']):
+                break
+            candidate=dict(candidate,notional_usd=suggested)
+        result.setdefault('diagnostics',{})['native_size_attempts']=attempts
         if not result.get('ok'):
             return result
         p = result['position']
@@ -34,12 +46,19 @@ class PairedSource(Source):
         raw = p['base_qty'] * p['entry_price'] - p['entry_cash']
         costs = max(raw - p['entry_edge'], -p['entry_immediate_net'])
         snapshot = await self.fs.get(p['cex_venue'], p['symbol'])
-        if snapshot.rate is None:
+        try:
+            rate=float(snapshot.rate)
+            current_next=float(snapshot.next_ts)/1000
+            current_period=float(snapshot.interval_hours)*3600
+        except (TypeError,ValueError):
+            return dict(ok=False,reason='PAIRED_FUNDING_CALENDAR_UNKNOWN')
+        if (not math.isfinite(rate) or abs(rate)>=1
+                or current_next!=p['funding_next'] or current_period!=p['funding_period']):
             return dict(ok=False, reason='PAIRED_FUNDING_CALENDAR_UNKNOWN')
         # SHORT pays when the public rate is negative. Positive carry is not
         # used to qualify a spread entry and is not credited in advance.
         count = len(calendar(p, p['opened_at'] + 1200))
-        reserve = max(0, -float(snapshot.rate)) * count * p['base_qty'] * p['entry_price']
+        reserve = max(0, -rate) * count * p['base_qty'] * p['entry_price']
         try:
             policy = plan(p['entry_cash'], raw, costs, reserve)
         except ValueError as exc:
@@ -48,7 +67,7 @@ class PairedSource(Source):
             return dict(ok=False, reason='PAIRED_IMMEDIATE_COST_HIGH')
         p.update(paired_policy=policy, cex_identity=evidence,
                  strategy='dex_paired', hedge_residual_qty=p['virtual_asset_qty']-p['base_qty'],
-                 paired_route=dict(route))
+                 paired_route=dict(route),native_size_attempts=attempts)
         return result
 
 
@@ -78,7 +97,14 @@ class PairedCycle(Cycle):
 
     async def cycle(self):
         self.sync()
-        return await super().cycle()
+        original = self.entry_enabled
+        state = self.paper.state
+        if state.get('day') == int(self.paper.clock()//86400) and state.get('day_net',0) <= -5:
+            self.entry_enabled = False
+        try:
+            return await super().cycle()
+        finally:
+            self.entry_enabled = original
 
 
 async def build(bundle, runtime, db_path, notify, allowed, notify_open=None):

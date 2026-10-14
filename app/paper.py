@@ -172,6 +172,10 @@ class PaperEngine:
                 ts=p.opened_at,
                 base_qty=p.base_qty,
                 gross=gross,
+                long_pnl=p.base_qty*(o['exit_buy']-p.entry_buy),
+                short_pnl=p.base_qty*(p.entry_sell-o['exit_sell']),
+                entry_fee_components=o.get('entry_fee_components'),
+                exit_fee_components=o.get('exit_fee_components'),
                 entry_fees=p.entry_fees_usd,
                 exit_fees=exit_fees,
                 safety=p.safety_usd,
@@ -180,6 +184,8 @@ class PaperEngine:
                 exit_spread=p.current_spread,
                 mode="PAPER_MODEL",
             )
+            if policy:
+                p.last_mark.update(funding_known=True,funding_reason='NO_SETTLEMENT_DUE')
         self.pending_capital += reserved
         try:
             p.id = await self.diary.create_paper_position(asdict(p))
@@ -254,6 +260,10 @@ class PaperEngine:
                 quote_ts=o.get("ts"),
                 base_qty=qty,
                 gross=gross,
+                long_pnl=qty*(o['exit_buy']-p.entry_buy),
+                short_pnl=qty*(p.entry_sell-o['exit_sell']),
+                entry_fee_components=(p.last_mark or {}).get('entry_fee_components'),
+                exit_fee_components=o.get('exit_fee_components'),
                 entry_fees=p.entry_fees_usd,
                 exit_fees=exit_fees,
                 safety=p.safety_usd,
