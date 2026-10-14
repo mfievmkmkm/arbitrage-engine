@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "evidence_id": "",
+  "verified_at": 0,
+  "expires_at": 0,
+  "chain_id": 1,
+  "wallet": "REPLACE_WITH_ISOLATED_EOA_ADDRESS",
+  "cex_venue": "REPLACE_WITH_CERTIFIED_VENUE",
+  "tokens": [],
+  "checks": {
+    "wallet_isolated": false,
+    "preapproved_allowance": false,
+    "dual_rpc": false,
+    "receipt_finality": false,
+    "token_cashflow": false,
+    "nonce_recovery": false,
+    "cex_hedge": false,
+    "cex_partial_recovery": false,
+    "private_funding": false,
+    "entry_exit_e2e": false,
+    "restart": false,
+    "micro_canary": false
+  }
+}

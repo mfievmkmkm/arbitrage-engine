@@ -3,14 +3,19 @@ class RotatingUniverse:
   counts={}
   for symbols in symbols_by_exchange.values():
    for symbol in symbols: counts[symbol]=counts.get(symbol,0)+1
-  self.symbols=sorted((s for s,n in counts.items() if n>=2),key=lambda s:(-counts[s],s))[:size]
+  all_symbols=sorted((s for s,n in counts.items() if n>=2),key=lambda s:(-counts[s],s))
+  self.symbols=all_symbols if not size or size>=len(all_symbols) else all_symbols[:size]
+  self.total_common=len(all_symbols)
   self.batch_size=batch
   self.cursor=0
- def next(self):
+ def next_batch(self):
   if not self.symbols:return []
   n=min(self.batch_size,len(self.symbols))
   out=[self.symbols[(self.cursor+i)%len(self.symbols)] for i in range(n)]
   self.cursor=(self.cursor+n)%len(self.symbols)
   return out
+ def next(self):return self.next_batch()
  @property
  def coverage(self):return len(self.symbols)
+ @property
+ def total_coverage(self):return self.total_common

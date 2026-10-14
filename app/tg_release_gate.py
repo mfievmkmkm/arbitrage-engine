@@ -1,0 +1,1 @@
+def render(result):return "<b>LIVE RELEASE GATE</b>\n<code>MICRO-LIVE ACCEPTANCE</code>\n\n"+("🟢 ELIGIBLE" if result["allowed"] else "🔒 LOCKED")+"\n\nMissing:\n"+("\n".join("• "+x for x in result["missing"]) if result["missing"] else "—")

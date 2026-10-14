@@ -1,0 +1,1 @@
+def render(inv):return "<b>EXECUTION HEALTH</b>\n\n"+("🟢 HEALTHY" if inv["healthy"] else "🔴 HALTED / REVIEW")+"\n"+("\n".join("• "+x for x in inv["issues"]) if inv["issues"] else "No invariant violations")
