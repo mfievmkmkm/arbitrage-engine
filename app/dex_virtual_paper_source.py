@@ -320,6 +320,7 @@ class Source(HistorySource):
             p["entry_edge"] = edge - p["entry_fees"] - notional * x["fee_rate"] - x["gas"] - p["safety"]
             immediate_gross = (x["cash"] - cash if p["virtual_mode"] == "paired" else 0) + (1 if side == "buy" else -1) * qty * (x["price"] - p["entry_price"])
             immediate_net = immediate_gross - p["entry_fees"] - qty * x["price"] * x["fee_rate"] - x["gas"] - p["safety"]
+            p['entry_immediate_net'] = immediate_net
             if immediate_net <= -max(cash, notional) * 0.02:
                 raise ValueError("DEX_VIRTUAL_REVERSE_PREFLIGHT_NET_STOP")
             if self.focus and p["virtual_mode"] == "reference":

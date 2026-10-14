@@ -6,14 +6,19 @@ def strategies(runtime):
         "funding_arb": "Ставки funding",
         "cex_dex": "CEX ↔ DEX",
     }
-    if "dex_channel" in getattr(runtime, "enabled", {}):
+    paired = 'dex_paired' in getattr(runtime, 'enabled', {})
+    if paired:
+        labels.pop('cex_dex')
+        labels.update(dex_paired='DEX BUY ↔ CEX SHORT · парный тест')
+    elif "dex_channel" in getattr(runtime, "enabled", {}):
         labels.update(dex_channel="Канал → MEXC · независимый Paper", dex_bybit="Автопоиск → Bybit · независимый Paper")
-    out = ["<b>СТРАТЕГИИ</b>", "Сканер · Paper · реальная торговля", ""]
+    out = ["<b>СТРАТЕГИИ · ВИРТУАЛЬНЫЕ ДЕНЬГИ</b>" if paired else "<b>СТРАТЕГИИ</b>",
+           "Две встречные позиции · результат после расходов · LIVE выключен" if paired else "Сканер · Paper · реальная торговля", ""]
     for name, label in labels.items():
         enabled = getattr(runtime, "enabled", {}).get(name, False)
         mode = (
             "Paper"
-            if name in ("futures_futures", "spot_futures", "spot_spot", "funding_arb", "dex_channel", "dex_bybit")
+            if name in ("futures_futures", "spot_futures", "spot_spot", "funding_arb", "dex_channel", "dex_bybit", "dex_paired")
             else "Firm Paper / исследование"
         )
         out.append(

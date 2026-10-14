@@ -26,6 +26,9 @@ class Diary:
                     await d.execute(
                         "ALTER TABLE paper_positions ADD COLUMN " + name + " REAL"
                     )
+            for name in ('paired_policy', 'funding_calendar', 'exit_pending'):
+                if name not in columns:
+                    await d.execute('ALTER TABLE paper_positions ADD COLUMN ' + name + ' TEXT')
             async with d.execute("PRAGMA table_info(paper_marks)") as c:
                 mark_columns = {x[1] for x in await c.fetchall()}
             if "payload" not in mark_columns:
@@ -91,6 +94,8 @@ class Diary:
                     c.lastrowid,
                 ),
             )
+            await d.execute('UPDATE paper_positions SET paired_policy=?,funding_calendar=?,exit_pending=? WHERE id=?',
+                            tuple(json.dumps(p.get(k)) if p.get(k) is not None else None for k in ('paired_policy', 'funding_calendar', 'exit_pending')) + (c.lastrowid,))
             if p.get("last_mark"):
                 await d.execute(
                     "INSERT INTO paper_marks(position_id,ts,net_usd,spread,payload) VALUES(?,?,?,?,?)",
@@ -107,6 +112,8 @@ class Diary:
 
     async def update_paper_position(self, p):
         async with aiosqlite.connect(self.path) as d:
+            await d.execute('UPDATE paper_positions SET paired_policy=?,funding_calendar=?,exit_pending=? WHERE id=?',
+                            tuple(json.dumps(p.get(k)) if p.get(k) is not None else None for k in ('paired_policy', 'funding_calendar', 'exit_pending')) + (p['id'],))
             await d.execute(
                 "UPDATE paper_positions SET best_net_usd=?,current_net_usd=?,current_spread=?,base_qty=?,entry_fees_usd=?,safety_usd=? WHERE id=?",
                 (
@@ -150,10 +157,12 @@ class Diary:
         async with aiosqlite.connect(self.path) as d:
             d.row_factory = aiosqlite.Row
             async with d.execute(
-                "SELECT id,symbol,buy,sell,notional,entry_buy,entry_sell,entry_spread,opened_at,best_net_usd,current_net_usd,current_spread,status,base_qty,entry_fees_usd,COALESCE(safety_usd,0) AS safety_usd,(SELECT payload FROM paper_marks m WHERE m.position_id=paper_positions.id ORDER BY ts DESC,id DESC LIMIT 1) AS last_mark FROM paper_positions WHERE status='OPEN'"
+                "SELECT id,symbol,buy,sell,notional,entry_buy,entry_sell,entry_spread,opened_at,best_net_usd,current_net_usd,current_spread,status,base_qty,entry_fees_usd,COALESCE(safety_usd,0) AS safety_usd,paired_policy,funding_calendar,exit_pending,(SELECT payload FROM paper_marks m WHERE m.position_id=paper_positions.id ORDER BY ts DESC,id DESC LIMIT 1) AS last_mark FROM paper_positions WHERE status='OPEN'"
             ) as c:
                 rows = [dict(x) for x in await c.fetchall()]
                 for row in rows:
+                    for name in ('paired_policy', 'funding_calendar', 'exit_pending'):
+                        row[name] = json.loads(row[name]) if row[name] else None
                     row["last_mark"] = (
                         json.loads(row["last_mark"]) if row["last_mark"] else None
                     )

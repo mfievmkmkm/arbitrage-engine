@@ -3,6 +3,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 STRATEGY_LABELS = {
+    "dex_paired": "⛓ DEX BUY ↔ CEX SHORT · Paper",
     "dex_channel": "📨 Канал → MEXC · Paper $250",
     "dex_bybit": "🔎 Автопоиск → Bybit · Paper $250",
     "futures_futures": "Фьючерсы ↔ Фьючерсы",
@@ -184,6 +185,7 @@ def strategy_menu(enabled):
             )
         ]
         for name, on in enabled.items()
+        if 'dex_paired' not in enabled or name not in ('dex_channel', 'dex_bybit', 'cex_dex')
     ]
     rows.append([button("‹ Главное меню", "home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

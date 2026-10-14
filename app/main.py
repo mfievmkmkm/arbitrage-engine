@@ -184,6 +184,11 @@ strategy_toggles = StrategyToggleStore(config.runtime_state_path + ".strategies.
 strategy_runtime.enabled = strategy_toggles.load(strategy_runtime.enabled)
 from .dex_signal_focus import enabled as focus_enabled, focus_toggles, Signals
 dual_paper = focus_enabled("DEX_DUAL_PAPER_ENABLED")
+paired_paper = config.paired_paper_enabled
+paper.paired_mode = paired_paper
+paired_lock = asyncio.Lock()
+if paired_paper and not dual_paper:
+    raise ValueError('PAIRED_EXPERIMENT_REQUIRES_DUAL_MONITORING')
 if not dual_paper and focus_enabled("DEX_CHANNEL_SIGNALS_ONLY") and not focus_enabled("DEX_REFERENCE_FOCUS"):
     raise ValueError("DEX_CHANNEL_SIGNALS_ONLY_REQUIRES_REFERENCE_FOCUS")
 if (dual_paper or focus_enabled("DEX_REFERENCE_FOCUS")) and (config.live_enabled or not focus_enabled("DEX_VIRTUAL_PAPER_ENABLED")):
@@ -235,6 +240,10 @@ def fmt_paper():
 
 
 async def text_for(s):
+    if paired_paper and s in ('home', 'dex', 'dex_paper') and secondary:
+        from .paired_paper_view import render
+        return await render(config.db_path, paper, scanner, risk, strategy_runtime,
+                            getattr(secondary, 'dex_paired', None), secondary)
     if s == "home":
         banner = render_incident_banner(live_supervisor, live_stop)
         body = render_home(scanner, paper, risk, strategy_runtime, live_stop)
@@ -247,7 +256,7 @@ async def text_for(s):
         return render_system_center(scanner, strategy_runtime, secondary)
     if s == "strategies":
         body = render_strategy_console(strategy_runtime)
-        if secondary and secondary.dex_experiments:
+        if secondary and secondary.dex_experiments and not paired_paper:
             from .dex_paper_experiments import render
             body += "\n\n" + render(secondary.dex_experiments, strategy_runtime.enabled)
         return body
@@ -304,6 +313,8 @@ async def text_for(s):
             text += render_spot_inventory(secondary.ss_paper, positions_only=True)
             text += render_funding_paper(secondary.funding_paper)
             text += render_dex_paper(secondary.dex_paper)
+            if paired_paper and getattr(secondary, 'dex_paired', None):
+                text += render_dex_paper(secondary.dex_paired)
         return text
     if s == "dex_paper":
         if secondary and secondary.dex_experiments:
@@ -517,8 +528,8 @@ async def accept_dex_signal(m: Message):
     if not dual_paper and not focus_enabled("DEX_CHANNEL_SIGNALS_ONLY"):
         return await m.answer("Приём сигналов включается переменной DEX_CHANNEL_SIGNALS_ONLY=true.")
     engine = (getattr(secondary, "dex_experiments", {}).get("dex_channel") if dual_paper else getattr(secondary, "dex_paper", None))
-    if dual_paper and not strategy_runtime.enabled.get("dex_channel", False):
-        return await m.answer("Включи «Канал → MEXC» в разделе «Стратегии», затем перешли свежий сигнал.")
+    if dual_paper and not strategy_runtime.enabled.get("dex_paired" if paired_paper else "dex_channel", False):
+        return await m.answer("Включи «DEX BUY ↔ CEX SHORT» в разделе «Стратегии», затем перешли свежий сигнал." if paired_paper else "Включи «Канал → MEXC» в разделе «Стратегии», затем перешли свежий сигнал.")
     signals = getattr(getattr(engine, "source", None), "signals", None)
     if signals is None:
         return await m.answer("Виртуальный DEX Paper ещё не готов.")
@@ -532,6 +543,8 @@ async def accept_dex_signal(m: Message):
         signal = signals.add(m.text, engine.source.routes, origin.date.timestamp(), "MexcDexSpreadTracker")
     except ValueError as exc:
         return await m.answer(str(exc))
+    if paired_paper:
+        return await m.answer(f"Адрес {signal['base']} добавлен в подбор рынков парного Paper. Проверяем DEX BUY + CEX SHORT по свежим котировкам и всем расходам. Направление из поста не превращается в односторонний ордер; открытие пары не гарантировано.")
     await m.answer(f"Сигнал {signal['base']} {'LONG' if signal['side'] == 'buy' else 'SHORT'} принят для Paper. Вход будет только после проверки свежих котировок, расходов и стакана. Принятый сигнал не гарантирует открытие позиции.")
 
 
@@ -837,6 +850,15 @@ async def send_export(message):
 
 
 def keyboard_for(screen):
+    if paired_paper and screen in ('dex', 'dex_paper'):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='⚙️ Парные режимы', callback_data='strategies'),
+             InlineKeyboardButton(text='📈 Обе позиции', callback_data='paper')],
+            [InlineKeyboardButton(text='📒 Дневник / экспорт', callback_data='export')],
+            [InlineKeyboardButton(text='📨 Старая MEXC-история', callback_data='dex_mode:dex_channel'),
+             InlineKeyboardButton(text='🔎 Старая Bybit-история', callback_data='dex_mode:dex_bybit')],
+            [InlineKeyboardButton(text='↻ Обновить', callback_data='dex_paper'),
+             InlineKeyboardButton(text='‹ Главное меню', callback_data='home')]])
     if screen == "home":
         return menu()
     if screen == "live":
@@ -957,7 +979,7 @@ async def dex_mode_page(q: CallbackQuery):
         return await q.answer("Режим ещё не готов")
     from .dex_paper_experiments import render_mode
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚙️ Входы: включить / выключить",callback_data="strategy:"+name)],
+        [InlineKeyboardButton(text="‹ Парные режимы" if paired_paper else "⚙️ Входы: включить / выключить",callback_data="dex_paper" if paired_paper else "strategy:"+name)],
         [InlineKeyboardButton(text="📒 Экспорт дневника",callback_data="export")],
         [InlineKeyboardButton(text="↻ Обновить",callback_data=q.data), InlineKeyboardButton(text="‹ Сравнение режимов",callback_data="dex_paper")],
     ])
@@ -991,6 +1013,8 @@ async def strategy_toggle(q: CallbackQuery):
     name = q.data.split(":", 1)[1]
     if name not in strategy_runtime.enabled:
         return await q.answer("Неизвестная стратегия")
+    if paired_paper and name in ('dex_channel', 'dex_bybit', 'cex_dex'):
+        return await q.answer('Старый односторонний режим: новые входы отключены. История и сопровождение сохранены.', show_alert=True)
     if not dual_paper and focus_enabled("DEX_REFERENCE_FOCUS") and name != "cex_dex":
         return await q.answer("Сейчас включён отдельный эксперимент CEX↔DEX. Другие входы отключены переменной DEX_REFERENCE_FOCUS.")
     if name == "cex_dex":
@@ -1067,7 +1091,13 @@ def paper_entry_reason(op):
         return "VENUE_PAPER_DISABLED"
     if not risk.can_open_paper():
         return "RISK_HALTED"
-    if op["hypothetical_edge"] < config.paper_entry_edge:
+    if paired_paper:
+        from .paired_paper_policy import futures_plan
+        try:
+            futures_plan(op)
+        except ValueError as exc:
+            return str(exc)
+    elif op["hypothetical_edge"] < config.paper_entry_edge:
         return "BELOW_ENTRY_EDGE"
     if not paper.can_open(op):
         return "CAPACITY_OR_DUPLICATE"
@@ -1088,6 +1118,10 @@ async def scanning():
                 x for x in scanner.ids if venue_controller.get(x)["scan"]
             }
             quotes = await scanner.scan()
+            if paired_paper:
+                from .paired_futures_funding import attach
+                for row in quotes:
+                    await attach(row, scanner.funding, config.paper_max_seconds)
             latest = [x for x in quotes if x["hypothetical_edge"] > 0]
             strategy_runtime.update(
                 "futures_futures",
@@ -1113,7 +1147,7 @@ async def scanning():
                 async with live_monitor.lock:
                     await live_entry_coordinator.process(latest)
                 live_monitor.request_cycle()
-            closed = await paper.mark_and_exit(quotes)
+            closed = [] if paired_paper else await paper.mark_and_exit(quotes)
             for p in closed:
                 risk.on_paper_close(p.current_net_usd)
                 bankroll.apply(p.current_net_usd)
@@ -1138,10 +1172,25 @@ async def scanning():
                     if o["symbol"] in {p.symbol for p in closed}
                     else paper_entry_reason(o)
                 )
-                p = await paper.open(o) if reason == "ENTRY_ALLOWED" else None
+                p = None
+                if reason == 'ENTRY_ALLOWED' and paired_paper:
+                    from .paired_paper_profile import futures_cooldown
+                    reason = await futures_cooldown(config.db_path, o['symbol']) or reason
+                if reason == 'ENTRY_ALLOWED' and paired_paper:
+                    from .paired_futures_quotes import refresh
+                    try:
+                        o.update(await refresh(o, scanner))
+                        async with paired_lock:
+                            reason = paper_entry_reason(o)
+                            p = await paper.open(o) if reason == 'ENTRY_ALLOWED' else None
+                    except Exception as exc:
+                        reason = str(exc) if isinstance(exc, ValueError) else 'PAIRED_BOOK_UNAVAILABLE'
+                elif reason == 'ENTRY_ALLOWED':
+                    p = await paper.open(o)
                 decisions.append(
                     {
                         **o,
+                        'paired_paper': paired_paper,
                         "strategy": "futures_futures",
                         "action": "PAPER_OPEN" if p else "SKIP",
                         "reason": reason,
@@ -1149,6 +1198,16 @@ async def scanning():
                 )
                 if p:
                     log.info("Paper open %s %s/%s", p.symbol, p.buy, p.sell)
+                    if paired_paper and notification_bot:
+                        try:
+                            await notification_bot.send_message(config.admin_id,
+                            f"🧪 PAPER · парная позиция открыта\n{escape(p.symbol)}\n"
+                            f"LONG {escape(p.buy.upper())} ↔ SHORT {escape(p.sell.upper())}\n"
+                            f"Одинаковый объём: {p.base_qty:.8g}\n"
+                            f"Размер ног: ${p.base_qty*p.entry_buy:.2f} / ${p.base_qty*p.entry_sell:.2f}\n"
+                                "Вход по стаканам. Прибыль ещё не заработана.")
+                        except Exception:
+                            log.exception('Paired Paper notification failed')
             await diary.record_decisions(decisions)
             log.info(
                 "Cycle opportunities=%s paper=%s", len(latest), len(paper.positions)
@@ -1157,6 +1216,35 @@ async def scanning():
             risk.on_error()
             log.exception("Scan failed")
         await asyncio.sleep(config.interval)
+
+
+async def paired_monitor():
+    from .paired_futures_quotes import refresh
+    while True:
+        try:
+            quotes = []
+            for position in list(paper.positions.values()):
+                if position.exit_pending:
+                    continue
+                try:
+                    quotes.append(await refresh(dict(symbol=position.symbol, buy=position.buy, sell=position.sell), scanner, position))
+                    paper.monitor_reason = ''
+                except Exception as exc:
+                    paper.monitor_reason = str(exc) if isinstance(exc, ValueError) else 'PAIRED_BOOK_UNAVAILABLE'
+            async with paired_lock:
+                closed = await paper.mark_and_exit(quotes)
+                for position in closed:
+                    risk.on_paper_close(position.current_net_usd)
+                    bankroll.apply(position.current_net_usd)
+                    await ledger_add(config.db_path, time.time(), 'PAPER_NET',
+                                     position.current_net_usd, str(position.id), note=position.symbol)
+                    await notify_paper_close(position.symbol, position.current_net_usd,
+                                             'Парный LONG ↔ SHORT · итог после расходов')
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('Paired Paper monitoring failed')
+        await asyncio.sleep(2)
 
 
 async def main():
@@ -1184,6 +1272,7 @@ async def main():
     funding_live = None
     bot = None
     task = None
+    paired_task = None
     stream_recorder = None
     order_streams = None
     try:
@@ -1246,6 +1335,9 @@ async def main():
         )
         log.info("%s", startup_text.replace("\n", " | "))
         await scanner.start()
+        if paired_paper:
+            from .paired_futures_funding import Settlements
+            paper.funding_history = Settlements(scanner.clients, scanner.funding, config.notional)
         if config.record_books:
             stream_recorder = StreamBookRecorder(
                 book_history, scanner.specs, config.public_stream_record_interval
@@ -1635,6 +1727,9 @@ async def main():
                 live_monitor.request_cycle()
 
         secondary.runtime.on_rows = secondary_rows
+        if paired_paper:
+            from .paired_paper_profile import migrate_toggles
+            migrate_toggles(config.runtime_state_path, strategy_runtime, strategy_toggles)
         sf_cycle = secondary.runtime.services["spot_futures"]
         sf_cycle.allow_open = (
             lambda x: not scanner.paused
@@ -1798,12 +1893,19 @@ async def main():
             for engine in secondary.dex_experiments.values():
                 engine.discovery = secondary.route_discovery
             secondary.dex_experiments["dex_channel"].source.resolve_signal = secondary.route_discovery.signal
+            if paired_paper:
+                for old in secondary.dex_experiments.values():
+                    old.allow_open = lambda p: False
+                from .dex_paired_experiment import build as build_paired
+                await build_paired(secondary, strategy_runtime, config.db_path, notify_paper_close,
+                    lambda p: not scanner.paused and all(venue_controller.get(p['cex_venue'])[k] for k in ('paper', 'scan')),
+                    notify_open=notify_dex_open)
             await secondary.route_discovery.start()
             if focus_enabled("DEX_CHANNEL_PUBLIC_READER_ENABLED"):
                 from .dex_public_channel_reader import Reader as PublicChannelReader
                 secondary.public_channel_reader = PublicChannelReader(
                     secondary.dex_experiments["dex_channel"],
-                    lambda: strategy_runtime.enabled.get("dex_channel", False) and not scanner.paused,
+                    lambda: strategy_runtime.enabled.get("dex_paired" if paired_paper else "dex_channel", False) and not scanner.paused,
                 )
                 secondary.dex_experiments["dex_channel"].channel_reader = secondary.public_channel_reader
                 await secondary.public_channel_reader.start()
@@ -1811,9 +1913,14 @@ async def main():
         bot = Bot(token=config.token)
         notification_bot = bot
         await live_monitor.start()
+        if paired_paper:
+            paired_task = asyncio.create_task(paired_monitor())
         task = asyncio.create_task(scanning())
         await dp.start_polling(bot)
     finally:
+        if paired_task:
+            paired_task.cancel()
+            await asyncio.gather(paired_task, return_exceptions=True)
         if task:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

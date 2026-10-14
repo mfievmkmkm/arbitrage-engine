@@ -102,7 +102,7 @@ class Engine:
         if type(virtual) is not bool:
             raise ValueError("DEX_PAPER_MODE_INVALID")
         self.virtual = virtual
-        if namespace not in (None, "channel", "bybit") or (namespace and not virtual):
+        if namespace not in (None, "channel", "bybit", "paired") or (namespace and not virtual):
             raise ValueError("DEX_PAPER_NAMESPACE_INVALID")
         self.namespace = namespace
 
@@ -203,6 +203,9 @@ class Engine:
             if not pending and p.get('reference_policy', {}).get('version') == 2:
                 from .dex_reference_policy import exit_reason
                 reason = exit_reason(p, m, h.verified)
+            if not pending and p.get('paired_policy'):
+                from .paired_paper_policy import exit_reason
+                reason = exit_reason(p['paired_policy'], p['opened_at'], p['best_net'], m, h.verified)
             if reason:
                 p.update(
                     status="EXIT_ACCOUNTING_PENDING",

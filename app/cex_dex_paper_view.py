@@ -41,7 +41,7 @@ def render(engine):
         out.append("Последний вход: " + escape(engine.state["last_decision"]))
     detail = engine.state.get("last_detail", {})
     failed = engine.state.get("last_failure_detail", {})
-    if failed:
+    if failed and 'requested_contracts' in failed and 'notional_usd' in failed:
         out.append(f"Количество до округления: {failed['requested_contracts']:.8g} контрактов · маршрут {failed['notional_usd']:.2f} USD")
         if failed.get("amount_step") is not None:
             out.append(f"Шаг количества: {failed['amount_step']:.8g} контрактов")

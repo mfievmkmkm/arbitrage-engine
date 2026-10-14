@@ -21,6 +21,9 @@ class PaperPosition:
     entry_fees_usd: float | None = None
     safety_usd: float = 0
     last_mark: dict | None = None
+    paired_policy: dict | None = None
+    funding_calendar: dict | None = None
+    exit_pending: dict | None = None
 
 
 class PaperEngine:
@@ -43,6 +46,8 @@ class PaperEngine:
         self.positions = {}
         self.external_reserved = lambda: 0
         self.pending_capital = 0.0
+        self.paired_mode = False
+        self.funding_history = None
 
     async def restore(self):
         for row in await self.diary.open_paper_positions():
@@ -76,7 +81,7 @@ class PaperEngine:
                 return False
             if any(
                 not math.isfinite(float(o[k])) or float(o[k]) < 0
-                for k in ("fee_pct", "safety_pct")
+                for k in ("fee_pct", "safety_pct", "entry_fee_usd", "exit_fee_usd")
                 if k in o
             ):
                 return False
@@ -104,7 +109,9 @@ class PaperEngine:
                 else o["notional"] / o["entry_buy"]
             )
             * (o["entry_buy"] + o["entry_sell"])
-            * (1 + o.get("fee_pct", 0) / 400)
+            + o.get('entry_fee_usd',
+                    (o['base_qty'] if o.get('base_qty') is not None else o['notional']/o['entry_buy'])
+                    * (o['entry_buy'] + o['entry_sell']) * o.get('fee_pct', 0) / 400)
             + o["notional"] * o.get("safety_pct", 0) / 100
             <= self.budget()
             and not any(p.symbol == o["symbol"] for p in self.positions.values())
@@ -113,6 +120,13 @@ class PaperEngine:
     async def open(self, o):
         if not self.can_open(o):
             return None
+        policy = None
+        if self.paired_mode:
+            from .paired_paper_policy import futures_plan
+            try:
+                policy = futures_plan(o)
+            except ValueError:
+                return None
         p = PaperPosition(
             0,
             o["symbol"],
@@ -130,11 +144,13 @@ class PaperEngine:
                 else o["notional"] / o["entry_buy"]
             ),
             safety_usd=o["notional"] * o.get("safety_pct", 0) / 100,
+            paired_policy=policy,
+            funding_calendar=o.get('funding_calendar') if policy else None,
         )
         if "fee_pct" in o:
-            p.entry_fees_usd = (
+            p.entry_fees_usd = o.get('entry_fee_usd', (
                 p.base_qty * (p.entry_buy + p.entry_sell) * o["fee_pct"] / 400
-            )
+            ))
         reserved = (
             p.base_qty * (p.entry_buy + p.entry_sell)
             + (p.entry_fees_usd or 0)
@@ -146,9 +162,9 @@ class PaperEngine:
             gross = p.base_qty * (
                 (o["exit_buy"] - p.entry_buy) + (p.entry_sell - o["exit_sell"])
             )
-            exit_fees = (
+            exit_fees = o.get('exit_fee_usd', (
                 p.base_qty * (o["exit_buy"] + o["exit_sell"]) * o["fee_pct"] / 400
-            )
+            ))
             p.current_net_usd = gross - p.entry_fees_usd - exit_fees - p.safety_usd
             p.current_spread = o["exit_spread"]
             p.best_net_usd = max(0, p.current_net_usd)
@@ -176,6 +192,21 @@ class PaperEngine:
         lookup = {(o["symbol"], o["buy"], o["sell"]): o for o in ops}
         closed = []
         for p in list(self.positions.values()):
+            if p.exit_pending:
+                # Both model prices are frozen when the exit triggers. Unknown
+                # funding keeps the reservation, never reopens either leg.
+                h = await self.funding_history(p, p.exit_pending['ts']) if self.funding_history else None
+                if not h or not h.verified or h.covered_until < p.exit_pending['ts']:
+                    continue
+                updated = copy.deepcopy(p)
+                updated.last_mark = dict(p.exit_pending['mark'], funding=h.amount,
+                                         funding_known=True, funding_events=h.events,
+                                         net=p.exit_pending['price_net'] + h.amount)
+                updated.current_net_usd = updated.last_mark['net']
+                await self.diary.update_paper_position(asdict(updated))
+                p.__dict__.update(updated.__dict__)
+                closed.append(await self.close(p.id, p.exit_pending['reason']))
+                continue
             o = lookup.get((p.symbol, p.buy, p.sell))
             if not o:
                 continue
@@ -210,9 +241,13 @@ class PaperEngine:
                 p.entry_fees_usd = (
                     qty * (p.entry_buy + p.entry_sell) * o["fee_pct"] / 400
                 )
-            exit_fees = qty * (o["exit_buy"] + o["exit_sell"]) * o["fee_pct"] / 400
+            exit_fees = o.get('exit_fee_usd', qty * (o["exit_buy"] + o["exit_sell"]) * o["fee_pct"] / 400)
             fees = p.entry_fees_usd + exit_fees
             funding = p.notional * float(o.get("settled_funding_pct", 0)) / 100
+            h = None
+            if p.paired_policy:
+                h = await self.funding_history(p, o.get('decision_at', o.get('ts', time.time()))) if self.funding_history else None
+                funding = h.amount if h and h.verified else 0
             p.current_net_usd = gross - fees - p.safety_usd + funding
             p.last_mark = dict(
                 ts=o.get("decision_at", o.get("ts", time.time())),
@@ -226,15 +261,31 @@ class PaperEngine:
                 exit_spread=o["exit_spread"],
                 net=p.current_net_usd,
                 mode="PAPER_MODEL",
+                fee_source=o.get('fee_source', 'LEGACY_PUBLIC_RATE_ASSUMPTION'),
             )
-            p.best_net_usd = max(p.best_net_usd, p.current_net_usd)
+            if p.paired_policy:
+                p.last_mark.update(funding_known=bool(h and h.verified),
+                                   funding_reason=h.reason if h else 'FUNDING_HISTORY_UNAVAILABLE',
+                                   funding_events=h.events if h and h.verified else ())
+            p.best_net_usd = max(p.best_net_usd, p.current_net_usd if not p.paired_policy or (h and h.verified) else 0)
             p.current_spread = o["exit_spread"]
             await self.diary.update_paper_position(asdict(p))
             self.positions[p.id].__dict__.update(p.__dict__)
             p = self.positions[p.id]
             conv = 1 - p.current_spread / p.entry_spread if p.entry_spread > 0 else 0
             reason = None
-            if conv >= self.target and p.current_net_usd > 0:
+            if p.paired_policy:
+                from .paired_paper_policy import exit_reason
+                reason = exit_reason(p.paired_policy, p.opened_at, p.best_net_usd, p.last_mark, bool(h and h.verified))
+                if reason and (not h or not h.verified or h.covered_until < p.last_mark['ts']):
+                    pending = dict(ts=p.last_mark['ts'], mark=p.last_mark, reason=reason,
+                                   price_net=gross-fees-p.safety_usd)
+                    updated = copy.deepcopy(p)
+                    updated.exit_pending = pending
+                    await self.diary.update_paper_position(asdict(updated))
+                    p.__dict__.update(updated.__dict__)
+                    continue
+            elif conv >= self.target and p.current_net_usd > 0:
                 reason = "TARGET"
             elif p.best_net_usd > 0 and p.current_net_usd <= p.best_net_usd * (
                 1 - self.trailing

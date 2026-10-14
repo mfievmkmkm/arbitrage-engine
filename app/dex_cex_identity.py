@@ -33,6 +33,11 @@ def matching_contract(currency, route):
             # Exchange native SOL corresponds to the canonical wrapped-SOL DEX mint.
             rows.append(route['asset'])
             continue
+        if (not address and currency['code']=='ETH' and route['chain_id']==1
+                and route['asset'].lower()=='0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'):
+            # Canonical Ethereum WETH unwraps 1:1 into exchange native ETH.
+            rows.append(route['asset'].lower())
+            continue
         if not isinstance(address, str):
             continue
         valid = mint_valid(address) if route['chain_id']=='solana' else ADDRESS.fullmatch(address)
@@ -52,6 +57,7 @@ class Gate:
         cached = self.cache.get(venue)
         if not cached or self.clock()-cached[0] > 300:
             data = None
+            errors = []
             for client in (self.private.get(venue), self.public.get(venue)):
                 if client is None:
                     continue
@@ -62,14 +68,19 @@ class Gate:
                             break
                     except asyncio.CancelledError:
                         raise
-                    except Exception:
+                    except Exception as exc:
+                        errors.append(type(exc).__name__)
                         continue
                 existing = getattr(client, 'currencies', {})
                 if matching_contract(existing.get(route['base']), route):
                     data = existing
                     break
-            self.cache[venue] = (self.clock(), data or {})
+            self.cache[venue] = (self.clock(), data or {}, bool(data), tuple(errors))
             cached = self.cache[venue]
+        if not cached[2]:
+            raise ValueError('DEX_CEX_METADATA_UNAVAILABLE')
+        if route['base'] not in cached[1]:
+            raise ValueError('DEX_CEX_CURRENCY_NOT_LISTED')
         if not matching_contract(cached[1].get(route['base']), route):
             raise ValueError('DEX_CEX_IDENTITY_UNVERIFIED')
         return dict(source='EXCHANGE_CURRENCY_NETWORK_METADATA', chain_id=route['chain_id'],

@@ -42,6 +42,7 @@ class Bundle:
         self.funding_paper = None
         self.dex_paper = None
         self.dex_experiments = {}
+        self.dex_paired = None
         self.public_channel_reader = None
         self.route_discovery = None
         self.wallet_session = None

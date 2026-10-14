@@ -122,6 +122,8 @@ def main():
                     PAPER_CAPITAL_USD="50", BOOK_HISTORY_MAX_ROWS="20000", BOOK_HISTORY_HOURS="24")
     for k, v in defaults.items():
         os.environ.setdefault(k, v)
+    from .paired_paper_profile import configure
+    configure(os.environ)
     data = prepare_environment(os.environ, "/data")
     asyncio.run(expand_watchlist(os.environ, data))
     run_database(Path(os.environ["DB_PATH"]))

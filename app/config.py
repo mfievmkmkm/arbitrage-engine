@@ -94,6 +94,7 @@ class Config:
     ).strip().lower() in ("1", "true", "yes", "on")
     live_metrics_path: str = os.getenv("LIVE_METRICS_PATH", "live_metrics.json")
     paper_capital: float = max(10, float(os.getenv("PAPER_CAPITAL_USD", "50")))
+    paired_paper_enabled: bool = os.getenv('PAIRED_PAPER_ENABLED', 'false').strip().lower() in ('true', '1', 'yes', 'on')
     max_paper_positions: int = max(1, int(os.getenv("MAX_PAPER_POSITIONS", "2")))
     paper_entry_edge: float = float(os.getenv("PAPER_ENTRY_EDGE_PCT", "2.0"))
     paper_target_convergence: float = float(
@@ -121,3 +122,5 @@ class Config:
 
 
 config = Config()
+if config.paired_paper_enabled and (config.live_enabled or config.live_entry_enabled or os.getenv('DEX_LIVE_ENABLED', 'false').lower() in ('true', '1', 'yes', 'on')):
+    raise ValueError('PAIRED_EXPERIMENT_REQUIRES_PAPER_ONLY')
