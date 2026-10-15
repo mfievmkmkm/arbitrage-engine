@@ -14,6 +14,83 @@ def environment(volume, **changes):
                 RAILWAY_VOLUME_MOUNT_PATH=str(volume), PAPER_SERVER_FRESH_START="true", **changes)
 
 
+@pytest.mark.parametrize('name', ['arbitrage.sqlite3', 'arbitrage.db'])
+@pytest.mark.parametrize('explicit', [False, True])
+def test_existing_root_database_and_runtime_are_reused_without_fresh_start(tmp_path, name, explicit):
+    db = tmp_path / name
+    with sqlite3.connect(db) as c:
+        c.execute('CREATE TABLE history(net REAL)')
+        c.execute('INSERT INTO history VALUES(-7.5)')
+    (tmp_path / 'runtime_state.json.paper_controls.json').write_text('{"paused":true}')
+    before = db.read_bytes()
+    values = environment(tmp_path)
+    values['PAPER_SERVER_FRESH_START'] = 'false'
+    if explicit:
+        values['DB_PATH'] = str(db)
+    assert prepare_environment(values, tmp_path) == tmp_path
+    assert values['DB_PATH'] == str(db)
+    assert values['RUNTIME_STATE_PATH'] == str(tmp_path / 'runtime_state.json')
+    assert db.read_bytes() == before
+    assert not (tmp_path / 'paper/arbitrage.sqlite3').exists()
+
+
+def test_missing_explicit_path_cannot_create_empty_database_beside_history(tmp_path):
+    with sqlite3.connect(tmp_path/'arbitrage.sqlite3') as db:
+        db.execute('CREATE TABLE history(net REAL)')
+    values = environment(tmp_path, DB_PATH=str(tmp_path/'paper/arbitrage.sqlite3'))
+    with pytest.raises(ValueError, match='CONFIGURED_DB_MISSING'):
+        prepare_environment(values, tmp_path)
+    assert not (tmp_path/'paper/arbitrage.sqlite3').exists()
+
+
+def test_two_databases_require_explicit_selection(tmp_path):
+    (tmp_path/'paper').mkdir()
+    for path in (tmp_path/'arbitrage.sqlite3', tmp_path/'paper/arbitrage.sqlite3'):
+        with sqlite3.connect(path) as db:
+            db.execute('CREATE TABLE history(net REAL)')
+    with pytest.raises(ValueError, match='AMBIGUOUS'):
+        prepare_environment(environment(tmp_path), tmp_path)
+
+
+def test_relative_legacy_paths_follow_existing_database_directory(tmp_path):
+    with sqlite3.connect(tmp_path/'arbitrage.sqlite3') as db:
+        db.execute('CREATE TABLE history(net REAL)')
+    values = environment(tmp_path, DB_PATH='arbitrage.sqlite3', RUNTIME_STATE_PATH='runtime_state.json')
+    prepare_environment(values, tmp_path)
+    assert values['DB_PATH'] == str(tmp_path/'arbitrage.sqlite3')
+    assert values['RUNTIME_STATE_PATH'] == str(tmp_path/'runtime_state.json')
+
+
+def test_root_runtime_without_database_cannot_silently_start_empty(tmp_path):
+    (tmp_path/'runtime_state.json.paper_controls.json').write_text('{"paused":true}')
+    with pytest.raises(ValueError, match='OLD_DATA_NOT_EMPTY'):
+        prepare_environment(environment(tmp_path), tmp_path)
+
+
+def test_database_outside_persistent_volume_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match='OUTSIDE_VOLUME'):
+        prepare_environment(environment(tmp_path, DB_PATH='/app/arbitrage.sqlite3'), tmp_path)
+
+
+def test_database_parent_traversal_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match='OUTSIDE_VOLUME'):
+        prepare_environment(environment(tmp_path, DB_PATH=str(tmp_path)+'/../outside.sqlite3'), tmp_path)
+
+
+def test_volume_directory_is_not_accepted_as_a_database(tmp_path):
+    with pytest.raises(ValueError, match='DATABASE_NOT_FILE'):
+        prepare_environment(environment(tmp_path, DB_PATH=str(tmp_path)), tmp_path)
+
+
+def test_legacy_database_symlink_cannot_escape_volume(tmp_path):
+    outside = tmp_path.parent / (tmp_path.name + '-outside.sqlite3')
+    with sqlite3.connect(outside) as db:
+        db.execute('CREATE TABLE history(net REAL)')
+    (tmp_path/'arbitrage.sqlite3').symlink_to(outside)
+    with pytest.raises(ValueError, match='SYMLINK'):
+        prepare_environment(environment(tmp_path), tmp_path)
+
+
 def test_railway_new_database_and_redeploy_preserve_history_and_paths(tmp_path):
     values = environment(tmp_path)
     data = prepare_environment(values, tmp_path)
