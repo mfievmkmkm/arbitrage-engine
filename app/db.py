@@ -20,6 +20,7 @@ class Diary:
                 "CREATE TABLE IF NOT EXISTS signal_decisions(id INTEGER PRIMARY KEY,ts REAL,strategy TEXT,symbol TEXT,buy TEXT,sell TEXT,action TEXT,reason TEXT,payload TEXT)"
             )
             await d.execute('CREATE INDEX IF NOT EXISTS idx_signal_decisions_strategy_id ON signal_decisions(strategy,id)')
+            await d.execute('CREATE TABLE IF NOT EXISTS scan_cycles(id INTEGER PRIMARY KEY,ts REAL,status TEXT,payload TEXT)')
             async with d.execute("PRAGMA table_info(paper_positions)") as c:
                 columns = {x[1] for x in await c.fetchall()}
             for name in ("base_qty", "entry_fees_usd", "safety_usd"):
@@ -387,6 +388,14 @@ class Diary:
                         )
                     )
             return out
+
+    async def record_scan(self, summary):
+        # Includes empty cycles: absence of trades is not absence of scanning.
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute('INSERT INTO scan_cycles(ts,status,payload) VALUES(?,?,?)',
+                             (summary['ts'], summary.get('status', 'COMPLETED'),
+                              json.dumps(summary, ensure_ascii=False, allow_nan=False)))
+            await db.commit()
 
     async def record_decisions(self, rows):
         if not rows:

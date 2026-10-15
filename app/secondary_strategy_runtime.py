@@ -1,6 +1,20 @@
 import asyncio, time, logging
 
 
+def live_dispatch_enabled(config, strategy):
+    """Paper toggles do not request LIVE entry. This is not execution authority.
+
+    Existing positions are monitored separately; private/exchange gates still
+    run inside each coordinator when LIVE entry was explicitly configured.
+    """
+    if not config.live_enabled or not config.live_entry_enabled:
+        return False
+    flag = {'spot_futures': 'live_spot_futures_enabled',
+            'spot_spot': 'live_spot_spot_enabled',
+            'funding_arb': 'live_funding_enabled'}.get(strategy)
+    return bool(getattr(config, flag, False)) if flag else strategy == 'dex_live_candidates'
+
+
 class SecondaryRuntime:
     def __init__(self, runtime, diary_record, db_path, interval=30):
         self.runtime = runtime

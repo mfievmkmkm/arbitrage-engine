@@ -22,7 +22,11 @@ def plan(notional, raw_edge, costs, funding_reserve=0):
 
 def exit_reason(policy, opened_at, best, mark, funding_known):
     price_net = mark['gross'] - mark['entry_fees'] - mark['exit_fees'] - mark['safety']
-    if price_net <= -policy['stop_usd']:
+    # Settled funding is real model PnL, not a forecast. It must participate in
+    # the loss limit. Without verified funding retain the price-only emergency
+    # exit; accounting stays pending rather than inventing a zero payment.
+    risk_net = min(price_net, mark['net']) if funding_known else price_net
+    if risk_net <= -policy['stop_usd']:
         return 'NET_STOP'
     if mark['ts'] - opened_at >= policy['max_seconds']:
         return 'TIME_STOP'

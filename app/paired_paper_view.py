@@ -48,6 +48,8 @@ async def render(path, paper, scanner, risk, runtime, dex, bundle):
         out.append('⏸ Лимит риска: ' + escape(risk.state.reason))
     if len(scanner.clients) < 2:
         out.append('⚠️ Для Futures ↔ Futures нужны две доступные биржи.')
+    from .scan_diagnostics import render as scan_status
+    out.append(scan_status(scanner))
     if counts:
         out.append('Последние 1000 решений:\n' + '\n'.join(f'• {escape(reason(k))}: {n}' for k,n in counts))
     else:

@@ -11,9 +11,20 @@ class FundingService:
         self.cache = FundingCache(ttl)
         self.timeout = timeout
         self.errors = {}
+        self._locks = {}
 
     async def get(self, exchange, symbol):
+        # The same venue/symbol participates in several pairs. Concurrent
+        # discovery must share its cached fetch instead of duplicating traffic.
+        lock = self._locks.setdefault((exchange, symbol), asyncio.Lock())
+        async with lock:
+            return await self._get(exchange, symbol)
+
+    async def _get(self, exchange, symbol):
         cached = self.cache.get(exchange, symbol)
+        # A cache TTL must not keep a past settlement as the *next* funding.
+        if cached and cached.get('next_ts') is not None and cached['next_ts'] <= time.time() * 1000:
+            cached = None
         if cached:
             return FundingSnapshot(
                 exchange,
@@ -46,6 +57,7 @@ class FundingService:
                 next_ts,
                 interval.hours if interval.known else None,
             )
+            self.errors.pop((exchange, symbol), None)
             return FundingSnapshot(
                 exchange,
                 symbol,

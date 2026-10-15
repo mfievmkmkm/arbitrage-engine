@@ -11,6 +11,9 @@ def analyze(path):
         "CSV alone cannot prove scanner correctness or profitable execution."
     ]}
     with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read('manifest.json')) if 'manifest.json' in archive.namelist() else {}
+        tables = manifest.get('tables', {})
+        coverage = {title.lower().replace(' ', '_') + '.csv': info for title, info in tables.items()}
         for name in FILES:
             if name not in archive.namelist():
                 continue
@@ -19,10 +22,30 @@ def analyze(path):
             for row in rows:
                 reasons[row.get("reason") or "UNSPECIFIED"] += 1
                 actions[row.get("action") or "UNSPECIFIED"] += 1
+            count = sum(reasons.values())
+            info = coverage.get(name, {})
             result["decisions"][name] = {
-                "count": sum(reasons.values()), "possibly_capped": sum(reasons.values()) == 5000,
+                "count": count, "possibly_capped": info.get('truncated', count == 5000),
+                "total_rows": info.get('total_rows'),
                 "reasons": dict(reasons.most_common()), "actions": dict(actions)
             }
+        if 'scan_cycles.csv' in archive.namelist():
+            states, counters = Counter(), Counter()
+            latest = None
+            count = 0
+            for row in csv.DictReader(io.StringIO(archive.read('scan_cycles.csv').decode('utf-8-sig'))):
+                count += 1
+                states[row.get('status') or 'UNSPECIFIED'] += 1
+                summary = json.loads(row['payload'])
+                counters.update(summary.get('counters', {}))
+                if latest is None or summary['ts'] > latest['ts']:
+                    latest = summary
+            result['scan_cycles'] = dict(count=count, statuses=dict(states),
+                                        sample_counters=dict(counters), latest=latest,
+                                        coverage=coverage.get('scan_cycles.csv', {}))
+        else:
+            result['scan_cycles'] = dict(available=False,
+                limitation='No scan-cycle journal in this export; zero opportunities cannot establish that scanning worked.')
     return result
 
 if __name__ == "__main__":

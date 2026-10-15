@@ -5,10 +5,11 @@ import time
 from .funding_paper_source import Source, History
 
 
-async def attach(row, service, hold_seconds=1200):
+async def attach(row, service, hold_seconds=1200, snapshots=None):
     try:
         now = row.get('decision_at', row.get('ts', time.time()))
-        snapshots = await asyncio.gather(service.get(row['buy'], row['symbol']), service.get(row['sell'], row['symbol']))
+        if snapshots is None:
+            snapshots = await asyncio.gather(service.get(row['buy'], row['symbol']), service.get(row['sell'], row['symbol']))
         calendar, reserve = {}, 0
         for prefix, sign, price, snap in zip(('long', 'short'), (-1, 1), (row['entry_buy'], row['entry_sell']), snapshots):
             first, hours, rate = float(snap.next_ts) / 1000, float(snap.interval_hours), float(snap.rate)
@@ -17,9 +18,9 @@ async def attach(row, service, hold_seconds=1200):
             calendar.update({prefix + '_next': first, prefix + '_interval': hours})
             count = max(0, int((now + hold_seconds - first) // (hours * 3600)) + 1)
             reserve += max(0, -sign * rate) * count * row['base_qty'] * price
-        row.update(funding_calendar=calendar, funding_reserve_usd=reserve)
+        row.update(funding_calendar=calendar, funding_reserve_usd=reserve, funding_known=True)
     except (ValueError, TypeError, AttributeError):
-        row['funding_calendar'] = None
+        row.update(funding_calendar=None, funding_known=False, funding_reserve_usd=0)
     return row
 
 

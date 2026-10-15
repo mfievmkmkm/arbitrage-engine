@@ -11,6 +11,12 @@ from .paired_futures_funding import attach
 
 async def refresh(row, scanner, position=None):
     symbol, buy, sell = row['symbol'], row['buy'], row['sell']
+    # Funding requests may take seconds on a cold cache. Do them before the
+    # executable books, otherwise valid fresh books expire while funding loads.
+    snapshots = None
+    if not position:
+        snapshots = await asyncio.gather(scanner.funding.get(buy, symbol),
+                                         scanner.funding.get(sell, symbol))
     async def read(venue):
         start = time.time()
         raw = await asyncio.wait_for(scanner.clients[venue].fetch_order_book(symbol, limit=20), 2)
@@ -55,9 +61,7 @@ async def refresh(row, scanner, position=None):
     result['entry_fee_components']={buy:result['base_qty']*prices[0]*rates[0],sell:result['base_qty']*prices[1]*rates[1]}
     result['exit_fee_components']={buy:result['base_qty']*prices[2]*rates[0],sell:result['base_qty']*prices[3]*rates[1]}
     if not position:
-        result['funding_known'] = row.get('funding_known', False)
-        await attach(result, scanner.funding, scanner.hold_seconds)
-        result['funding_known'] = bool(result.get('funding_calendar'))
+        await attach(result, scanner.funding, scanner.hold_seconds, snapshots=snapshots)
     if time.time() - min(a.fetched, b.fetched) > 1.5:
         raise ValueError('PAIRED_BOOK_DEPTH_OR_AGE')
     return result

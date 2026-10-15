@@ -10,6 +10,7 @@ from .export_service import write_csv
 from .secret_redaction import redact
 
 TABLES = {
+    "Scan cycles": "scan_cycles",
     "DEX paired trades": "cex_dex_virtual_paper_paired",
     "DEX paired marks": "cex_dex_virtual_paper_paired_marks",
     "DEX paired decisions": "cex_dex_virtual_paper_paired_decisions",

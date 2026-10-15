@@ -1148,10 +1148,15 @@ async def scanning():
                 x for x in scanner.ids if venue_controller.get(x)["scan"]
             }
             quotes = await scanner.scan()
+            if getattr(scanner, 'last_diagnostics', None):
+                await diary.record_scan(scanner.last_diagnostics)
             if paired_paper:
                 from .paired_futures_funding import attach
-                for row in quotes:
-                    await attach(row, scanner.funding, config.paper_max_seconds)
+                funding_slots = asyncio.Semaphore(max(1, scanner.concurrency // 2))
+                async def attach_calendar(row):
+                    async with funding_slots:
+                        await attach(row, scanner.funding, config.paper_max_seconds)
+                await asyncio.gather(*(attach_calendar(row) for row in quotes))
             latest = [x for x in quotes if x["hypothetical_edge"] > 0]
             strategy_runtime.update(
                 "futures_futures",
@@ -1245,6 +1250,10 @@ async def scanning():
         except Exception:
             risk.on_error()
             log.exception("Scan failed")
+            try:
+                await diary.record_scan(dict(ts=time.time(), status='FAILED'))
+            except Exception:
+                log.exception('Failed to persist scanner failure')
         await asyncio.sleep(config.interval)
 
 
@@ -1747,13 +1756,14 @@ async def main():
             live_monitor.cash_observer.dex = dex_live.marker
 
         async def secondary_rows(name, rows, entry_enabled):
+            from .secondary_strategy_runtime import live_dispatch_enabled
             coordinator = {
                 "spot_futures": spot_future_live,
                 "spot_spot": spot_spot_live,
                 "funding_arb": funding_live,
                 "dex_live_candidates": dex_live,
             }.get(name)
-            if entry_enabled and coordinator:
+            if entry_enabled and coordinator and live_dispatch_enabled(config, name):
                 async with live_monitor.lock:
                     await coordinator.process_rows(rows)
                 live_monitor.request_cycle()

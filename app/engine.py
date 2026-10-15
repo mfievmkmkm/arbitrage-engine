@@ -1,6 +1,7 @@
 """Public market-data discovery. No order placement."""
 
 import asyncio, time, math
+from collections import Counter
 from dataclasses import dataclass
 from .exchange_names import public_exchange_class as exchange_class
 from .public_books import wrap, normalize
@@ -115,6 +116,7 @@ class Scanner:
         self.paused = False
         self.last_scan = None
         self.universe = None
+        self.last_diagnostics = None
 
     async def start(self):
         async def init(name):
@@ -162,6 +164,9 @@ class Scanner:
         )
 
     async def scan(self):
+        started_at = time.time()
+        counters = Counter()
+        venue_books = {v: Counter() for v in self.clients}
         symbols = list(
             dict.fromkeys(
                 [x[0] for x in sorted(self.watch_routes)]
@@ -193,6 +198,8 @@ class Scanner:
 
         async def fetch(name, symbol):
             async with sem:
+                counters['books_requested'] += 1
+                venue_books[name]['requested'] += 1
                 started = time.perf_counter()
                 requested_at = time.time()
                 try:
@@ -213,11 +220,15 @@ class Scanner:
                         not math.isfinite(stamp)
                         or not 0 <= time.time() - stamp <= self.max_age
                     ):
+                        counters['books_stale'] += 1
                         return None
                     self.health.success(name, (time.perf_counter() - started) * 1000)
                     spec = self.specs[name][symbol]
                     if not b.get("asks") or not b.get("bids"):
+                        counters['books_empty'] += 1
                         return None
+                    counters['books_ok'] += 1
+                    venue_books[name]['ok'] += 1
                     return Quote(
                         name,
                         symbol,
@@ -228,6 +239,11 @@ class Scanner:
                         source,
                     )
                 except Exception as e:
+                    counters['book_errors'] += 1
+                    counters['book_error:' + type(e).__name__] += 1
+                    venue_books[name]['errors'] += 1
+                    if isinstance(e, ValueError) and str(e) == 'PUBLIC_BOOK_STALE':
+                        counters['books_stale'] += 1
                     self.errors[name] = type(e).__name__
                     self.health.failure(name, type(e).__name__)
                     return None
@@ -260,16 +276,21 @@ class Scanner:
         for qs in grouped.values():
             for a in qs:
                 for b in qs:
+                    if a.exchange == b.exchange:
+                        continue
+                    counters['pairs_checked'] += 1
                     if not compatible(
                         self.specs[a.exchange][a.symbol],
                         self.specs[b.exchange][b.symbol],
                     ):
+                        counters['pairs_incompatible'] += 1
                         continue
                     if not min_notional_ok(
                         self.specs[a.exchange][a.symbol], self.notional, a.asks[0][0]
                     ) or not min_notional_ok(
                         self.specs[b.exchange][b.symbol], self.notional, b.bids[0][0]
                     ):
+                        counters['pairs_below_minimum'] += 1
                         continue
                     position = self.watch_positions.get(
                         (a.symbol, a.exchange, b.exchange)
@@ -280,6 +301,10 @@ class Scanner:
                         else None
                     )
                     r = evaluate(a, b, self.notional, self.max_age, now, base_qty=qty)
+                    if r is None:
+                        counters['pairs_stale_or_depth'] += 1
+                    elif r['hypothetical_edge'] <= 0:
+                        counters['pairs_no_edge_before_funding'] += 1
                     if r and (
                         r["hypothetical_edge"] > 0
                         or (r["symbol"], r["buy"], r["sell"]) in self.watch_routes
@@ -333,6 +358,8 @@ class Scanner:
                         o["entry_sell"],
                     )
             o["native_plan"] = native.row()
+            if not native.valid:
+                counters['native_block:' + native.reason] += 1
             if (
                 watched_position
                 and native.valid
@@ -346,10 +373,14 @@ class Scanner:
                 o["executable"], o["fee_pct"], 0, self.safety_buffer_pct
             ).net_pct
         if self.funding:
-            for o in ops:
-                carry, known, status = await self.funding.pair_carry_pct(
-                    o["buy"], o["sell"], o["symbol"], self.hold_seconds
-                )
+            # Bound independent pairs instead of serially waiting up to two
+            # funding timeouts per candidate (up to 50 candidates per cycle).
+            funding_slots = asyncio.Semaphore(max(1, self.concurrency // 2))
+            async def enrich(o):
+                async with funding_slots:
+                    carry, known, status = await self.funding.pair_carry_pct(
+                        o["buy"], o["sell"], o["symbol"], self.hold_seconds
+                    )
                 o["funding_pct"] = carry
                 o["funding_known"] = known
                 o["funding_status"] = status
@@ -357,6 +388,18 @@ class Scanner:
                 o["hypothetical_edge"] = net_edge(
                     o["executable"], o["fee_pct"], carry, self.safety_buffer_pct
                 ).net_pct
+                if not known:
+                    counters['funding_unknown'] += 1
+            await asyncio.gather(*(enrich(o) for o in ops))
             ops.sort(key=lambda x: x["hypothetical_edge"], reverse=True)
         self.last_scan = now
+        self.last_diagnostics = dict(
+            ts=started_at, finished_at=time.time(),
+            duration_seconds=time.time() - started_at,
+            symbols_selected=len(symbols), venues_online=len(self.clients),
+            symbols_with_books=len(grouped), candidates_returned=len(ops),
+            symbols_with_two_books=sum(len(qs) >= 2 for qs in grouped.values()),
+            paused=self.paused, counters=dict(counters),
+            venue_books={v: dict(counts) for v, counts in venue_books.items()},
+        )
         return ops
