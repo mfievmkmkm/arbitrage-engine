@@ -56,26 +56,42 @@ class Gate:
         venue = route['cex_venue']
         cached = self.cache.get(venue)
         if not cached or self.clock()-cached[0] > 300:
-            data = None
+            data = {}
             errors = []
+            # Collect all read-only sources. A nonempty currency response can
+            # still omit this asset or its networks; it is not a reason to skip
+            # the other client. Keep conflicting network evidence fail-closed.
+            def collect(currencies):
+                if not isinstance(currencies, dict):
+                    return
+                for code, currency in currencies.items():
+                    if not isinstance(currency, dict):
+                        continue
+                    merged = data.setdefault(code, dict(currency, networks={}))
+                    for key, network in (currency.get('networks') or {}).items():
+                        if not isinstance(network, dict):
+                            continue
+                        networks = merged['networks']
+                        name = key
+                        while name in networks and networks[name] != network:
+                            name = str(name) + '#'
+                        # Preserve the network name when retaining conflicts.
+                        networks[name] = dict(network, network=network.get('network') or key)
+
+            seen = set()
             for client in (self.private.get(venue), self.public.get(venue)):
-                if client is None:
+                if client is None or id(client) in seen:
                     continue
+                seen.add(id(client))
                 if getattr(client, 'has', {}).get('fetchCurrencies') is True:
                     try:
-                        data = await asyncio.wait_for(client.fetch_currencies(), 3)
-                        if isinstance(data, dict):
-                            break
+                        collect(await asyncio.wait_for(client.fetch_currencies(), 3))
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
                         errors.append(type(exc).__name__)
-                        continue
-                existing = getattr(client, 'currencies', {})
-                if matching_contract(existing.get(route['base']), route):
-                    data = existing
-                    break
-            self.cache[venue] = (self.clock(), data or {}, bool(data), tuple(errors))
+                collect(getattr(client, 'currencies', {}))
+            self.cache[venue] = (self.clock(), data, bool(data), tuple(errors))
             cached = self.cache[venue]
         if not cached[2]:
             raise ValueError('DEX_CEX_METADATA_UNAVAILABLE')
