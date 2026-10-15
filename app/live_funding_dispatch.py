@@ -94,7 +94,7 @@ class Coordinator(DerivativeCoordinator):
         return result
 
     def durable_metadata(self, op):
-        return dict(strategy="funding_arb", funding_plan=op["_funding_plan"])
+        return dict(super().durable_metadata(op), strategy="funding_arb", funding_plan=op["_funding_plan"])
 
     async def process_rows(self, rows):
         offers = [

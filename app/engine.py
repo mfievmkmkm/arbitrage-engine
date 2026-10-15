@@ -397,6 +397,8 @@ class Scanner:
             ts=started_at, finished_at=time.time(),
             duration_seconds=time.time() - started_at,
             symbols_selected=len(symbols), venues_online=len(self.clients),
+            universe_total=self.universe.total_coverage if self.universe else 0,
+            symbols_scanned=list(symbols),
             symbols_with_books=len(grouped), candidates_returned=len(ops),
             symbols_with_two_books=sum(len(qs) >= 2 for qs in grouped.values()),
             paused=self.paused, counters=dict(counters),

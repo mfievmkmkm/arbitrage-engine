@@ -172,6 +172,9 @@ live_supervisor = LiveSupervisor(config.max_engine_errors)
 live_stop = None
 strategy_runtime = StrategyRuntime()
 bankroll = Ledger(config.paper_capital)
+from .trading_controls import Controls
+trading_controls = Controls(config.runtime_state_path + '.trading_controls.json',
+                            paper_notional=config.notional, live_notional=min(5, config.notional))
 notification_bot = None
 secondary = None
 live_monitor = None
@@ -213,7 +216,62 @@ def menu():
     if paired_paper:
         from .paper_console import main_menu as paper_menu
         return paper_menu(scanner.paused)
-    return main_menu(scanner.paused)
+    else:
+        keyboard = main_menu(scanner.paused)
+    return InlineKeyboardMarkup(inline_keyboard=keyboard.inline_keyboard + [
+        [InlineKeyboardButton(text='🎛 Среда · режим · риск', callback_data='ctl:show')]])
+
+
+def operator_paper_reason(strategy, row):
+    risk.roll_day()
+    symbol = row.get('symbol') or row.get('base')
+    reason = trading_controls.entry_reason('paper', strategy, symbol)
+    if reason:
+        return reason
+    p = row.get('paired_policy') or {}
+    notional = row.get('notional', row.get('entry_cash', 0))
+    if row.get('entry_price') and row.get('base_qty'):
+        notional = max(notional, row['base_qty'] * row['entry_price'])
+    positions = len(paper.positions)
+    dex = getattr(secondary, 'dex_paired', None)
+    positions += len(dex.positions) if dex else 0
+    if secondary:
+        for name in ('sf_paper', 'ss_paper', 'funding_paper'):
+            module = getattr(secondary, name, None)
+            positions += len(getattr(module, 'positions', {}))
+    day_net = risk.state.paper_daily_pnl
+    if dex and dex.state.get('day') == int(time.time()//86400):
+        day_net += dex.state.get('day_net', 0)
+    projected = p.get('partial_net')
+    if p and strategy == 'dex_paired':
+        row['paired_policy'] = trading_controls.tighten_policy(p)
+        if -row.get('entry_immediate_net', 0) >= row['paired_policy']['stop_usd']:
+            return 'OPERATOR_STOP_TOO_TIGHT'
+    return trading_controls.risk_reason(notional, positions, day_net, projected,
+                                       row.get('executable'))
+
+
+def apply_operator_paper_limits():
+    p = trading_controls.profile('paper')
+    paper.max_positions = p['max_positions']
+    # A smaller limit halts new entries; it never liquidates or rewrites the
+    # exit policy of an existing position.
+    risk.daily_stop_pct = min(config.daily_stop_pct, p['daily_loss_usd']/risk.bankroll*100)
+
+
+async def paper_futures_entry(row):
+    from .paired_futures_quotes import refresh
+    from .paired_paper_profile import futures_cooldown
+    # Always re-fetch executable prices, including manual confirmations.
+    fresh = await refresh(row, scanner)
+    reason = await futures_cooldown(config.db_path, row['symbol'])
+    if reason:
+        return None, reason, fresh
+    async with paired_lock:
+        reason = paper_entry_reason(fresh)
+        fresh['operator_risk_limits'] = trading_controls.profile('paper')
+        position = await paper.open(fresh) if reason == 'ENTRY_ALLOWED' else None
+    return position, reason if position or reason != 'ENTRY_ALLOWED' else 'CAPACITY_OR_DUPLICATE', fresh
 
 
 def allowed(uid):
@@ -1026,8 +1084,131 @@ async def opportunity(q: CallbackQuery):
     except (ValueError, IndexError, StopIteration):
         await q.answer("Список обновился — открой рынок снова", show_alert=True)
         return
-    await safe_edit(q.message, render_market_detail(name, row), back_menu(parent="top"))
+    keyboard = back_menu(parent='top')
+    text = render_market_detail(name, row)
+    if trading_controls.profile()['mode'] == 'manual' and name == 'futures_futures':
+        token = trading_controls.issue(name, row)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f'Подтвердить {trading_controls.environment.upper()} вход', callback_data='enter:'+token)]] + keyboard.inline_keyboard)
+        text += '\n\nПодтверждение действует 30 секунд. Перед входом цены, обе ноги и риск проверяются заново.'
+    await safe_edit(q.message, text, keyboard)
     await q.answer()
+
+
+@dp.callback_query(F.data.startswith('ctl:'))
+async def trading_control_page(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        await q.answer('Нет доступа', show_alert=True)
+        return
+    from .trading_controls_view import render
+    try:
+        parts = q.data.split(':')
+        if parts[1] == 'dex':
+            dex = getattr(secondary, 'dex_paired', None)
+            if not dex or trading_controls.environment != 'paper' or trading_controls.profile()['mode'] != 'manual':
+                await q.answer('Выбери PAPER → Вручную. Парный DEX LIVE ещё не допущен.', show_alert=True)
+                return
+            import hashlib, json
+            from .dex_virtual_paper_source import route_key
+            buttons = [[InlineKeyboardButton(text=r.get('label', r['cex_symbol'])[:50],
+                callback_data='dcard:'+hashlib.sha256(json.dumps(route_key(r)).encode()).hexdigest()[:16])]
+                for r in dex.source.routes[:12]]
+            buttons.append([InlineKeyboardButton(text='‹ Управление', callback_data='ctl:show')])
+            await safe_edit(q.message, 'Выбери DEX-пару для проверки. Позиция пока не открывается.', InlineKeyboardMarkup(inline_keyboard=buttons))
+            await q.answer()
+            return
+        if parts[1] == 'env':
+            trading_controls.update(environment=parts[2])
+        elif parts[1] == 'mode':
+            trading_controls.update(mode=parts[2])
+        elif parts[1] == 'set':
+            value = int(parts[3]) if parts[2] == 'max_positions' else float(parts[3])
+            trading_controls.update(**{parts[2]:value})
+        apply_operator_paper_limits()
+        while trading_controls.events:
+            event = trading_controls.events[0]
+            await diary.record_decisions([dict(ts=event['ts'], strategy='operator_control', symbol='*',
+                buy='', sell='', action='CONFIG_CHANGE', reason='OPERATOR_UPDATE',
+                before=event['before'], after=event['after'])])
+            trading_controls.events.pop(0)
+        text, keyboard = render(trading_controls, config.live_enabled and config.live_entry_enabled,
+                                show_risk=parts[1] in ('risk','set'))
+        await safe_edit(q.message, text, keyboard)
+        await q.answer('Сохранено' if parts[1]!='show' else '')
+    except (ValueError, IndexError):
+        await q.answer('Недопустимая настройка', show_alert=True)
+
+
+@dp.callback_query(F.data.startswith('enter:'))
+async def manual_entry(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        await q.answer('Нет доступа', show_alert=True)
+        return
+    try:
+        item = trading_controls.claim(q.data.split(':',1)[1])
+    except ValueError:
+        await q.answer('Карточка истекла или уже использована. Открой рынок снова.', show_alert=True)
+        return
+    await q.answer('Проверяю свежие данные')
+    row = item['row']
+    try:
+        with trading_controls.manual_intent(item):
+            if item['environment'] == 'paper' and item['strategy'] == 'dex_paired':
+                from .dex_virtual_paper_source import route_key
+                dex = getattr(secondary, 'dex_paired', None)
+                route = next((r for r in dex.source.routes if list(route_key(r)) == row['route_key']), None) if dex else None
+                if not route:
+                    raise ValueError('DEX_VIRTUAL_ROUTE_CHANGED')
+                await dex.cycle(route, entry_enabled=True)
+                result = 'DEX PAPER: ' + dex.state.get('last_decision', 'Проверь дневник')
+            elif item['environment'] == 'paper' and paired_paper and item['strategy'] == 'futures_futures':
+                position, reason, fresh = await paper_futures_entry(row)
+                await diary.record_decisions([dict(fresh, strategy=item['strategy'],
+                    paired_paper=True, manual=True, action='PAPER_OPEN' if position else 'SKIP', reason=reason)])
+                result = 'Виртуальная пара открыта' if position else 'Вход отклонён: '+reason
+            elif item['environment'] == 'live' and config.live_enabled and config.live_entry_enabled and live_entry_coordinator:
+                async with live_monitor.lock:
+                    outcome = await live_entry_coordinator.process([row])
+                    result = 'LIVE: ' + str(outcome.get('status', 'Проверь журнал исполнения'))
+                live_monitor.request_cycle()
+            else:
+                result = 'Вход заблокирован настройками запуска или недоступен для этого модуля.'
+        await safe_edit(q.message, escape(result), menu())
+    except Exception as exc:
+        log.exception('Manual entry failed')
+        await safe_edit(q.message, 'Вход не подтверждён. Проверь позиции и дневник; повторно нажимать старую карточку нельзя.\n'+escape(type(exc).__name__), menu())
+
+
+@dp.callback_query(F.data.startswith('dcard:'))
+async def manual_dex_card(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        await q.answer('Нет доступа', show_alert=True)
+        return
+    dex = getattr(secondary, 'dex_paired', None)
+    if not dex or trading_controls.environment != 'paper' or trading_controls.profile()['mode'] != 'manual':
+        await q.answer('Требуется PAPER → Вручную', show_alert=True)
+        return
+    import hashlib, json
+    from .dex_virtual_paper_source import route_key
+    route = next((r for r in dex.source.routes if hashlib.sha256(json.dumps(route_key(r)).encode()).hexdigest()[:16] == q.data.split(':')[1]), None)
+    if not route:
+        await q.answer('Маршрут обновился', show_alert=True)
+        return
+    await q.answer('Проверяю пару без открытия')
+    result = await dex.source.entry(route)
+    if not result.get('ok'):
+        from .paired_paper_view import reason
+        await safe_edit(q.message, 'Пара пока недоступна: '+escape(reason(result.get('reason', 'DEX_ENTRY_UNAVAILABLE'))), menu())
+        return
+    p = result['position']
+    token = trading_controls.issue('dex_paired', dict(symbol=p['symbol'], route_key=list(route_key(route))))
+    text = (f'DEX BUY ↔ CEX SHORT · PAPER\n{escape(p["symbol"])}\n'
+            + f'Равный объём ног: {p["base_qty"]:.8g}\nDEX ${p["entry_cash"]:.2f} · CEX ${p["base_qty"]*p["entry_price"]:.2f}\n'
+            + f'NET при частичном схождении: ${p["paired_policy"]["partial_net"]:.4f}\n'
+            + 'Это прогноз. Подтверждение действительно 30 секунд; цены и риск проверяются повторно.')
+    await safe_edit(q.message, text, InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='Подтвердить PAPER вход', callback_data='enter:'+token)],
+        [InlineKeyboardButton(text='‹ Управление', callback_data='ctl:show')]]))
 
 
 @dp.callback_query(F.data.startswith("strategy:"))
@@ -1108,6 +1289,9 @@ async def notify_dex_open(position, label):
 
 
 def paper_entry_reason(op):
+    reason = operator_paper_reason('futures_futures', op)
+    if reason:
+        return reason
     if "native_plan" in op and op["native_plan"].get("valid") is not True:
         return "NATIVE_PLAN_BLOCKED:" + op["native_plan"].get("reason", "UNKNOWN")
     if scanner.paused:
@@ -1124,7 +1308,12 @@ def paper_entry_reason(op):
     if paired_paper:
         from .paired_paper_policy import futures_plan
         try:
-            futures_plan(op)
+            policy = futures_plan(op)
+            policy = trading_controls.tighten_policy(policy)
+            if policy['costs'] > policy['stop_usd'] * .5:
+                return 'OPERATOR_STOP_TOO_TIGHT'
+            if policy['partial_net'] < trading_controls.profile('paper')['min_net_usd']:
+                return 'OPERATOR_NET_LOW'
         except ValueError as exc:
             return str(exc)
     elif op["hypothetical_edge"] < config.paper_entry_edge:
@@ -1138,6 +1327,8 @@ async def scanning():
     global latest
     while True:
         try:
+            apply_operator_paper_limits()
+            scanner.notional = trading_controls.profile()['notional_usd']
             scanner.watch_positions = {
                 (p.symbol, p.buy, p.sell): p for p in paper.positions.values()
             }
@@ -1175,9 +1366,11 @@ async def scanning():
             await diary.record(quotes)
             if (
                 live_entry_coordinator
+                and config.live_enabled
                 and config.live_entry_enabled
                 and not scanner.paused
                 and strategy_runtime.enabled["futures_futures"]
+                and not trading_controls.entry_reason('live', 'futures_futures')
             ):
                 async with live_monitor.lock:
                     await live_entry_coordinator.process(latest)
@@ -1212,12 +1405,9 @@ async def scanning():
                     from .paired_paper_profile import futures_cooldown
                     reason = await futures_cooldown(config.db_path, o['symbol']) or reason
                 if reason == 'ENTRY_ALLOWED' and paired_paper:
-                    from .paired_futures_quotes import refresh
                     try:
-                        o.update(await refresh(o, scanner))
-                        async with paired_lock:
-                            reason = paper_entry_reason(o)
-                            p = await paper.open(o) if reason == 'ENTRY_ALLOWED' else None
+                        p, reason, fresh = await paper_futures_entry(o)
+                        o.update(fresh)
                     except Exception as exc:
                         reason = str(exc) if isinstance(exc, ValueError) else 'PAIRED_BOOK_UNAVAILABLE'
                 elif reason == 'ENTRY_ALLOWED':
@@ -1435,6 +1625,7 @@ async def main():
             summary = live_monitor.latest if live_monitor else {}
             return bool(
                 config.live_enabled
+                and not trading_controls.entry_reason('live', strategy)
                 and config.live_entry_enabled
                 and (
                     config.live_spot_futures_enabled
@@ -1625,6 +1816,7 @@ async def main():
             venues = (long_venue, short_venue)
             return bool(
                 config.live_enabled
+                and not trading_controls.entry_reason('live', strategy, symbol)
                 and config.live_entry_enabled
                 and strategy_runtime.enabled.get(strategy, False)
                 and not scanner.paused
@@ -1670,6 +1862,7 @@ async def main():
             and market_fallback_accepted(config.live_acceptance_path, (lv, sv)),
         )
         live_entry_coordinator.halt = live_stop.stop
+        live_entry_coordinator.operator_limits = lambda: trading_controls.profile('live')
         funding_live = FundingLiveCoordinator(
             durable,
             runtime_store,
@@ -1694,11 +1887,13 @@ async def main():
             min_carry_pct=config.live_funding_min_carry_pct,
         )
         funding_live.halt = live_stop.stop
+        funding_live.operator_limits = lambda: trading_controls.profile('live')
 
         def dex_entry_authority(venue):
             summary = live_monitor.latest or {}
             return bool(
                 config.live_enabled
+                and not trading_controls.entry_reason('live', 'cex_dex')
                 and config.live_entry_enabled
                 and strategy_runtime.enabled.get("cex_dex", False)
                 and not scanner.paused
@@ -1763,7 +1958,7 @@ async def main():
                 "funding_arb": funding_live,
                 "dex_live_candidates": dex_live,
             }.get(name)
-            if entry_enabled and coordinator and live_dispatch_enabled(config, name):
+            if entry_enabled and coordinator and live_dispatch_enabled(config, name) and not trading_controls.entry_reason('live', name):
                 async with live_monitor.lock:
                     await coordinator.process_rows(rows)
                 live_monitor.request_cycle()
@@ -1775,6 +1970,7 @@ async def main():
         sf_cycle = secondary.runtime.services["spot_futures"]
         sf_cycle.allow_open = (
             lambda x: not scanner.paused
+            and operator_paper_reason('spot_futures', x) is None
             and risk.can_open_paper()
             and venue_controller.get(x["exchange"])["scan"]
             and venue_controller.get(x["exchange"])["paper"]
@@ -1809,6 +2005,7 @@ async def main():
             raise ValueError("SHARED_PAPER_INVENTORY_BUDGET_EXCEEDED")
         ss.allow_open = (
             lambda x: not scanner.paused
+            and operator_paper_reason('spot_spot', x) is None
             and risk.can_open_paper()
             and all(
                 venue_controller.get(v)["paper"] and venue_controller.get(v)["scan"]
@@ -1901,6 +2098,7 @@ async def main():
             )
             dpaper.allow_open = (
                 lambda p: not scanner.paused
+                and operator_paper_reason('cex_dex', p) is None
                 and risk.can_open_paper()
                 and all(
                     venue_controller.get(p["cex_venue"])[k] for k in ("paper", "scan")
@@ -1940,8 +2138,9 @@ async def main():
                     old.allow_open = lambda p: False
                 from .dex_paired_experiment import build as build_paired
                 await build_paired(secondary, strategy_runtime, config.db_path, notify_paper_close,
-                    lambda p: not scanner.paused and all(venue_controller.get(p['cex_venue'])[k] for k in ('paper', 'scan')),
+                    lambda p: not scanner.paused and operator_paper_reason('dex_paired', p) is None and all(venue_controller.get(p['cex_venue'])[k] for k in ('paper', 'scan')),
                     notify_open=notify_dex_open)
+                secondary.dex_paired.operator_notional = lambda: trading_controls.profile('paper')['notional_usd']
             await secondary.route_discovery.start()
             if focus_enabled("DEX_CHANNEL_PUBLIC_READER_ENABLED"):
                 from .dex_public_channel_reader import Reader as PublicChannelReader

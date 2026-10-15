@@ -62,6 +62,7 @@ class Coordinator:
             minimum_net,
         )
         self.safety, self.max_seconds, self.clock = safety_pct, max_seconds, clock
+        self.certified_minimum = minimum_net
         self.exit_authority = exit_authority or authority
         self.lock = asyncio.Lock()
         self.latest = {"status": "NOT_STARTED"}
@@ -122,12 +123,13 @@ class Coordinator:
                 "SELECT COALESCE(SUM(net),0) FROM live_results"
             ) as cursor:
                 total_net = float((await cursor.fetchone())[0])
-        if not math.isfinite(daily_net) or daily_net <= -self.bankroll * 0.02:
+        limits = getattr(self, 'operator_limits', lambda: {})()
+        if not math.isfinite(daily_net) or daily_net <= -min(self.bankroll * 0.02, limits.get('daily_loss_usd', math.inf)):
             raise ValueError("ENTRY_DAILY_LOSS_LIMIT")
         equity = self.bankroll + total_net
         if not math.isfinite(equity) or equity <= 0:
             raise ValueError("ENTRY_REALIZED_EQUITY_LIMIT")
-        budget_notional = min(self.notional, 5, equity * 0.1)
+        budget_notional = min(self.notional, 5, equity * 0.1, limits.get('notional_usd', math.inf))
         snap = self.fresh_snapshot(await self.snapshots(), venues, flat=True)
         for v in venues:
             bal = snap[v]["balance"]
@@ -274,6 +276,15 @@ class Coordinator:
                 latest_total, latest_daily = map(float, await cursor.fetchone())
         if latest_total != total_net or latest_daily != daily_net:
             raise ValueError("ENTRY_REALIZED_RISK_CHANGED")
+        # Operator limits may tighten during private/book IO. Re-read them;
+        # they can never enlarge the existing certified micro-entry limits.
+        current = getattr(self, 'operator_limits', lambda: {})()
+        if (max(prices) * native.base_qty > current.get('notional_usd', math.inf)
+                or daily_net <= -current.get('daily_loss_usd', math.inf)
+                or abs((prices[1]-prices[0])/prices[0]*100) > current.get('max_spread_pct', math.inf)):
+            raise ValueError('OPERATOR_LIVE_RISK_LIMIT')
+        if hasattr(self, 'operator_limits'):
+            self.minimum = max(self.certified_minimum, current.get('min_net_usd', self.certified_minimum))
         return (
             plan,
             reqs,
@@ -285,7 +296,7 @@ class Coordinator:
         )
 
     def durable_metadata(self, op):
-        return {}
+        return dict(operator_risk=self.operator_limits()) if hasattr(self, 'operator_limits') else {}
 
     async def preview(self, op):
         """Read-only account/book/cost check, including with trading disabled.

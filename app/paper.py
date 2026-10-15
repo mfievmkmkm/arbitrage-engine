@@ -125,6 +125,12 @@ class PaperEngine:
             from .paired_paper_policy import futures_plan
             try:
                 policy = futures_plan(o)
+                operator = o.get('operator_risk_limits')
+                if operator:
+                    policy = dict(policy, stop_usd=min(policy['stop_usd'], operator['stop_loss_usd']),
+                                  max_seconds=min(policy['max_seconds'], operator['max_hold_seconds']))
+                    if policy['costs'] > policy['stop_usd'] * .5:
+                        return None
             except ValueError:
                 return None
         p = PaperPosition(

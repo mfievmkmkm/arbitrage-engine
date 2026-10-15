@@ -4,9 +4,10 @@ class RotatingUniverse:
   for symbols in symbols_by_exchange.values():
    for symbol in symbols: counts[symbol]=counts.get(symbol,0)+1
   all_symbols=sorted((s for s,n in counts.items() if n>=2),key=lambda s:(-counts[s],s))
-  self.symbols=all_symbols if not size or size>=len(all_symbols) else all_symbols[:size]
+  # The batch/window budget must not permanently exclude the tail of markets.
+  self.symbols=all_symbols
   self.total_common=len(all_symbols)
-  self.batch_size=batch
+  self.batch_size=min(batch,size) if size else batch
   self.cursor=0
  def next_batch(self):
   if not self.symbols:return []

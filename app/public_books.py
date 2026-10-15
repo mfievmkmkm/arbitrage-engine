@@ -310,15 +310,24 @@ class Client:
                     out["bids"], out["asks"] = out["bids"][:limit], out["asks"][:limit]
                 self.counters["ws_reads"] += 1
                 return out
+        from .public_book_pacing import get as get_pacer
+        pacer = get_pacer(self.raw, symbol)
+        if pacer:
+            await pacer.wait()
         started = self.clock()
         kwargs = {}
         if limit is not None:
             kwargs["limit"] = limit
         if params:
             kwargs["params"] = params
-        raw = await asyncio.wait_for(
-            self.raw.fetch_order_book(symbol, **kwargs), self.timeout
-        )
+        try:
+            raw = await asyncio.wait_for(
+                self.raw.fetch_order_book(symbol, **kwargs), self.timeout
+            )
+        except Exception as exc:
+            if pacer and type(exc).__name__ == 'RateLimitExceeded':
+                pacer.limited()
+            raise
         out = normalize(raw, symbol, started, self.clock(), self.max_age)
         self.counters["rest_reads"] += 1
         if self.on_snapshot is not None:

@@ -520,6 +520,12 @@ class Monitor:
                 ):
                     incidents.append(self._incident("FUNDING_HOLD_CONFIG_INVALID", tid))
                     continue
+            from .trading_controls import operator_exit_limits
+            try:
+                hold_seconds, stop_net = operator_exit_limits(payload.get('operator_risk'), hold_seconds, self.stop_net)
+            except ValueError:
+                incidents.append(self._incident('OPERATOR_EXIT_POLICY_INVALID', tid))
+                continue
             age = now - trade.opened_at
             if not market.get("ok"):
                 info["exit_signal"] = (
@@ -576,17 +582,17 @@ class Monitor:
                     self.target,
                     self.trailing,
                     hold_seconds,
-                    stop_net=self.stop_net,
+                    stop_net=stop_net,
                 )
                 signal = decision.reason if decision.close else "HOLD"
                 best = state.best_net
             # A conservative price/fee stop needs no forecast funding credit.
             if (
-                self.stop_net is not None
+                stop_net is not None
                 and fee is not None
                 and market.get("fees_verified")
                 and gross - trade.entry_fees - trade.recovery_fees - fee
-                <= self.stop_net
+                <= stop_net
             ):
                 signal = "NET_STOP"
             mark = {

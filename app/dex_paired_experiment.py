@@ -93,6 +93,10 @@ class PairedCycle(Cycle):
 
     async def cycle(self):
         self.sync()
+        if hasattr(self.paper, 'operator_notional'):
+            limit = self.paper.operator_notional()
+            for route in self.routes:
+                route.update(notional_usd=min(100, limit / 1.1), max_notional_usd=limit)
         original = self.entry_enabled
         state = self.paper.state
         if state.get('day') == int(self.paper.clock()//86400) and state.get('day_net',0) <= -5:
