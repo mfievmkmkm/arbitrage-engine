@@ -17,7 +17,8 @@ from .dex_virtual_paper_source import routes_checked
 from .paper_server import validate
 
 STATE_SUFFIXES = ('', '.strategies.json', '.venues.json', '.stop.json',
-                  '.paired_migration.json', '.paper_controls.json', '.trading_controls.json')
+                  '.paired_migration.json', '.paper_controls.json', '.trading_controls.json',
+                  '.strategy_lab_routes.json')
 
 def resolve_local(root, name):
     p = Path(name)

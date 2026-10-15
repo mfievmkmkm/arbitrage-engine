@@ -187,5 +187,6 @@ def strategy_menu(enabled):
         for name, on in enabled.items()
         if 'dex_paired' not in enabled or name not in ('dex_channel', 'dex_bybit', 'cex_dex')
     ]
+    rows.append([button('🧪 Все стратегии · Paper/replay', 'lab:home')])
     rows.append([button("‹ Главное меню", "home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

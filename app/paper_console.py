@@ -24,7 +24,8 @@ def keyboard(screen, enabled, paused=False):
     if screen == 'strategies':
         rows = [[button(('🟢 ' if enabled.get(k) else '⚪ ')+LABELS[k], 'strategy:'+k,
                          'success' if enabled.get(k) else None)] for k in ('futures_futures','dex_paired')]
-        rows += [[button('Условия и пропуски','dex_paper'),button('Другие режимы','paper_modes_more')]]
+        rows += [[button('Условия и пропуски','dex_paper'),button('Другие режимы','paper_modes_more')],
+                 [button('🧪 Все стратегии · Paper/replay','lab:home')]]
     elif screen == 'paper_modes_more':
         rows = [[button(('🟢 ' if enabled.get(k) else '⚪ ')+LABELS[k], 'strategy:'+k,
                         'success' if enabled.get(k) else None)] for k in ('spot_futures','spot_spot','funding_arb')]

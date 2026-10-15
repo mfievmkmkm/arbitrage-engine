@@ -175,6 +175,9 @@ bankroll = Ledger(config.paper_capital)
 from .trading_controls import Controls
 trading_controls = Controls(config.runtime_state_path + '.trading_controls.json',
                             paper_notional=config.notional, live_notional=min(5, config.notional))
+from .strategy_lab import Lab as StrategyLab
+strategy_lab = StrategyLab(config.db_path)
+strategy_lab_runtime = None
 notification_bot = None
 secondary = None
 live_monitor = None
@@ -1095,6 +1098,96 @@ async def opportunity(q: CallbackQuery):
     await q.answer()
 
 
+@dp.callback_query(F.data.startswith('lab:'))
+async def strategy_lab_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        await q.answer('Нет доступа', show_alert=True)
+        return
+    await q.answer()
+    from .strategy_lab_view import render
+    from .strategy_math import Invalid
+    parts = q.data.split(':')
+    screen = parts[1]
+    try:
+        if screen in ('prepare','confirm'):
+            if not strategy_lab_runtime or trading_controls.environment!='paper' or scanner.paused:
+                raise Invalid('FRESH_PAPER_SOURCE_REQUIRED')
+            if screen=='prepare':
+                import hashlib,secrets
+                if strategy_lab.state['settings']['mode']!='manual':
+                    raise Invalid('MANUAL_MODE_REQUIRED')
+                keys=[key for key in strategy_lab_runtime.source.by_key
+                      if hashlib.sha256(key.encode()).hexdigest()[:16]==parts[2]]
+                if len(keys)!=1:
+                    raise Invalid('ROUTE_UNAVAILABLE')
+                fresh=await strategy_lab_runtime.refresh(keys[0])
+                await strategy_lab.process(dict(id=secrets.token_hex(16),type='snapshot',snapshot=fresh),allow_entries=False)
+                token=strategy_lab.issue(keys[0])
+                decision=strategy_lab.state['latest'][keys[0]]['decision']
+                plan=decision['plan']
+                await safe_edit(q.message,
+                    f'🧪 <b>Ручной Paper-вход</b>\n\nСценарный NET: {escape(plan["scenario_net"])} {escape(plan["currency"])}\n'
+                    f'Полный резерв: {escape(plan["capital"])}\n\nЭто модельное исполнение. Подтверждение действует 30 секунд; затем цены проверяются ещё раз.',
+                    InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='Подтвердить Paper',callback_data='lab:confirm:'+token)],
+                                                           [InlineKeyboardButton(text='‹ Назад',callback_data='lab:home')]]))
+                return
+            await strategy_lab.confirm(parts[2],strategy_lab_runtime.refresh)
+            screen='positions'
+        elif screen == 'export':
+            import json
+            with tempfile.TemporaryDirectory() as folder:
+                target = Path(folder)/'strategy_lab_report.json'
+                target.write_text(json.dumps(await strategy_lab.export(), ensure_ascii=False, indent=2), encoding='utf-8')
+                await q.message.answer_document(FSInputFile(target), caption='Изолированный Paper/replay. Все fills модельные; это не результат основного торгового счёта.')
+            return
+        if screen == 'detail':
+            screen = parts[2]
+        elif screen == 'mode':
+            await strategy_lab.configure(mode=parts[2])
+            screen = 'home'
+        elif screen == 'toggle':
+            selected = set(strategy_lab.state['settings']['enabled'])
+            key = parts[2]
+            selected.symmetric_difference_update([key])
+            await strategy_lab.configure(enabled=sorted(selected))
+            screen = key
+        elif screen == 'risk' and len(parts) == 4:
+            options = dict(max_notional={'10','25','50','100'}, min_net={'0.25','0.5','1'},
+                           max_hold={'1200','28800','86400'}, stop_loss={'0.5','1','2'})
+            if parts[2] not in options or parts[3] not in options[parts[2]]:
+                raise Invalid('RISK_OPTION_INVALID')
+            await strategy_lab.configure(values={parts[2]:parts[3]})
+            screen = 'risk'
+        elif screen == 'close':
+            import secrets
+            await strategy_lab.process(dict(id=secrets.token_hex(16),type='request_close',position_id=parts[2]))
+            screen = 'positions'
+        text, keyboard = render(strategy_lab,screen)
+        await safe_edit(q.message,text,keyboard)
+    except (ValueError, KeyError, IndexError) as error:
+        await q.message.answer(escape(str(error)[:190]),parse_mode='HTML')
+
+
+@dp.message(F.document.file_name.endswith('.strategy-replay.jsonl'))
+async def strategy_lab_upload(m: Message):
+    if not m.from_user or not allowed(m.from_user.id):
+        return
+    import io
+    from .strategy_lab_view import import_jsonl, render
+    if not m.document.file_size or m.document.file_size > 2_000_000:
+        await m.answer('Replay: нужен JSONL не больше 2 МБ.')
+        return
+    buffer = io.BytesIO()
+    await m.bot.download(m.document,destination=buffer)
+    try:
+        results = await import_jsonl(strategy_lab,buffer.getvalue().decode('utf-8'),
+                                     allow_entries=trading_controls.environment=='paper' and not scanner.paused)
+        text, keyboard = render(strategy_lab)
+        await m.answer(f'Обработано событий: {len(results)}.\n\n'+text,reply_markup=keyboard,parse_mode='HTML')
+    except (ValueError,KeyError,TypeError,UnicodeError) as error:
+        await m.answer('Replay остановлен: '+escape(str(error)[:200])+'. Уже записанные события сохранены; повтор использует те же IDs.',parse_mode='HTML')
+
+
 @dp.callback_query(F.data.startswith('ctl:'))
 async def trading_control_page(q: CallbackQuery):
     if not allowed(q.from_user.id):
@@ -1479,7 +1572,7 @@ async def paired_monitor():
 async def main():
     global spot_spot_live, funding_live
     global startup_text, private_clients, secondary, live_trades, live_stop, notification_bot, live_monitor, live_exit_coordinator, live_entry_coordinator, live_residual_coordinator
-    global spot_private_clients, spot_future_live
+    global spot_private_clients, spot_future_live, strategy_lab_runtime
     live_stop = Stop(config.runtime_state_path + ".stop.json")
     pf = preflight_check(config)
     if not pf.ok:
@@ -1517,6 +1610,7 @@ async def main():
             await book_history.init()
             scanner.on_books = book_history.record
         await strategy_diary_init(config.db_path)
+        await strategy_lab.init()
         await ledger_init(config.db_path)
         await durable.init()
         await paper.restore()
@@ -2155,6 +2249,27 @@ async def main():
                 if name in ('spot_futures','spot_spot','funding_arb','cex_dex','dex_channel','dex_bybit','dex_paired'):
                     service.idle_when_disabled = True
         await secondary.runtime.start()
+        import json
+        lab_routes_path=Path(config.runtime_state_path+'.strategy_lab_routes.json')
+        if lab_routes_path.exists():
+            try:
+                from .strategy_public_source import Source as StrategyPublicSource, Runtime as StrategyPublicRuntime
+                route_registry=json.loads(lab_routes_path.read_text(encoding='utf-8'))
+                lab_clients={v+':futures':c for v,c in scanner.clients.items()}
+                lab_clients.update({v+':public':c for v,c in secondary.clients.items()})
+                source=StrategyPublicSource(lab_clients,route_registry,scanner.funding)
+                strategy_lab_runtime=StrategyPublicRuntime(strategy_lab,source,
+                    allow_entries=lambda route: trading_controls.environment=='paper' and not scanner.paused
+                    and all(venue_controller.get(b['venue'])['paper'] and venue_controller.get(b['venue'])['scan'] for b in route['books']))
+                strategy_lab_runtime.start()
+            except (ValueError,TypeError,KeyError,OSError) as error:
+                log.exception('Optional strategy route registry unavailable; primary monitoring continues')
+                await strategy_lab.source_error('registry',str(error),time.time())
+        if strategy_lab_runtime is None:
+            for position in list(strategy_lab.positions.values()):
+                if position['plan']['evidence'].get('source_origin')=='public_capture':
+                    await strategy_lab.source_error(strategy_lab.route_key(position['plan']),
+                                                    'PUBLIC_CAPTURE_ROUTES_REQUIRED',time.time())
         bot = Bot(token=config.token)
         notification_bot = bot
         await live_monitor.start()
@@ -2163,6 +2278,9 @@ async def main():
         task = asyncio.create_task(scanning())
         await dp.start_polling(bot)
     finally:
+        if strategy_lab_runtime:
+            await strategy_lab_runtime.stop()
+            strategy_lab_runtime=None
         if paired_task:
             paired_task.cancel()
             await asyncio.gather(paired_task, return_exceptions=True)
