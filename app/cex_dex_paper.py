@@ -149,17 +149,31 @@ class Engine:
             pending = p["status"] == "EXIT_ACCOUNTING_PENDING"
             until = p["exit_at"] if pending else self.clock()
             # Historical IO precedes the fresh actionable exit quotes.
-            if getattr(self.source, 'policy_version', 1) == 2:
-                try:
+            try:
+                if getattr(self.source, 'policy_version', 1) == 2:
                     h = await asyncio.wait_for(self.source.settlements(p, until), 1)
-                except asyncio.TimeoutError:
-                    from .funding_paper_source import History
-                    h = History(False, 0, (), 'FUNDING_HISTORY_TIMEOUT', p['opened_at'])
-            else:
-                h = await self.source.settlements(p, until)
-            x = p["exit_quote"] if pending else await self.source.exit(p)
+                else:
+                    h = await self.source.settlements(p, until)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                from .funding_paper_source import History
+                h = History(False, 0, (), 'FUNDING_HISTORY_TIMEOUT' if isinstance(exc, asyncio.TimeoutError)
+                            else 'FUNDING_HISTORY_UNAVAILABLE', p['opened_at'])
+            try:
+                x = p["exit_quote"] if pending else await self.source.exit(p)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                x = dict(ok=False, reason='DEX_EXIT_UNAVAILABLE')
             if not x.get("ok"):
                 p["data_reason"] = x.get("reason", "DEX_EXIT_UNAVAILABLE")
+                p.setdefault('data_unavailable_since', self.clock())
+                state['last_monitor_reason'] = p['data_reason']
+                decisions.append((p['data_reason'], dict(stage='MONITOR', position_id=p['id'],
+                    symbol=p['symbol'], data_unavailable_since=p['data_unavailable_since'],
+                    funding_reason=h.reason, reserve_preserved=True,
+                    diagnostics=x.get('diagnostics', {}))))
                 saved.append(p)
                 continue
             if not pending:
@@ -173,6 +187,11 @@ class Engine:
             p.update(
                 last_mark=m, net=m["net"], funding_reason=h.reason, data_reason="OK"
             )
+            p.pop('data_unavailable_since', None)
+            state['last_monitor_reason'] = 'OK'
+            if not h.verified:
+                decisions.append((h.reason, dict(stage='FUNDING', position_id=p['id'],
+                    symbol=p['symbol'], reserve_preserved=True)))
             if h.verified:
                 events.extend((p["id"], e) for e in h.events)
             price_net = m["gross"] - m["entry_fees"] - m["exit_fees"] - m["safety"]
@@ -270,7 +289,8 @@ class Engine:
                         pid = state["next_id"]
                         state["next_id"] += 1
                         p.update(
-                            id=pid, closed_at=None, status="OPEN", net=0, best_net=0
+                            id=pid, closed_at=None, status="OPEN",
+                            net=p.get('entry_immediate_net', 0), best_net=0
                         )
                         state["positions"][str(pid)] = p
                         if self.namespace and p.get("channel_signal"):

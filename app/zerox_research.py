@@ -5,16 +5,20 @@ API contract: https://docs.0x.org/api-reference/evm-ap-is/swap/allowanceholder-g
 import asyncio
 import time
 import re
+import math
 import aiohttp
 
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
 class Provider:
-    def __init__(self, api_key, session=None):
+    def __init__(self, api_key, session=None, clock=time.time):
         self.api_key = api_key
         self.session = session
         self.owned = session is None
+        self.clock = clock
+        self.chain_cooldowns = {}
+        self.rate_limit_until = 0
 
     async def start(self):
         if self.session is None:
@@ -46,7 +50,8 @@ class Provider:
         if not self.api_key:
             return {"ok": False, "reason": "DEX_API_KEY_MISSING"}
         if (
-            not ADDRESS.fullmatch(sell_token)
+            not isinstance(sell_token, str) or not isinstance(buy_token, str)
+            or not ADDRESS.fullmatch(sell_token)
             or not ADDRESS.fullmatch(buy_token)
             or sell_token.lower() == buy_token.lower()
         ):
@@ -54,11 +59,10 @@ class Provider:
         try:
             amount = int(str(sell_amount))
             chain = int(chain_id)
-            if amount <= 0 or chain <= 0:
+            if isinstance(chain_id, bool) or amount <= 0 or chain <= 0 or str(chain_id) != str(chain):
                 raise ValueError
         except (ValueError, TypeError):
             return {"ok": False, "reason": "DEX_AMOUNT_OR_CHAIN_INVALID"}
-        await self.start()
         params = {
             "chainId": str(chain),
             "sellToken": sell_token,
@@ -69,7 +73,16 @@ class Provider:
             if type(slippage_bps) is not int or not 0 <= slippage_bps <= 100:
                 return {"ok": False, "reason": "DEX_SLIPPAGE_INVALID"}
             params["slippageBps"] = str(slippage_bps)
+        now = self.clock()
+        blocked_until, previous_reason = self.chain_cooldowns.get(chain, (0, None))
+        if self.rate_limit_until > now:
+            blocked_until, previous_reason = self.rate_limit_until, 'DEX_HTTP_429'
+        if blocked_until > now:
+            return dict(ok=False, reason=previous_reason,
+                        retry_after_seconds=blocked_until-now, request_sent=False)
+        await self.start()
         headers = {"0x-api-key": self.api_key, "0x-version": "v2"}
+        started = self.clock()
         try:
             async with self.session.get(
                 "https://api.0x.org/swap/allowance-holder/price",
@@ -77,8 +90,28 @@ class Provider:
                 headers=headers,
             ) as response:
                 if response.status != 200:
-                    return {"ok": False, "reason": "DEX_HTTP_" + str(response.status)}
+                    reason = 'DEX_HTTP_' + str(response.status)
+                    delay = 0
+                    if response.status in (401, 403, 429) or response.status >= 500:
+                        delay = 30 if response.status in (401, 403, 429) else 5
+                        if response.status == 429:
+                            try:
+                                retry = float(getattr(response, 'headers', {}).get('Retry-After', delay))
+                                if math.isfinite(retry):
+                                    delay = min(60, max(1, retry))
+                            except (ValueError, TypeError):
+                                pass
+                            self.rate_limit_until = self.clock() + delay
+                        else:
+                            self.chain_cooldowns[chain] = (self.clock() + delay, reason)
+                    return dict(ok=False, reason=reason, retry_after_seconds=delay,
+                                request_sent=True,
+                                action_required='CHECK_API_ACCESS' if response.status in (401, 403) else None)
                 raw = await response.json()
+            if not 0 <= self.clock() - started <= 8:
+                return dict(ok=False, reason='DEX_PRICE_RESPONSE_STALE')
+            if not isinstance(raw, dict):
+                return dict(ok=False, reason='DEX_PRICE_RESPONSE_INVALID')
             if raw.get("liquidityAvailable") is not True:
                 return {"ok": False, "reason": "DEX_LIQUIDITY_UNAVAILABLE"}
             if (
@@ -105,7 +138,7 @@ class Provider:
                 "token_metadata": raw.get("tokenMetadata"),
                 "route": raw.get("route"),
                 "block_number": raw.get("blockNumber"),
-                "ts": time.time(),
+                "ts": started,
                 "mode": "RESEARCH_INDICATIVE",
                 "paper_allowed": False,
                 "live_allowed": False,

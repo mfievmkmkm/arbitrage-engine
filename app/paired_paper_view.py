@@ -72,6 +72,8 @@ async def render(path, paper, scanner, risk, runtime, dex, bundle):
                    + escape(reason(s.get('last_decision','Ожидает первой проверки'))))
         if service and service.unsupported:
             out.append('Solana и сети без полного учёта расходов: пока только подбор рынков, парные входы не разрешены.')
+        if dex.positions and s.get('last_monitor_reason') not in (None, 'OK'):
+            out.append('Сопровождение DEX: ' + escape(reason(s['last_monitor_reason'])))
         if s.get('day') == int(dex.clock()//86400) and s.get('day_net',0) <= -5:
             out.append('⏸ DEX: дневной лимит потерь $5 достигнут.')
         reader = getattr(bundle, 'public_channel_reader', None)

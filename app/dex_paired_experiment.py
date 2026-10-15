@@ -45,15 +45,11 @@ class PairedSource(Source):
         # The DEX asset cannot be wished away: residual rounding is recorded.
         raw = p['base_qty'] * p['entry_price'] - p['entry_cash']
         costs = max(raw - p['entry_edge'], -p['entry_immediate_net'])
-        snapshot = await self.fs.get(p['cex_venue'], p['symbol'])
         try:
-            rate=float(snapshot.rate)
-            current_next=float(snapshot.next_ts)/1000
-            current_period=float(snapshot.interval_hours)*3600
+            rate=float(p['funding_rate_assumption'])
         except (TypeError,ValueError):
             return dict(ok=False,reason='PAIRED_FUNDING_CALENDAR_UNKNOWN')
-        if (not math.isfinite(rate) or abs(rate)>=1
-                or current_next!=p['funding_next'] or current_period!=p['funding_period']):
+        if not math.isfinite(rate) or abs(rate)>=1:
             return dict(ok=False, reason='PAIRED_FUNDING_CALENDAR_UNKNOWN')
         # SHORT pays when the public rate is negative. Positive carry is not
         # used to qualify a spread entry and is not credited in advance.

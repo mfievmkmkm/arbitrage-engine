@@ -16,6 +16,8 @@ from .database_maintenance import backup, verify, checksum
 from .dex_virtual_paper_source import routes_checked
 from .paper_server import validate
 
+STATE_SUFFIXES = ('', '.strategies.json', '.venues.json', '.stop.json',
+                  '.paired_migration.json', '.paper_controls.json')
 
 def resolve_local(root, name):
     p = Path(name)
@@ -27,7 +29,7 @@ def verify_bundle(directory):
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("version") != 1 or manifest.get("mode") != "VIRTUAL_PAPER_MIGRATION":
         raise ValueError("MIGRATION_MANIFEST_INVALID")
-    allowed = {"bot.env", "data/arbitrage.sqlite3"} | {"data/runtime_state.json" + s for s in ("", ".strategies.json", ".venues.json", ".stop.json")}
+    allowed = {"bot.env", "data/arbitrage.sqlite3"} | {"data/runtime_state.json" + s for s in STATE_SUFFIXES}
     files = manifest.get("files", {})
     if not isinstance(files, dict) or not {"bot.env", "data/arbitrage.sqlite3"} <= files.keys() or not files.keys() <= allowed:
         raise ValueError("MIGRATION_MANIFEST_FILES_INVALID")
@@ -60,7 +62,7 @@ def prepare(env_path, destination):
         shutil.copy2(saved["path"], data / "arbitrage.sqlite3")
         state = resolve_local(root, values.get("RUNTIME_STATE_PATH") or "runtime_state.json")
         files = {}
-        for suffix in ("", ".strategies.json", ".venues.json", ".stop.json"):
+        for suffix in STATE_SUFFIXES:
             source = Path(str(state) + suffix)
             if source.is_symlink():
                 raise ValueError("MIGRATION_STATE_SYMLINK")

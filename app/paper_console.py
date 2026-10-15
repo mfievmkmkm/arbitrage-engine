@@ -111,6 +111,8 @@ def positions(paper,bundle):
             out.append(f'<b>{escape(p["symbol"])}</b> · {escape(label)}\n{legs} · {escape(p["cex_venue"].upper())}\n'
                        + f'{"NET" if known else "NET без сверки funding"}: <b>{p.get("net",0):+.4f} USD</b>\n'
                        + ('Выход ждёт funding' if p['status']=='EXIT_ACCOUNTING_PENDING' else ('Свежая оценка' if _fresh(p.get('last_mark'),now) else 'Оценка устарела')))
+            if p.get('data_reason') not in (None, 'OK'):
+                out.append('Данные выхода: ' + escape(reason(p['data_reason'])))
     for p in list(getattr(bundle.sf_paper,'positions',{}).values())[:3]:
         count+=1
         out.append(f'<b>{escape(p.base)}</b> · {escape(p.exchange)}\nСпот LONG ↔ Фьючерсы SHORT\nNET модели: {p.net:+.4f} USD')

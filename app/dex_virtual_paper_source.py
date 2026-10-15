@@ -22,6 +22,13 @@ from .jupiter_research import mint_valid
 from .dex_signal_focus import enabled, quality, entry_venue_allowed
 
 
+class PriceUnavailable(ValueError):
+    def __init__(self, result):
+        super().__init__(result.get('reason', 'DEX_VIRTUAL_PRICE_UNAVAILABLE'))
+        self.diagnostics = {key: result[key] for key in
+                            ('retry_after_seconds', 'request_sent', 'action_required') if key in result}
+
+
 def token_key(r, token):
     return token if r["chain_id"] == "solana" else token.lower()
 
@@ -118,7 +125,7 @@ class Source(HistorySource):
             q = await self.provider.price(r["chain_id"], r["asset"] if sell_asset else r["stable"],
                                       r["stable"] if sell_asset else r["asset"], str(amount))
         if not q.get("ok"):
-            raise ValueError(q.get("reason", "DEX_VIRTUAL_PRICE_UNAVAILABLE"))
+            raise PriceUnavailable(q)
         if (q.get("chain_id"), token_key(r, q.get("sell_token", "")), token_key(r, q.get("buy_token", "")), str(q.get("sell_amount_raw"))) != (
             r["chain_id"], token_key(r, r["asset"] if sell_asset else r["stable"]),
             token_key(r, r["stable"] if sell_asset else r["asset"]), str(amount)):
@@ -152,14 +159,15 @@ class Source(HistorySource):
         m = market(self.public[r["cex_venue"]], r["cex_symbol"])
         return float(rate(m.get("taker"))), "PUBLIC_RATE_ASSUMPTION"
 
-    async def gas(self, r, q):
+    async def gas(self, r, q, book=None):
         if r.get("mode", "paired") == "reference":
             return 0, 0, {}
         network = number(q.get("network_fee_raw"), "DEX_VIRTUAL_GAS_UNKNOWN")
         c = self.public[r["cex_venue"]]
         start = self.clock()
-        raw = await asyncio.wait_for(c.fetch_order_book(r["native_symbol"], limit=20), 8)
-        book = normalize(raw, r["native_symbol"], start, self.clock(), 1.5)
+        raw = book if book is not None else await asyncio.wait_for(c.fetch_order_book(r["native_symbol"], limit=20), 8)
+        book = normalize(raw, r["native_symbol"], raw.get('requested_at', start), self.clock(),
+                         1.5, raw.get('data_source', 'REST'))
         price = float(number(book["asks"][0][0], "DEX_VIRTUAL_NATIVE_PRICE"))
         usd = float(network / Decimal(10 ** r["native_decimals"])) * price
         if not math.isfinite(usd) or usd > 0.25:
@@ -242,6 +250,13 @@ class Source(HistorySource):
                 if self.identity_gate is None:
                     raise ValueError("DEX_CEX_IDENTITY_UNVERIFIED")
                 identity_evidence = await self.identity_gate.verify(r)
+            if self.fs is None:
+                raise ValueError("DEX_FUNDING_CALENDAR_UNKNOWN")
+            # Slow metadata IO precedes the price evidence, never ages it.
+            snapshot = await self.fs.get(r["cex_venue"], r["cex_symbol"])
+            if snapshot.next_ts is None or snapshot.interval_hours is None:
+                raise ValueError("DEX_FUNDING_CALENDAR_UNKNOWN")
+            fee, fee_source = await self.fee(r)
             cash = float(number(r.get("notional_usd", 5), "DEX_VIRTUAL_NOTIONAL"))
             if signal and signal.get("max_notional_usd"):
                 cash = min(cash, signal["max_notional_usd"])
@@ -290,8 +305,9 @@ class Source(HistorySource):
             reverse = await self.price(r, True, raw_qty)
             dex_bid = float(Decimal(reverse["virtual_min_buy_raw"]) / Decimal(10 ** r["stable_decimals"])) / base
             dex_ask = cash / base
-            fee, fee_source = await self.fee(r)
-            gas, gas_price, gas_book = await self.gas(r, q)
+            # Draft only: the reverse preflight obtains a fresh native-gas
+            # book. Reuse it for entry gas after all DEX quote IO completes.
+            gas, gas_price, gas_book = 0, 0, {}
             sell = await self.reader.quote(r["cex_venue"], SubmitRequest(r["cex_symbol"], "sell", contracts, "market"), float(m["contractSize"]))
             side, native = "sell", sell
             if r.get("mode", "paired") == "reference":
@@ -301,11 +317,6 @@ class Source(HistorySource):
             notional = qty * native.reference_price
             if notional > self.cex_cap(r) or (r.get("mode", "paired") == "paired" and abs(base - qty) * native.reference_price > 0.05):
                 raise ValueError("DEX_VIRTUAL_NOTIONAL_OR_RESIDUAL_LIMIT")
-            if self.fs is None:
-                raise ValueError("DEX_FUNDING_CALENDAR_UNKNOWN")
-            snapshot = await self.fs.get(r["cex_venue"], r["cex_symbol"])
-            if snapshot.next_ts is None or snapshot.interval_hours is None:
-                raise ValueError("DEX_FUNDING_CALENDAR_UNKNOWN")
             p = dict(symbol=r["cex_symbol"], cex_symbol=r["cex_symbol"], cex_venue=r["cex_venue"],
                      chain_id=r["chain_id"], base_qty=qty, cex_contracts=contracts,
                      contract_size=float(m["contractSize"]), cex_side=side, forward=True,
@@ -315,6 +326,7 @@ class Source(HistorySource):
                      entry_gas_book=gas_book, entry_dex=q, entry_cex=native.market_evidence,
                      native_decimals=r["native_decimals"], safety=max(cash, notional) * .001,
                      funding_next=float(snapshot.next_ts) / 1000, funding_period=float(snapshot.interval_hours) * 3600,
+                     funding_rate_assumption=getattr(snapshot, 'rate', None),
                      opened_at=self.clock(), reserve=self.reserve_for_route(r), model="DEX_VIRTUAL_INDICATIVE_MODEL",
                      virtual_mode=r.get("mode", "paired"), virtual_route_key=list(route_key(r)),
                      virtual_identity=[r[k] for k in ("base", "stable_decimals", "asset_decimals", "native_symbol", "native_decimals")],
@@ -329,13 +341,16 @@ class Source(HistorySource):
             x = await self.exit(p)
             if not x.get("ok"):
                 return x
+            gas, gas_price, gas_book = await self.gas(r, q, book=x['gas_book'])
             # Reverse preflight performs IO; refresh entry book afterwards.
             native = await self.reader.quote(r["cex_venue"], SubmitRequest(r["cex_symbol"], side, contracts, "market"), p["contract_size"])
             notional = qty * native.reference_price
             if notional > self.cex_cap(r):
                 raise ValueError("DEX_VIRTUAL_MICRO_LIMIT")
             p.update(entry_price=native.reference_price, entry_cex=native.market_evidence,
-                     entry_fees=notional * fee + gas)
+                     entry_fees=notional * fee + gas, entry_gas=gas,
+                     entry_gas_price=gas_price, entry_gas_book=gas_book,
+                     safety=max(cash, notional) * .001)
             edge = (qty * (native.reference_price - dex_ask) if side == "sell" else qty * (dex_bid - native.reference_price))
             if p["virtual_mode"] == "paired":
                 edge = notional - cash
@@ -386,6 +401,7 @@ class Source(HistorySource):
             raise
         except Exception as exc:
             diagnostics['error_type'] = type(exc).__name__
+            diagnostics.update(getattr(exc, 'diagnostics', {}))
             return dict(ok=False, reason=str(exc) if isinstance(exc, ValueError) else "DEX_VIRTUAL_ENTRY_UNAVAILABLE", diagnostics=diagnostics)
 
     async def exit(self, p):
@@ -425,7 +441,8 @@ class Source(HistorySource):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return dict(ok=False, reason=str(exc) if isinstance(exc, ValueError) else "DEX_VIRTUAL_EXIT_UNAVAILABLE")
+            return dict(ok=False, reason=str(exc) if isinstance(exc, ValueError) else "DEX_VIRTUAL_EXIT_UNAVAILABLE",
+                        diagnostics=getattr(exc, 'diagnostics', {}))
 
     def mark(self, p, x, h):
         result = paired_mark(p, x, h)
