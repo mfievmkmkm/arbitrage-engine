@@ -11,6 +11,25 @@ async def attach(row, service, hold_seconds=1200, snapshots=None):
         if snapshots is None:
             snapshots = await asyncio.gather(service.get(row['buy'], row['symbol']), service.get(row['sell'], row['symbol']))
         calendar, reserve = {}, 0
+        gaps = {}
+        for venue, snap in zip((row['buy'], row['sell']), snapshots):
+            error = getattr(service, 'errors', {}).get((venue, row['symbol']))
+            rate = getattr(snap, 'rate', None)
+            next_ts = getattr(snap, 'next_ts', None)
+            interval_hours = getattr(snap, 'interval_hours', None)
+            if error:
+                gaps[venue] = 'FETCH_' + error
+            elif rate is None:
+                gaps[venue] = 'RATE_MISSING'
+            elif next_ts is None:
+                gaps[venue] = 'NEXT_TIME_MISSING'
+            elif interval_hours is None:
+                gaps[venue] = 'INTERVAL_MISSING'
+            elif next_ts / 1000 <= now:
+                gaps[venue] = 'NEXT_TIME_STALE'
+            elif not 0 < interval_hours <= 24:
+                gaps[venue] = 'INTERVAL_INVALID'
+        row['funding_gaps'] = gaps
         for prefix, sign, price, snap in zip(('long', 'short'), (-1, 1), (row['entry_buy'], row['entry_sell']), snapshots):
             first, hours, rate = float(snap.next_ts) / 1000, float(snap.interval_hours), float(snap.rate)
             if not all(math.isfinite(x) for x in (first, hours, rate)) or first <= now or not 0 < hours <= 24 or abs(rate) >= 1:

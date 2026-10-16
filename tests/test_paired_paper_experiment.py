@@ -26,6 +26,7 @@ def opportunity(**changes):
 def test_partial_convergence_admission_rejects_costs_and_forecast_only():
     row = opportunity()
     assert futures_plan(row)['partial_net'] > .25
+    assert row['paired_economics']['partial_convergence_net_usd'] > .25
     row['funding_calendar'] = None
     with pytest.raises(ValueError, match='CALENDAR'): futures_plan(row)
     with pytest.raises(ValueError, match='PARTIAL_NET'): plan(100, .5, .3)

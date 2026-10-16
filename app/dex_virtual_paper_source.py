@@ -26,7 +26,7 @@ class PriceUnavailable(ValueError):
     def __init__(self, result):
         super().__init__(result.get('reason', 'DEX_VIRTUAL_PRICE_UNAVAILABLE'))
         self.diagnostics = {key: result[key] for key in
-                            ('retry_after_seconds', 'request_sent', 'action_required') if key in result}
+                            ('retry_after_seconds', 'request_sent', 'action_required', 'error_code') if key in result}
 
 
 def token_key(r, token):

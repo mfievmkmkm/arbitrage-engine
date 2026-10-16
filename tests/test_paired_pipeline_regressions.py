@@ -127,6 +127,60 @@ def test_concurrent_same_funding_key_fetches_only_once_and_refreshes_at_settleme
     asyncio.run(go())
 
 
+def test_missing_interval_uses_only_matching_exchange_calendar(monkeypatch):
+    async def go():
+        now = [1000]
+        monkeypatch.setattr('app.funding_service.time.time', lambda: now[0])
+        calls = []
+
+        async def rate(symbol):
+            calls.append('rate')
+            return dict(fundingRate=.001, fundingTimestamp=(now[0]+3600)*1000)
+
+        async def intervals(symbols):
+            calls.append('interval')
+            assert symbols == [SYMBOL]
+            return {SYMBOL: dict(symbol=SYMBOL, interval='1h')}
+
+        client = NS(has={'fetchFundingRate': True, 'fetchFundingIntervals': True},
+                    fetch_funding_rate=rate, fetch_funding_intervals=intervals)
+        service = FundingService({'binance': client})
+        snap = await service.get('binance', SYMBOL)
+        assert snap.interval_hours == 1 and snap.rate == .001
+        assert calls == ['rate', 'interval']
+
+        async def wrong(symbols):
+            return {SYMBOL: dict(symbol='OTHER/USDT:USDT', interval='8h')}
+
+        client.fetch_funding_intervals = wrong
+        now[0] += 3601
+        snap = await service.get('binance', SYMBOL)
+        assert snap.interval_hours is None
+        now[0] += 11
+        client.fetch_funding_intervals = intervals
+        assert (await service.get('binance', SYMBOL)).interval_hours == 1
+
+    asyncio.run(go())
+
+
+def test_missing_funding_leg_is_named_without_inventing_a_calendar():
+    async def go():
+        from app.funding import FundingSnapshot
+        row = dict(symbol=SYMBOL, buy='binance', sell='bybit',
+                   entry_buy=100, entry_sell=101, base_qty=1, ts=1000,
+                   decision_at=1000)
+        class Service:
+            errors = {}
+            async def get(self, venue, symbol):
+                return FundingSnapshot(venue, symbol, .001, 1010000,
+                                       None if venue == 'binance' else 8)
+        await attach(row, Service())
+        assert not row['funding_known']
+        assert row['funding_gaps'] == {'binance': 'INTERVAL_MISSING'}
+        assert row['funding_calendar'] is None
+    asyncio.run(go())
+
+
 def test_slow_funding_precedes_fresh_executable_books(monkeypatch):
     from app.paired_futures_quotes import refresh
     async def go():

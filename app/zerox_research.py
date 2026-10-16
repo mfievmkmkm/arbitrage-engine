@@ -125,7 +125,7 @@ class Provider:
                         else:
                             self.chain_cooldowns[chain] = (self.clock() + delay, reason)
                     return dict(ok=False, reason=reason, retry_after_seconds=delay,
-                                error_code=code,
+                                error_code=self.access_error_code if response.status in (401, 403) else code,
                                 request_sent=True,
                                 action_required='CHECK_API_ACCESS' if response.status in (401, 403) else None)
                 raw = await response.json()

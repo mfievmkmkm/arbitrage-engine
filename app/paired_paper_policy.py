@@ -48,8 +48,17 @@ def futures_plan(row):
     fees = row.get('entry_fee_usd', qty * (row['entry_buy'] + row['entry_sell']) * row['fee_pct'] / 400) + row.get('exit_fee_usd', qty * (row['exit_buy'] + row['exit_sell']) * row['fee_pct'] / 400)
     safety = row['notional'] * row.get('safety_pct', 0) / 100
     spread_cost = qty * ((row['entry_buy'] - row['exit_buy']) + (row['exit_sell'] - row['entry_sell']))
+    reserve = row.get('funding_reserve_usd', 0)
+    costs = fees + safety + max(0, spread_cost)
+    row['paired_economics'] = dict(
+        entry_spread_usd=raw, roundtrip_fees_usd=fees,
+        safety_usd=safety, visible_crossing_cost_usd=max(0, spread_cost),
+        funding_reserve_usd=reserve,
+        partial_convergence_net_usd=raw * .5 - costs - reserve,
+        immediate_exit_net_usd=-spread_cost - fees - safety,
+    )
     # Include visible bid/ask friction when assessing the partial convergence.
-    result = plan(row['notional'], raw, fees + safety + max(0, spread_cost), row.get('funding_reserve_usd', 0))
+    result = plan(row['notional'], raw, costs, reserve)
     if spread_cost + fees + safety > result['stop_usd'] * .5:
         raise ValueError('PAIRED_IMMEDIATE_COST_HIGH')
     return result

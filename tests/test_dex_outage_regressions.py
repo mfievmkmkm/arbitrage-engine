@@ -63,6 +63,18 @@ def test_zerox_slow_response_is_not_accepted_as_fresh():
     asyncio.run(go())
 
 
+def test_zerox_403_cause_survives_into_paper_diagnostics():
+    from app.dex_virtual_paper_source import PriceUnavailable
+
+    async def go():
+        session = Session(Response(403, {'code': 'TAKER_NOT_AUTHORIZED_FOR_TRADE'}))
+        provider = Provider('test-only', session)
+        result = await provider.price(1, STABLE, ASSET, '100')
+        assert result['reason'] == 'DEX_HTTP_403'
+        assert PriceUnavailable(result).diagnostics['error_code'] == 'TAKER_NOT_AUTHORIZED_FOR_TRADE'
+    asyncio.run(go())
+
+
 @pytest.mark.parametrize('status', [401, 403, 503])
 def test_http_failures_back_off_without_bypassing_access_or_faking_quotes(status):
     async def go():

@@ -25,6 +25,10 @@ class FundingService:
         # A cache TTL must not keep a past settlement as the *next* funding.
         if cached and cached.get('next_ts') is not None and cached['next_ts'] <= time.time() * 1000:
             cached = None
+        # Incomplete evidence is retried after a short delay. A missing
+        # calendar cannot become a verified forecast through caching.
+        if cached and any(cached.get(key) is None for key in ('rate', 'next_ts', 'interval_hours')) and cached['age'] > 10:
+            cached = None
         if cached:
             return FundingSnapshot(
                 exchange,
@@ -50,6 +54,26 @@ class FundingService:
                 if next_ts <= 0:
                     raise ValueError("INVALID_FUNDING_TIMESTAMP")
             interval = infer_interval(row)
+            if not interval.known:
+                fallback = None
+                try:
+                    if client.has.get('fetchFundingInterval') is True:
+                        fallback = await asyncio.wait_for(client.fetch_funding_interval(symbol), self.timeout)
+                    elif client.has.get('fetchFundingIntervals') is True:
+                        batch = await asyncio.wait_for(client.fetch_funding_intervals([symbol]), self.timeout)
+                        if isinstance(batch, dict):
+                            fallback = batch.get(symbol)
+                        elif isinstance(batch, (list, tuple)):
+                            fallback = next((item for item in batch
+                                             if isinstance(item, dict) and item.get('symbol') == symbol), None)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # The optional interval endpoint must not erase the rate
+                    # and timestamp obtained from the primary endpoint.
+                    pass
+                if isinstance(fallback, dict) and fallback.get('symbol') == symbol:
+                    interval = infer_interval(fallback)
             self.cache.put(
                 exchange,
                 symbol,
