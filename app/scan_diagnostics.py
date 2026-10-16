@@ -18,6 +18,8 @@ def render(scanner):
         out += f'\nБез спреда после комиссий: {counters["pairs_no_edge_before_funding"]} пар'
     if counters.get('book_errors'):
         out += f'\nОшибки стаканов: {counters["book_errors"]}'
+    if counters.get('book_error:RateLimitExceeded'):
+        out += f' · лимит API: {counters["book_error:RateLimitExceeded"]}'
     if age > max(60, row['duration_seconds'] * 3):
         out += '\n⚠️ Новый цикл долго не завершается; проверь журнал поиска.'
     return out

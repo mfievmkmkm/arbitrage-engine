@@ -7,10 +7,11 @@ _loops = weakref.WeakKeyDictionary()
 
 
 class Pacer:
-    def __init__(self, interval=.15, clock=time.monotonic):
+    def __init__(self, interval=.25, clock=time.monotonic):
         self.interval, self.clock = interval, clock
         self.next_at = 0
         self.lock = asyncio.Lock()
+        self.failures = 0
 
     async def wait(self):
         async with self.lock:
@@ -20,7 +21,11 @@ class Pacer:
             self.next_at = self.clock() + self.interval
 
     def limited(self):
-        self.next_at = max(self.next_at, self.clock() + 2)
+        self.failures += 1
+        self.next_at = max(self.next_at, self.clock() + min(30, 2 ** self.failures))
+
+    def success(self):
+        self.failures = 0
 
 
 def get(client, symbol):

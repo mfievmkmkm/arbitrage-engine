@@ -94,6 +94,23 @@ def test_rate_limit_is_shared_across_chains_and_retry_after_is_bounded():
     asyncio.run(go())
 
 
+def test_zerox_auth_failure_blocks_other_chains_and_records_safe_error_code():
+    async def go():
+        now=[100]
+        session=Session(Response(403, {'code':'TAKER_NOT_AUTHORIZED_FOR_TRADE'}),
+                        Response(200, quote_response()))
+        provider=Provider('not-a-real-key',session,clock=lambda:now[0])
+        first=await provider.price(1,STABLE,ASSET,'100')
+        assert first['reason']=='DEX_HTTP_403'
+        assert first['error_code']=='TAKER_NOT_AUTHORIZED_FOR_TRADE'
+        blocked=await provider.price(42161,STABLE,ASSET,'100')
+        assert blocked['reason']=='DEX_HTTP_403' and not blocked['request_sent']
+        assert blocked['action_required']=='CHECK_API_ACCESS' and session.calls==1
+        now[0]+=31
+        assert (await provider.price(42161,STABLE,ASSET,'100'))['ok']
+    asyncio.run(go())
+
+
 def test_invalid_inputs_do_not_create_requests():
     async def go():
         session = Session()

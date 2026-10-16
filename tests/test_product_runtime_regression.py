@@ -148,6 +148,58 @@ def test_scanner_keeps_a_watched_route_when_entry_edge_disappears():
     asyncio.run(go())
 
 
+def test_mexc_scanner_limits_rotating_batch_without_excluding_the_tail(monkeypatch):
+    async def go():
+        class Client:
+            has={}
+            def __init__(self, *args): pass
+            async def load_markets(self):
+                return {str(i):dict(symbol=f'T{i}/USDT:USDT',base=f'T{i}',quote='USDT',
+                                    settle='USDT',swap=True,linear=True,active=True,
+                                    contract=True,contractSize=1) for i in range(37)}
+            async def close(self): pass
+        def factory(name):
+            return type('Client_'+name,(Client,),{'id':name})
+        monkeypatch.setattr('app.engine.exchange_class',factory)
+        scanner=Scanner(['mexc','bybit'],100,12,batch_size=30)
+        await scanner.start()
+        try:
+            batches=[scanner.universe.next_batch() for _ in range(3)]
+            assert all(len(batch)==16 for batch in batches)
+            assert len(set().union(*(set(batch) for batch in batches)))==37
+        finally:
+            await scanner.close()
+    asyncio.run(go())
+
+
+def test_slow_venue_does_not_block_other_venue_book_slots():
+    async def go():
+        release, other_started=asyncio.Event(),asyncio.Event()
+        class Client:
+            def __init__(self, venue):self.venue=venue
+            async def fetch_order_book(self, symbol, limit=20):
+                if self.venue=='mexc':
+                    await release.wait()
+                else:
+                    other_started.set()
+                return dict(bids=[[99,1000]],asks=[[100,1000]])
+        scanner=Scanner(['mexc','bybit'],10,12,concurrency=1)
+        scanner.clients={v:Client(v) for v in scanner.ids}
+        symbols={f'T{i}/USDT:USDT' for i in range(5)}
+        scanner.symbols={v:symbols for v in scanner.ids}
+        scanner.specs={v:{s:from_market(v,dict(symbol=s,base=s.split('/')[0],quote='USDT',
+                         settle='USDT',linear=True,contract=True,contractSize=1)) for s in symbols}
+                       for v in scanner.ids}
+        scanner.universe=RotatingUniverse(scanner.symbols,batch=5)
+        task=asyncio.create_task(scanner.scan())
+        try:
+            await asyncio.wait_for(other_started.wait(),1)
+        finally:
+            release.set()
+            await asyncio.wait_for(task,2)
+    asyncio.run(go())
+
+
 def test_projected_future_funding_is_not_paper_profit(tmp_path):
     async def go():
         d = Diary(str(tmp_path / "a.db"))

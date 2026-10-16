@@ -106,7 +106,19 @@ def test_pacing_spaces_requests_and_adds_backoff(monkeypatch):
         p.limited()
         await p.wait()
         assert waits[-1] == pytest.approx(2)
+        p.limited()
+        await p.wait()
+        assert waits[-1] == pytest.approx(4)
+        p.success()
+        p.limited()
+        await p.wait()
+        assert waits[-1] == pytest.approx(2)
     asyncio.run(go())
+
+
+def test_mexc_default_pacing_stays_below_depth_endpoint_limit():
+    # 10 requests / 2 seconds is the documented futures depth limit.
+    assert Pacer().interval >= .2
 
 
 def test_controls_view_names_units_and_marks_live_blocked(tmp_path):

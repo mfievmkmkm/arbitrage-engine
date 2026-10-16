@@ -328,6 +328,8 @@ class Client:
             if pacer and type(exc).__name__ == 'RateLimitExceeded':
                 pacer.limited()
             raise
+        if pacer:
+            pacer.success()
         out = normalize(raw, symbol, started, self.clock(), self.max_age)
         self.counters["rest_reads"] += 1
         if self.on_snapshot is not None:

@@ -19,6 +19,9 @@ class Provider:
         self.clock = clock
         self.chain_cooldowns = {}
         self.rate_limit_until = 0
+        self.access_block_until = 0
+        self.access_error_code = None
+        self.access_status = None
 
     async def start(self):
         if self.session is None:
@@ -74,6 +77,10 @@ class Provider:
                 return {"ok": False, "reason": "DEX_SLIPPAGE_INVALID"}
             params["slippageBps"] = str(slippage_bps)
         now = self.clock()
+        if self.access_block_until > now:
+            return dict(ok=False, reason='DEX_HTTP_' + str(self.access_status),
+                        error_code=self.access_error_code, retry_after_seconds=self.access_block_until-now,
+                        request_sent=False, action_required='CHECK_API_ACCESS')
         blocked_until, previous_reason = self.chain_cooldowns.get(chain, (0, None))
         if self.rate_limit_until > now:
             blocked_until, previous_reason = self.rate_limit_until, 'DEX_HTTP_429'
@@ -92,6 +99,15 @@ class Provider:
                 if response.status != 200:
                     reason = 'DEX_HTTP_' + str(response.status)
                     delay = 0
+                    code = None
+                    if response.status in (401, 403):
+                        try:
+                            problem = await response.json()
+                            candidate = problem.get('code') if isinstance(problem, dict) else None
+                            if candidate in ('TAKER_NOT_AUTHORIZED_FOR_TRADE', 'UNAUTHORIZED', 'FORBIDDEN'):
+                                code = candidate
+                        except (aiohttp.ClientError, ValueError, TypeError):
+                            pass
                     if response.status in (401, 403, 429) or response.status >= 500:
                         delay = 30 if response.status in (401, 403, 429) else 5
                         if response.status == 429:
@@ -102,9 +118,14 @@ class Provider:
                             except (ValueError, TypeError):
                                 pass
                             self.rate_limit_until = self.clock() + delay
+                        elif response.status in (401, 403):
+                            self.access_block_until = self.clock() + delay
+                            self.access_error_code = code or ('UNAUTHORIZED' if response.status == 401 else 'HTTP_403_UNKNOWN')
+                            self.access_status = response.status
                         else:
                             self.chain_cooldowns[chain] = (self.clock() + delay, reason)
                     return dict(ok=False, reason=reason, retry_after_seconds=delay,
+                                error_code=code,
                                 request_sent=True,
                                 action_required='CHECK_API_ACCESS' if response.status in (401, 403) else None)
                 raw = await response.json()

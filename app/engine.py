@@ -153,9 +153,10 @@ class Scanner:
                 await c.close()
 
         await asyncio.gather(*(init(x) for x in self.ids))
-        self.universe = RotatingUniverse(
-            self.symbols, self.universe_size, self.batch_size
-        )
+        # MEXC contract depth is capped at 10 requests / 2 s. Its shared
+        # 0.25 s pacer needs a bounded batch within the quote freshness window.
+        batch = min(self.batch_size, 16) if 'mexc' in self.clients else self.batch_size
+        self.universe = RotatingUniverse(self.symbols, self.universe_size, batch)
         self.funding = FundingService(self.clients)
 
     async def close(self):
@@ -194,10 +195,12 @@ class Scanner:
             for v in self.clients
         }
         book_priorities(self.clients, "futures_scanner", required, candidates)
-        sem = asyncio.Semaphore(self.concurrency)
+        # A venue waiting for its own rate window must not occupy another
+        # venue's book slots and make the two-sided quote stale.
+        slots = {name: asyncio.Semaphore(self.concurrency) for name in self.clients}
 
         async def fetch(name, symbol):
-            async with sem:
+            async with slots[name]:
                 counters['books_requested'] += 1
                 venue_books[name]['requested'] += 1
                 started = time.perf_counter()
