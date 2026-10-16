@@ -15,6 +15,7 @@ from app.funding_service import FundingService
 from app.paired_futures_funding import attach
 from app.paired_paper_policy import exit_reason, plan
 from app.compact_audit_export import build_sync
+from app.scan_decisions import skipped_net_candidates
 from app.scan_diagnostics import render
 from test_native_order_plan import client, SYMBOL
 
@@ -53,6 +54,29 @@ def test_empty_cycle_has_persistent_diagnostics_and_compact_export(tmp_path):
         with zipfile.ZipFile(build_sync(diary.path, tmp_path / 'out')) as archive:
             assert 'scan_cycles.csv' in archive.namelist()
             assert json.loads(archive.read('manifest.json'))['tables']['Scan cycles']['total_rows'] == 1
+    asyncio.run(go())
+
+
+def test_post_funding_net_rejection_survives_compact_export(tmp_path):
+    async def go():
+        diary = Diary(tmp_path / 'journal.db')
+        await diary.init()
+        rows = [dict(ts=123, symbol=SYMBOL, buy='bybit', sell='mexc',
+                     hypothetical_edge=-.04, funding_known=True,
+                     funding_pct=-.25, executable=.40),
+                dict(ts=124, symbol='Y/USDT:USDT', buy='mexc', sell='bybit',
+                     hypothetical_edge=.12)]
+        rejected = skipped_net_candidates(rows, paired_paper=True)
+        assert len(rejected) == 1 and rejected[0]['action'] == 'SKIP'
+        assert rejected[0]['reason'] == 'NET_ESTIMATE_NOT_POSITIVE'
+        await diary.record_decisions(rejected)
+        with zipfile.ZipFile(build_sync(diary.path, tmp_path / 'out')) as archive:
+            import csv, io
+            exported = list(csv.DictReader(io.StringIO(archive.read('decisions.csv').decode())))
+        assert len(exported) == 1
+        assert exported[0]['symbol'] == SYMBOL
+        assert exported[0]['reason'] == 'NET_ESTIMATE_NOT_POSITIVE'
+
     asyncio.run(go())
 
 

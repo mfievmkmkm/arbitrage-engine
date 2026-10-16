@@ -1486,7 +1486,8 @@ async def scanning():
                     p.current_net_usd,
                     "Закрытие по политике выхода; подробности в дневнике",
                 )
-            decisions = []
+            from .scan_decisions import skipped_net_candidates
+            decisions = skipped_net_candidates(quotes, paired_paper)
             for o in latest:
                 reason = (
                     "CLOSED_THIS_CYCLE"
