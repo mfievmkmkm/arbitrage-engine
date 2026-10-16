@@ -31,8 +31,9 @@ from .secondary_book_history import attach as attach_book_history
 
 
 class Bundle:
-    def __init__(self, clients, runtime, sf_paper):
+    def __init__(self, clients, runtime, sf_paper, owns_clients=True):
         self.clients = clients
+        self.owns_clients = owns_clients
         self.runtime = runtime
         self.sf_paper = sf_paper
         self.dex_provider = None
@@ -55,7 +56,8 @@ class Bundle:
         if self.route_discovery:
             await self.route_discovery.stop()
         await self.runtime.stop()
-        await close(self.clients)
+        if self.owns_clients:
+            await close(self.clients)
         if self.book_recorder:
             await self.book_recorder.close()
         if self.dex_provider:
@@ -84,11 +86,15 @@ async def build_bundle(
     dex_options=None,
     book_history=None,
     book_record_interval=1,
+    public_clients=None,
 ):
     virtual_enabled = os.getenv("DEX_VIRTUAL_PAPER_ENABLED", "false").strip().lower() in ("true", "1", "yes", "on")
     if virtual_enabled and ((dex_options or {}).get("live_enabled") is True or any(os.getenv(k, "false").strip().lower() in ("true", "1", "yes", "on") for k in ("LIVE_ENABLED", "DEX_LIVE_ENABLED"))):
         raise ValueError("DEX_VIRTUAL_RUN_REQUIRES_LIVE_DISABLED")
-    clients = await build(ids)
+    # The seven futures venues already hold CCXT market maps in Paper. A
+    # second seven-client set can exceed the Railway memory limit at startup.
+    owns_clients = public_clients is None
+    clients = await build(ids) if owns_clients else public_clients
     bundle = None
     try:
         sf = SpotFutureService(clients, notional, min_edge)
@@ -143,7 +149,7 @@ async def build_bundle(
                     paper=fp,
                 ),
             )
-        bundle = Bundle(clients, sr, paper)
+        bundle = Bundle(clients, sr, paper, owns_clients=owns_clients)
         wallet = WalletJournal(db_path)
         await wallet.init()
         rpc_a, rpc_b = os.getenv("DEX_WALLET_RPC_PRIMARY"), os.getenv(
@@ -284,7 +290,7 @@ async def build_bundle(
         if bundle.dex_live:
             sr.add("dex_live_candidates", bundle.dex_live.source)
             runtime.enabled["cex_dex"] = True
-        if book_history is not None:
+        if book_history is not None and owns_clients:
             bundle.book_recorder = attach_book_history(
                 book_history, clients, book_record_interval
             )
@@ -302,5 +308,6 @@ async def build_bundle(
             await bundle.dex_live.provider.close()
         if bundle and bundle.book_recorder:
             await bundle.book_recorder.close()
-        await close(clients)
+        if owns_clients:
+            await close(clients)
         raise

@@ -291,6 +291,23 @@ def test_bundle_shutdown_flushes_last_secondary_snapshot(tmp_path):
     asyncio.run(run())
 
 
+def test_borrowed_paper_clients_remain_open_for_primary_scanner():
+    async def run():
+        from app.secondary_bootstrap import Bundle
+
+        client = Client(Raw())
+
+        async def stop():
+            pass
+
+        bundle = Bundle({'a': client}, NS(stop=stop), None, owns_clients=False)
+        await bundle.close()
+        assert not client.raw.closed
+        await client.close()
+
+    asyncio.run(run())
+
+
 def test_system_shows_secondary_tape_and_combined_transport():
     from app.tg_system_center import render
 

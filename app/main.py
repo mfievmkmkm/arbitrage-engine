@@ -2042,6 +2042,7 @@ async def main():
             private_clients=private_clients,
             book_history=book_history if config.record_books else None,
             book_record_interval=config.public_stream_record_interval,
+            public_clients=scanner.clients if paired_paper else None,
             dex_options=dict(
                 live_enabled=config.live_enabled,
                 entry_authority=dex_entry_authority,
