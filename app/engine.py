@@ -112,6 +112,7 @@ class Scanner:
         self.specs = {}
         self.funding = None
         self.errors = {}
+        self.start_errors = {}
         self.health = VenueHealth()
         self.paused = False
         self.last_scan = None
@@ -148,8 +149,10 @@ class Scanner:
                 self.symbols[name] = {m["symbol"] for m in valid}
                 self.specs[name] = {m["symbol"]: from_market(name, m) for m in valid}
                 self.clients[name] = wrap(c)
+                self.start_errors.pop(name, None)
             except Exception as e:
                 self.errors[name] = type(e).__name__
+                self.start_errors[name] = type(e).__name__
                 await c.close()
 
         # CCXT builds large market maps. Loading every venue concurrently can
@@ -159,7 +162,7 @@ class Scanner:
             await init(name)
             logging.getLogger('arbitrage').info(
                 'Futures market bootstrap: %s %s', name,
-                'ready' if name in self.clients else 'unavailable:' + self.errors.get(name, 'unknown'))
+                'ready' if name in self.clients else 'unavailable:' + self.start_errors.get(name, 'unknown'))
         # MEXC contract depth is capped at 10 requests / 2 s. Its shared
         # 0.25 s pacer needs a bounded batch within the quote freshness window.
         batch = min(self.batch_size, 16) if 'mexc' in self.clients else self.batch_size
@@ -407,7 +410,7 @@ class Scanner:
             ts=started_at, finished_at=time.time(),
             duration_seconds=time.time() - started_at,
             symbols_selected=len(symbols), venues_online=len(self.clients),
-            venues_configured=list(self.ids), venue_start_errors=dict(self.errors),
+            venues_configured=list(self.ids), venue_start_errors=dict(self.start_errors),
             universe_total=self.universe.total_coverage if self.universe else 0,
             symbols_scanned=list(symbols),
             symbols_with_books=len(grouped), candidates_returned=len(ops),

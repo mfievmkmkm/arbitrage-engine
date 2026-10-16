@@ -37,3 +37,13 @@ def test_seven_futures_markets_load_without_parallel_memory_spike(monkeypatch):
     assert peak == 1
     assert loaded == venues
     assert set(scanner.clients) == set(venues)
+
+
+def test_runtime_book_error_does_not_claim_venue_failed_to_start():
+    scanner = Scanner(['bybit', 'mexc'], 100, 12)
+    scanner.clients = {'bybit': object(), 'mexc': object()}
+    scanner.symbols = {'bybit': set(), 'mexc': set()}
+    scanner.errors['mexc'] = 'RateLimitExceeded'
+    asyncio.run(scanner.scan())
+    assert scanner.last_diagnostics['venues_online'] == 2
+    assert scanner.last_diagnostics['venue_start_errors'] == {}
