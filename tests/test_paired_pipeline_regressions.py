@@ -41,6 +41,9 @@ def test_empty_cycle_has_persistent_diagnostics_and_compact_export(tmp_path):
         assert await scanner.scan() == []
         summary = scanner.last_diagnostics
         assert summary['symbols_selected'] == 1
+        assert summary['venues_configured'] == ['binance', 'bybit', 'okx']
+        assert summary['venues_online'] == 3
+        assert summary['venue_start_errors'] == {}
         assert summary['counters']['books_ok'] == 3
         assert summary['counters']['pairs_checked'] == 6
         assert summary['counters']['pairs_no_edge_before_funding'] == 6

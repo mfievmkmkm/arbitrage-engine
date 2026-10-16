@@ -400,6 +400,7 @@ class Scanner:
             ts=started_at, finished_at=time.time(),
             duration_seconds=time.time() - started_at,
             symbols_selected=len(symbols), venues_online=len(self.clients),
+            venues_configured=list(self.ids), venue_start_errors=dict(self.errors),
             universe_total=self.universe.total_coverage if self.universe else 0,
             symbols_scanned=list(symbols),
             symbols_with_books=len(grouped), candidates_returned=len(ops),

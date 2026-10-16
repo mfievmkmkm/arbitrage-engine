@@ -141,7 +141,7 @@ Trial — кредит на использование, не гарантия 30
 Нужен Full Trial для доступа к биржам; на Limited Trial сеть ограничена.
 
 1. Railway → New Project → Deploy from GitHub repo → `mfievmkmkm/arbitrage-engine`.
-2. В Source выбрать ветку `phase-2-discovery` и последнюю согласованную ревизию.
+2. В Source выбрать ветку `audit-paper-2026-10-15` и последнюю согласованную ревизию.
    Если репозиторий не виден, проверить доступ GitHub integration к этому репо.
 3. Добавить Volume, подключить к сервису бота, Mount Path **`/data`**.
 4. В Variables → Raw Editor добавить значения ниже, заменив placeholders.
@@ -151,7 +151,7 @@ BOT_TOKEN=свой_токен
 ADMIN_ID=свой_числовой_id
 ZEROX_API_KEY=свой_ключ_0x
 JUPITER_API_KEY=свой_ключ_Jupiter
-EXCHANGES=bybit,mexc
+EXCHANGES=binance,bybit,okx,bitget,gateio,mexc,bingx
 PAPER_CAPITAL_USD=50
 LIVE_ENABLED=false
 LIVE_ENTRY_ENABLED=false
@@ -172,6 +172,16 @@ DB_PATH и JSON маршрутов вручную не нужны: entrypoint и
 BYBIT_API_KEY и BYBIT_API_SECRET необязательны. Без них комиссии CEX — публичное
 допущение; с read-only ключом Bybit — прочитанные аккаунтные ставки. Ключ MEXC
 для этого эксперимента не требуется. Приватный ключ кошелька не нужен.
+
+Если Railway уже содержит `EXCHANGES=bybit,mexc`, новый дефолт из Git не
+перезапишет сохранённую переменную. Для расширенного Paper-поиска обновить
+`EXCHANGES` до строки выше и перезапустить сервис с тем же Volume. Неподключённые
+биржи и классы ошибок видны в «Настройки → Проверки» и в `scan_cycles.csv`.
+Добавление площадок расширяет выбор пар, но не меняет критерий NET и не
+разрешает LIVE. Публичные посты `MexcDexSpreadTracker` поступают в отдельный
+DEX BUY ↔ CEX SHORT Paper: сигнал служит кандидатом на точный контракт,
+доходом он не считается. Пока DEX API отвечает 403 либо совпадение токена
+не подтверждено, входа в этот маршрут нет.
 
 Если Jupiter ключ пока недоступен, не добавлять пустой placeholder и поставить
 DEX_VIRTUAL_WATCHLIST_PRESET=none: будет только Ethereum WETH/Bybit. Для него

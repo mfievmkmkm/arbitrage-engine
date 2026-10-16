@@ -20,6 +20,13 @@ def render(scanner):
         out += f'\nОшибки стаканов: {counters["book_errors"]}'
     if counters.get('book_error:RateLimitExceeded'):
         out += f' · лимит API: {counters["book_error:RateLimitExceeded"]}'
+    configured = row.get('venues_configured')
+    if configured:
+        out += f'\nБиржи доступны: {row["venues_online"]}/{len(configured)}'
+    if row.get('venue_start_errors'):
+        out += '\nНе подключились: ' + ', '.join(
+            f'{name} ({error})' for name, error in sorted(row['venue_start_errors'].items())
+        )
     if age > max(60, row['duration_seconds'] * 3):
         out += '\n⚠️ Новый цикл долго не завершается; проверь журнал поиска.'
     return out

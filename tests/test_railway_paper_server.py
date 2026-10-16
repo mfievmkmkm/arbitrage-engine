@@ -4,8 +4,13 @@ import sqlite3
 
 import pytest
 
-from app.railway_paper_server import prepare_environment, expand_watchlist
+from app.railway_paper_server import prepare_environment, expand_watchlist, DEFAULT_PAPER_EXCHANGES
 from app.configure_virtual_paper import default_routes
+
+
+def test_railway_paper_default_scans_all_supported_public_venues():
+    from app.engine import ALLOWED
+    assert set(DEFAULT_PAPER_EXCHANGES.split(',')) == ALLOWED
 
 
 def environment(volume, **changes):

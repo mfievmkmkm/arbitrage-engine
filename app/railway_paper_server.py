@@ -115,7 +115,7 @@ async def expand_watchlist(values, data):
     from .build_virtual_watchlist import generate, SEEDS
     from .public_client_factory import build, close
     from .jupiter_research import Provider
-    venues = [x.strip() for x in values.get("EXCHANGES", "bybit,mexc").split(",") if x.strip()]
+    venues = [x.strip() for x in values.get("EXCHANGES", DEFAULT_PAPER_EXCHANGES).split(",") if x.strip()]
     if not venues or len(venues) > 7:
         raise ValueError("RAILWAY_PAPER_EXCHANGES_INVALID")
     clients, provider = await build(venues, "swap"), Provider(values["JUPITER_API_KEY"])
@@ -163,11 +163,14 @@ async def expand_watchlist(values, data):
         await provider.close()
 
 
+DEFAULT_PAPER_EXCHANGES = "binance,bybit,okx,bitget,gateio,mexc,bingx"
+
+
 def main():
     # Defaults limit retained public books on a small trial Volume. They don't
     # bound the whole audit database; monitor actual Volume and RAM usage.
     defaults = dict(LIVE_ENABLED="false", LIVE_ENTRY_ENABLED="false", DEX_LIVE_ENABLED="false",
-                    DEX_VIRTUAL_PAPER_ENABLED="true", EXCHANGES="bybit,mexc",
+                    DEX_VIRTUAL_PAPER_ENABLED="true", EXCHANGES=DEFAULT_PAPER_EXCHANGES,
                     PAPER_CAPITAL_USD="50", BOOK_HISTORY_MAX_ROWS="20000", BOOK_HISTORY_HOURS="24")
     for k, v in defaults.items():
         os.environ.setdefault(k, v)
