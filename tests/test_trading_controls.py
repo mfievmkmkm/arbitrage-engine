@@ -121,6 +121,51 @@ def test_mexc_default_pacing_stays_below_depth_endpoint_limit():
     assert Pacer().interval >= .2
 
 
+def test_priority_book_preempts_scanner_without_exceeding_depth_budget():
+    import time
+
+    async def go():
+        pacer = Pacer(.025)
+        events = []
+
+        async def take(name, priority):
+            await pacer.wait(priority)
+            events.append((name, time.monotonic()))
+
+        await take('first', 1)
+        tasks = [asyncio.create_task(take('scan-1', 1)),
+                 asyncio.create_task(take('scan-2', 1))]
+        await asyncio.sleep(0)
+        tasks.append(asyncio.create_task(take('paired-mark', 0)))
+        await asyncio.gather(*tasks)
+        assert [name for name, _ in events] == ['first', 'paired-mark', 'scan-1', 'scan-2']
+        assert all(b - a >= .022 for (_, a), (_, b) in zip(events, events[1:]))
+
+    asyncio.run(go())
+
+
+def test_cancelled_priority_waiter_does_not_block_other_books():
+    async def go():
+        pacer = Pacer(.02)
+        await pacer.wait()
+        cancelled = asyncio.create_task(pacer.wait(0))
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        await asyncio.wait_for(pacer.wait(), .2)
+
+    asyncio.run(go())
+
+
+def test_mexc_api_taker_fee_floor_matches_published_schedule():
+    from app.engine import FEE_BPS
+    from app.fee_schedule import DEFAULT_FUTURES_FEES
+    assert FEE_BPS['mexc'] >= 8.0
+    assert DEFAULT_FUTURES_FEES.require('mexc', 'taker') >= .0008
+    assert DEFAULT_FUTURES_FEES.require('mexc', 'maker') >= .0006
+
+
 def test_controls_view_names_units_and_marks_live_blocked(tmp_path):
     from app.trading_controls_view import render
     c = Controls(tmp_path/'c.json')

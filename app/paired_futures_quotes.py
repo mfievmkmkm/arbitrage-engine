@@ -19,7 +19,15 @@ async def refresh(row, scanner, position=None):
                                          scanner.funding.get(sell, symbol))
     async def read(venue):
         start = time.time()
-        raw = await asyncio.wait_for(scanner.clients[venue].fetch_order_book(symbol, limit=20), 2)
+        client = scanner.clients[venue]
+        # Paired entry preflight and open-position marks precede scanner REST
+        # candidates in the shared MEXC depth budget. Test/replay clients retain
+        # their existing fetch_order_book interface.
+        if hasattr(client, 'fetch_priority_order_book'):
+            request = client.fetch_priority_order_book(symbol, limit=20)
+        else:
+            request = client.fetch_order_book(symbol, limit=20)
+        raw = await asyncio.wait_for(request, 2)
         book = normalize(raw, symbol, start, time.time(), 1.5, raw.get('data_source', 'REST'))
         stamp = float(book['timestamp']) / 1000 if book.get('timestamp') is not None else start
         size = scanner.specs[venue][symbol].contract_size

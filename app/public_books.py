@@ -294,11 +294,13 @@ class Client:
                 self.counters["stream_errors"] += 1
                 await asyncio.sleep(self.retry_delay)
 
-    async def fetch_order_book(self, symbol, limit=None, params=None):
+    async def fetch_order_book(self, symbol, limit=None, params=None, *, priority=1):
         if self.closed:
             raise ValueError("PUBLIC_BOOK_CLIENT_CLOSED")
         if limit is not None and (type(limit) is not int or limit <= 0):
             raise ValueError("PUBLIC_BOOK_LIMIT_INVALID")
+        if type(priority) is not int or priority not in (0, 1):
+            raise ValueError("PUBLIC_BOOK_PRIORITY_INVALID")
         # Non-default REST params may select a different book/channel.
         if self.streams and not params:
             if not self._priorities or symbol in self._desired:
@@ -313,7 +315,7 @@ class Client:
         from .public_book_pacing import get as get_pacer
         pacer = get_pacer(self.raw, symbol)
         if pacer:
-            await pacer.wait()
+            await pacer.wait(priority=priority)
         started = self.clock()
         kwargs = {}
         if limit is not None:
@@ -338,6 +340,10 @@ class Client:
             except Exception:
                 self.counters["record_errors"] += 1
         return out
+
+    async def fetch_priority_order_book(self, symbol, limit=None):
+        """Fresh paired entry/mark book, ahead of pending discovery requests."""
+        return await self.fetch_order_book(symbol, limit=limit, priority=0)
 
     def book_status(self):
         fresh = sum(self._cached(symbol) is not None for symbol in list(self.cache))

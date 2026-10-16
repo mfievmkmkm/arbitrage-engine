@@ -22,7 +22,7 @@ FEE_BPS = {
     "okx": 5.0,
     "bitget": 6.0,
     "gateio": 7.5,
-    "mexc": 6.0,
+    "mexc": 8.0,
     "bingx": 6.0,
 }
 ALLOWED = set(FEE_BPS)

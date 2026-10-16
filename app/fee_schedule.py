@@ -36,7 +36,7 @@ DEFAULT_FUTURES_FEES = FeeSchedule(
         "binance": FeeRate(0.0002, 0.0005),
         "bybit": FeeRate(0.0002, 0.00055),
         "okx": FeeRate(0.0002, 0.0005),
-        "mexc": FeeRate(0.0001, 0.0004),
+        "mexc": FeeRate(0.0006, 0.0008),
         "bitget": FeeRate(0.0002, 0.0006),
         "gate": FeeRate(0.0002, 0.0005),
     }
