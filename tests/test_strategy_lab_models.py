@@ -148,6 +148,8 @@ def test_atomic_guard_and_no_implicit_stablecoin_peg():
     assert evaluate(s,now=1000)['reason']=='REGIONAL_OBSERVE_ONLY'
     s=snapshot('stable_regional');s['start_asset']='USDC'
     assert evaluate(s,now=1000)['reason']=='ACCOUNT_CURRENCY_MISMATCH'
+    s=snapshot('stable_regional');s['books'][1]['venue']='remote'
+    assert evaluate(s,now=1000)['reason']=='CROSS_VENUE_CYCLE_REQUIRES_INVENTORY'
 
 
 def test_immediate_roundtrip_cost_cannot_exceed_stop_at_admission():

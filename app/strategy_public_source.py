@@ -126,11 +126,11 @@ class Source:
                     s['funding_events'].append(dict(instrument=row['id'],ts=str(ts),rate=str(rate),notional_price=row['asks'][0][0]))
                     ts+=interval
                 s['funding_coverage_until'][row['id']]=str(now+horizon)
-                # This proves only that the next event is in the future, not that
-                # already due events have been received. Lab checks its stored schedule.
+                # Public funding calendars do not prove account cashflows, even
+                # when there were no events in the admission horizon.
                 s['funding_settled_until'][row['id']]=str(now)
             s['funding_calendar_verified']=True
-            s['funding_settlement_verified']=True
+            s['funding_settlement_verified']=False
         return plain(s)
 
 

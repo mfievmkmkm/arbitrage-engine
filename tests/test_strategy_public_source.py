@@ -47,6 +47,7 @@ def test_public_adapter_uses_actual_depth_native_multiplier_and_funding_calendar
         assert result['allowed'],result
         assert D(result['plan']['quantity'])==D('.9')
         assert len(row['funding_events'])==2
+        assert row['funding_settlement_verified'] is False
     asyncio.run(go())
 
 

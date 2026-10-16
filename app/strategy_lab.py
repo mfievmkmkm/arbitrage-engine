@@ -188,7 +188,7 @@ class Lab:
         route = self.route_key(plan)
         if D(plan['evidence']['ts']) <= D(state.get('last_entry', {}).get(route, '-1')):
             return 'LAB_ENTRY_SNAPSHOT_ALREADY_USED'
-        if any(x['status'] in ('ENTRY_UNCERTAIN', 'RECOVERY_REQUIRED', 'CYCLE_EXECUTING', 'CYCLE_RECOVERY') for x in state['positions'].values()):
+        if any(x['status'] in ('ENTRY_UNCERTAIN', 'RECOVERY_REQUIRED', 'CYCLE_EXECUTING', 'CYCLE_RECOVERY', 'ATOMIC_PENDING') for x in state['positions'].values()):
             return 'LAB_UNHEDGED_POSITION'
         if len(state['positions']) >= settings['max_positions']:
             return 'LAB_POSITION_LIMIT'
@@ -276,6 +276,8 @@ class Lab:
         return known, funding, financing, borrow
 
     def _mark(self, state, pos, s, now):
+        if pos['status'] == 'ATOMIC_PENDING':
+            return 'ATOMIC_RECEIPT_REQUIRED'
         if pos['status'] == 'ENTRY_UNCERTAIN':
             return 'ENTRY_RECONCILIATION_REQUIRED'
         if pos['status'] == 'REBALANCE_PENDING':
@@ -480,22 +482,17 @@ class Lab:
                             pos = dict(id=pid, plan=plan, opened_at=str(stamp), status='HEDGED',
                                        best_net='0', cashflows=[], net=None, held_legs=plan['legs'])
                             if plan['kind'] == 'cycle':
-                                if s.get('execution_result') == 'revert':
-                                    if s['strategy'] != 'dex_atomic':
-                                        raise Invalid('REVERT_ONLY_ATOMIC')
-                                    flag(s, 'revert_cost_verified')
-                                    net = -nonnegative(s['revert_gas_cost'])
-                                    self._realize(state, pos, net, stamp, 'MODEL_REVERT')
-                                elif s['strategy'] != 'dex_atomic':
+                                if s['strategy'] == 'dex_atomic':
+                                    # A simulation/min-output only admits a route.
+                                    # It cannot credit a transaction's forecast as PNL.
+                                    pos['status'] = 'ATOMIC_PENDING'
+                                    state['positions'][pid] = pos
+                                else:
                                     pos.update(status='CYCLE_EXECUTING',cycle_index=0,
                                                cycle_asset=s['start_asset'],cycle_amount=s['start_amount'],
                                                cycle_fills=[],cycle_dust={},cycle_cost=str(nonnegative(s['extra_cost'])))
                                     state['positions'][pid]=pos
                                     self._cycle_step(state,pos,s['books'][0],stamp)
-                                elif s.get('execution_result', 'complete') == 'complete':
-                                    self._realize(state, pos, D(plan['scenario_net']), stamp, 'MODEL_CYCLE_COMPLETE')
-                                else:
-                                    raise Invalid('CYCLE_PARTIAL_EXECUTION_REQUIRES_REPLAY_FILLS')
                             elif plan['kind'] == 'inventory':
                                 pos['status'] = 'REBALANCE_PENDING'
                                 pos['trade_net'] = str(sum((D(x['entry_cash'])*(ONE if x['side']=='sell' else -ONE)-D(x['entry_fee']) for x in plan['legs']), ZERO)-D(plan['entry_extra']))
@@ -547,7 +544,37 @@ class Lab:
                         cost = nonnegative(event['cost'])
                         self._realize(state, pos, D(pos['trade_net'])-cost, stamp, 'REBALANCE_CONFIRMED')
                         out['reason'] = 'REBALANCE_CONFIRMED'
+                    elif kind == 'atomic_receipt':
+                        if pos['status'] != 'ATOMIC_PENDING' or pos['plan']['strategy'] != 'dex_atomic':
+                            raise Invalid('ATOMIC_RECEIPT_NOT_EXPECTED')
+                        flag(event, 'verified')
+                        evidence = pos['plan']['evidence']
+                        if (event.get('chain') != evidence['books'][0]['chain']
+                                or event.get('asset') != pos['plan']['currency']
+                                or not isinstance(event.get('tx_id'), str) or not event['tx_id']):
+                            raise Invalid('ATOMIC_RECEIPT_IDENTITY_MISMATCH')
+                        gas = nonnegative(event['gas_paid'])
+                        other = nonnegative(event['other_cost_paid'])
+                        if event.get('success') is True:
+                            if D(event['input_spent']) != D(pos['plan']['quantity']):
+                                raise Invalid('ATOMIC_RECEIPT_INPUT_MISMATCH')
+                            output = nonnegative(event['output_received'])
+                            if output < D(evidence['atomic_min_output']):
+                                raise Invalid('ATOMIC_RECEIPT_MIN_OUTPUT_MISMATCH')
+                            loan = nonnegative(event['loan_fee_paid'])
+                            net = output-D(pos['plan']['quantity'])-gas-other-loan
+                            reason = 'ATOMIC_RECEIPT_COMPLETE'
+                        elif event.get('success') is False:
+                            net = -gas-other
+                            reason = 'ATOMIC_RECEIPT_REVERT'
+                        else:
+                            raise Invalid('ATOMIC_RECEIPT_STATUS_INVALID')
+                        pos['receipt'] = plain(event)
+                        self._realize(state, pos, net, stamp, reason)
+                        out['reason'] = reason
                     elif kind == 'request_close':
+                        if pos['status'] not in ('HEDGED', 'RECOVERY_REQUIRED', 'CYCLE_EXECUTING', 'CYCLE_RECOVERY'):
+                            raise Invalid('CLOSE_REQUEST_NOT_ACTIONABLE')
                         pos['close_requested'] = True
                         out['reason'] = 'CLOSE_REQUESTED_FRESH_QUOTES_REQUIRED'
                     elif kind in ('cycle_step','cycle_unwind'):

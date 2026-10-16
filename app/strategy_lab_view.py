@@ -65,7 +65,8 @@ def render(lab, screen='home'):
                          + (f'NET последней оценки: {D(mark["net"]):+.4f}' if mark.get('net') is not None else 'Окончательный NET неизвестен')
                          + f'\nВремя оценки: {escape(str(mark.get("ts","—")))}'
                          + ('\nДанные недоступны: '+escape(pos['data_error']) if pos.get('data_error') else ''))
-            rows.append([button('Запросить выход · '+pos['id'][:6],'lab:close:'+pos['id'])])
+            if pos['status'] not in ('ATOMIC_PENDING', 'REBALANCE_PENDING', 'ENTRY_UNCERTAIN', 'EXIT_ACCOUNTING_PENDING'):
+                rows.append([button('Запросить выход · '+pos['id'][:6],'lab:close:'+pos['id'])])
         if not lab.positions:
             parts.append('Открытых позиций нет.')
         text='\n\n'.join(parts)

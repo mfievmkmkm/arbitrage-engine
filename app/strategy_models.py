@@ -263,6 +263,8 @@ def _cycle(s, p, now):
         flag(s, 'settlement_path_verified')
         if any(b.kind not in ('spot', 'dex') for b in books):
             raise Invalid('STABLE_ROUTE_INVALID')
+        if len({b.venue for b in books}) != 1:
+            raise Invalid('CROSS_VENUE_CYCLE_REQUIRES_INVENTORY')
     amount = positive(s['start_amount'])
     if amount > p['max_notional']:
         raise Invalid('NOTIONAL_LIMIT')

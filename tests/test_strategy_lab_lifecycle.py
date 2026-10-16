@@ -189,8 +189,13 @@ def test_daily_stop_preserves_losses_and_cycle_snapshot_cannot_mint_twice(tmp_pa
     async def go():
         lab,_=await setup(tmp_path,'dex_atomic')
         await lab.configure(daily_loss='.5')
-        s=snapshot('dex_atomic');s.update(execution_result='revert',revert_cost_verified=True,revert_gas_cost='.6')
+        s=snapshot('dex_atomic');s.update(execution_result='complete')
         out=await lab.process(event(s))
+        assert lab.positions[out['position_id']]['status']=='ATOMIC_PENDING'
+        assert D(lab.state['realized'])==0
+        await lab.process(dict(id='receipt',type='atomic_receipt',position_id=out['position_id'],
+                               verified=True,tx_id='synthetic-revert',chain='chain-a',
+                               asset='USDT',success=False,gas_paid='.6',other_cost_paid='0'),now=1000)
         assert D(lab.state['realized'])==D('-.6')
         next_s=snapshot('dex_atomic',1001)
         assert (await lab.process(event(next_s,'e2'),now=1001))['reason']=='LAB_DAILY_STOP'
@@ -201,9 +206,40 @@ def test_daily_stop_preserves_losses_and_cycle_snapshot_cannot_mint_twice(tmp_pa
 def test_same_cycle_quote_is_single_use_even_with_different_event_ids(tmp_path):
     async def go():
         lab,_=await setup(tmp_path,'dex_atomic')
-        s=snapshot('dex_atomic');await lab.process(event(s))
-        assert (await lab.process(event(s,'e2')))['reason']=='LAB_ENTRY_SNAPSHOT_ALREADY_USED'
+        s=snapshot('dex_atomic');opened=await lab.process(event(s))
+        assert (await lab.process(event(s,'e2')))['reason']=='ATOMIC_RECEIPT_REQUIRED'
+        assert lab.state['closed_count']==0
+        assert lab.reserved>0
+        receipt=dict(id='receipt',type='atomic_receipt',position_id=opened['position_id'],
+                     verified=True,tx_id='synthetic-success',chain='chain-a',asset='USDT',
+                     success=True,input_spent='90',output_received='92.5',
+                     gas_paid='.2',other_cost_paid='.1',loan_fee_paid='.05')
+        assert (await lab.process(receipt,now=1000))['reason']=='ATOMIC_RECEIPT_COMPLETE'
+        assert D(lab.state['realized'])==D('2.15')
+        assert (await lab.process(event(s,'e3')))['reason']=='LAB_ENTRY_SNAPSHOT_ALREADY_USED'
         assert lab.state['closed_count']==1
+    asyncio.run(go())
+
+
+def test_atomic_receipt_rejects_unproven_or_wrong_output_and_preserves_reserve(tmp_path):
+    async def go():
+        lab,_=await setup(tmp_path,'dex_atomic')
+        pid=(await lab.process(event(snapshot('dex_atomic'))))['position_id']
+        receipt=dict(id='bad',type='atomic_receipt',position_id=pid,verified=True,
+                     tx_id='synthetic',chain='chain-a',asset='USDT',success=True,
+                     input_spent='90',output_received='91',gas_paid='.01',
+                     other_cost_paid='0',loan_fee_paid='0')
+        with pytest.raises(Invalid,match='MIN_OUTPUT'):
+            await lab.process(receipt,now=1000)
+        receipt['output_received']='92.1';receipt['verified']=False
+        with pytest.raises(Invalid,match='UNVERIFIED'):
+            await lab.process(receipt,now=1000)
+        with pytest.raises(Invalid,match='CLOSE_REQUEST_NOT_ACTIONABLE'):
+            await lab.process(dict(id='close',type='request_close',position_id=pid),now=1000)
+        _,keyboard=render(lab,'positions')
+        assert not any('lab:close:' in b.callback_data for row in keyboard.inline_keyboard for b in row)
+        assert lab.positions[pid]['status']=='ATOMIC_PENDING'
+        assert D(lab.state['realized'])==0 and lab.reserved>0
     asyncio.run(go())
 
 

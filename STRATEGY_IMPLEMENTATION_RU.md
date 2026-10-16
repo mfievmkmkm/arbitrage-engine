@@ -1,6 +1,6 @@
 # Реализация стратегий: что работает и как проверять
 
-Обновление 15 октября 2026. Основание — STRATEGY_PLAYBOOK_RU.md.
+Обновление 16 октября 2026. Основание — STRATEGY_PLAYBOOK_RU.md.
 Новые модели исполняются только в изолированном Paper/replay. Производственные
 FF/SF/SS/Funding/DEX-контуры сохранены. Этот релиз не включает LIVE,
 не разворачивает контракт, не выполняет borrow, swap, bridge или перевод.
@@ -19,7 +19,7 @@ FF/SF/SS/Funding/DEX-контуры сохранены. Этот релиз не
 | Calendar | Два срока, два направления, подписанный целевой спред и предел до ближайшей expiry | NET/риск/время; автоматического roll нет |
 | CEX spot/DEX spot | Точная identity, исполнимые объёмы, gas, два запаса | Подтверждение полного ребаланса перед снятием резерва |
 | DEX BUY/CEX SHORT | Точный размер DEX quote, равный BASE, gas двух операций и funding | Парный Paper-выход; потеря данных оставляет резерв |
-| DEX/DEX atomic | Замкнутый маршрут, одна сеть, simulation, min-output, loan fee/gas | Модельный полный цикл или revert с расходом gas |
+| DEX/DEX atomic | Замкнутый маршрут, одна сеть, simulation, min-output, loan fee/gas | ATOMIC_PENDING → отдельный подтверждённый receipt → прибыль или убыток от revert |
 | Cross-chain | Разные сети, подтверждённая эквивалентность и запасы | Торговая разница отдельно от последующего ребаланса |
 | Triangle/multistep | Правильные bid/ask, output предыдущего шага, fees, lots, остатки | Последовательные свежие котировки каждого шага; возможен убыточный unwind |
 | Options conversion | Spot+put−call, одинаковые European strike/expiry/settle, маржа call | Обратные fills либо расчёт payoff с отдельной продажей spot |
@@ -51,6 +51,11 @@ tax/rebasing tokens, неподтверждённый заём, произвол
   не подтверждён полный ребаланс. Учитывается и незадействованный seed.
 - Funding — только ledger-события. Дубликат периода отклоняется даже с
   новым ID; неизвестные начисления блокируют окончательную фиксацию NET.
+- Публичный календарь funding даёт сценарные ставки, но не удостоверяет
+  состоявшиеся выплаты. До отдельной сверки расчётов итог остаётся неизвестен.
+- Atomic simulation не отражается в realized PNL. Даже модельный успех
+  ждёт отдельного receipt с выходом и фактическими расходами; revert тоже
+  записывается как потеря gas/прочих расходов.
 - При выходе с неизвестным funding замораживаются модельные цены и время;
   поздняя сверка не подставляет более выгодные последующие цены.
 - Подтверждённые entry fills неизменяемы. Unknown fill держит резерв и
@@ -135,6 +140,7 @@ python -m tools.strategy_lab_replay --input ff.strategy-replay.jsonl --db test-f
 | funding | position_id, instrument, settlement_ts, cashflow со знаком, verified=true |
 | reconcile_entry | position_id, fills: полный список инструментов; final quantity/price/fee или unknown |
 | rebalance | position_id, quantity, cost, verified=true; подтверждает восстановление ВСЕГО инвентарного маршрута |
+| atomic_receipt | position_id, verified=true, tx_id, chain, asset, success; при успехе input_spent, output_received, gas_paid, other_cost_paid, loan_fee_paid; при revert gas_paid, other_cost_paid |
 | request_close | position_id; запрашивает выход на следующей свежей котировке |
 | cycle_step | position_id, book следующего шага со свежим ts |
 | cycle_unwind | position_id, book, side; прямой выход остатка в исходную валюту |
@@ -197,10 +203,9 @@ borrowing, опционной маржи, settlement и ребаланса ну�
 
 ## Границы этой приёмки
 
-Проверка этой версии: `python -m pytest -q --tb=short` — 1911 passed,
-из них 83 новых теста расчётов, состояния и публичного источника. Также
-прошли compileall, git diff --check и отдельный CLI-прогон UTF-8 шаблона,
-модельного входа и сохранения JSON без начисления прибыли за открытие.
+Проверка этой версии: `python -m pytest -q --tb=short` — 1912 passed.
+Также проверяются `compileall` и `git diff --check`. Детальная таблица
+допуска, выхода и ограничений — в STRATEGY_AUDIT_2026-10-16_RU.md.
 
 Проверены математические инварианты и модельные аварийные сценарии.
 Синтетические тесты не доказывают торговую прибыльность. Реальный OOS,
