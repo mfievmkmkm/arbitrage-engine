@@ -140,6 +140,22 @@ from .tg_market_detail import render as render_market_detail
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("arbitrage")
+
+
+def bootstrap_checkpoint(stage):
+    # Railway can terminate an OOM process without emitting a Python traceback.
+    # Leave a bounded marker before each market-heavy startup stage.
+    rss = 'unavailable'
+    try:
+        with open('/proc/self/status', encoding='ascii') as status:
+            for line in status:
+                if line.startswith('VmRSS:'):
+                    rss = f'{int(line.split()[1]) / 1024:.0f} MiB'
+                    break
+    except OSError:
+        pass
+    log.info('PAPER BOOTSTRAP %s | RSS %s', stage, rss)
+
 diary = Diary(config.db_path)
 scanner = Scanner(
     config.exchanges,
@@ -1660,7 +1676,9 @@ async def main():
             + recovery["reason"]
         )
         log.info("%s", startup_text.replace("\n", " | "))
+        bootstrap_checkpoint('futures markets begin')
         await scanner.start()
+        bootstrap_checkpoint('futures markets ready')
         if paired_paper:
             from .paired_futures_funding import Settlements
             paper.funding_history = Settlements(scanner.clients, scanner.funding, config.notional)
@@ -2010,6 +2028,7 @@ async def main():
                 and live_accepted(config.live_acceptance_path, (venue,))
             )
 
+        bootstrap_checkpoint('secondary markets begin')
         secondary = await build_bundle(
             config.exchanges,
             config.notional,
@@ -2037,6 +2056,7 @@ async def main():
                 safety=str(config.notional * config.safety_buffer_pct / 100),
             ),
         )
+        bootstrap_checkpoint('secondary markets ready')
         secondary.runtime.paused = lambda: scanner.paused
         live_monitor.cash_observer.dex = secondary.runtime.services.get(
             "dex_live_observation"
@@ -2277,6 +2297,7 @@ async def main():
         if paired_paper:
             paired_task = asyncio.create_task(paired_monitor())
         task = asyncio.create_task(scanning())
+        bootstrap_checkpoint('Telegram polling begin')
         await dp.start_polling(bot)
     finally:
         if strategy_lab_runtime:

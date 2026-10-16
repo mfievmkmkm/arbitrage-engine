@@ -1,6 +1,6 @@
 """Public market-data discovery. No order placement."""
 
-import asyncio, time, math
+import asyncio, time, math, logging
 from collections import Counter
 from dataclasses import dataclass
 from .exchange_names import public_exchange_class as exchange_class
@@ -152,7 +152,14 @@ class Scanner:
                 self.errors[name] = type(e).__name__
                 await c.close()
 
-        await asyncio.gather(*(init(x) for x in self.ids))
+        # CCXT builds large market maps. Loading every venue concurrently can
+        # exceed a small Railway worker's memory limit before polling starts.
+        for name in self.ids:
+            logging.getLogger('arbitrage').info('Futures market bootstrap: %s start', name)
+            await init(name)
+            logging.getLogger('arbitrage').info(
+                'Futures market bootstrap: %s %s', name,
+                'ready' if name in self.clients else 'unavailable:' + self.errors.get(name, 'unknown'))
         # MEXC contract depth is capped at 10 requests / 2 s. Its shared
         # 0.25 s pacer needs a bounded batch within the quote freshness window.
         batch = min(self.batch_size, 16) if 'mexc' in self.clients else self.batch_size
