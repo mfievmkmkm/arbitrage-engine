@@ -2541,6 +2541,7 @@ async def main():
                     lambda p: not scanner.paused and operator_paper_reason('dex_paired', p) is None and all(venue_controller.get(p['cex_venue'])[k] for k in ('paper', 'scan')),
                     notify_open=notify_dex_open)
                 secondary.dex_paired.operator_notional = lambda: trading_controls.profile('paper')['notional_usd']
+                secondary.runtime.services['dex_paired'].auto_enabled = lambda: trading_controls.environment=='paper' and trading_controls.profile('paper')['mode']=='auto'
             await secondary.route_discovery.start()
             if focus_enabled("DEX_CHANNEL_PUBLIC_READER_ENABLED") and os.getenv('MARKET_SIGNALS_ENABLED','true').lower() not in ('true','1','yes','on'):
                 from .dex_public_channel_reader import Reader as PublicChannelReader

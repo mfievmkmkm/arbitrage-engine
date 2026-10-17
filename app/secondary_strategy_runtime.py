@@ -55,7 +55,7 @@ class SecondaryRuntime:
         while self.running:
             try:
                 service.entry_enabled = (
-                    self.runtime.enabled.get(name, True) and not self.paused()
+                    self.runtime.enabled.get(getattr(service, 'enabled_name', name), True) and not self.paused()
                 )
                 if not service.entry_enabled and (not getattr(service, "paper", None)
                         or (getattr(service,'idle_when_disabled',False) and self.idle_paper(service))):
@@ -68,7 +68,7 @@ class SecondaryRuntime:
                 finally:
                     service.last_cycle_seconds=time.perf_counter()-started
                     service.last_cycle_at=time.time()
-                    if name in ('dex_paired','market_signals') and time.monotonic()-getattr(service,'last_timing_log',0)>=60:
+                    if name in ('dex_paired','dex_paired_scan','dex_paired_catalog','market_signals') and time.monotonic()-getattr(service,'last_timing_log',0)>=60:
                         logging.getLogger('arbitrage').info('PAPER_SCAN | %s | cycle_ms=%.0f | entries=%s',
                             name,service.last_cycle_seconds*1000,service.entry_enabled)
                         service.last_timing_log=time.monotonic()

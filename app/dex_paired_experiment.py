@@ -72,7 +72,7 @@ class PairedSource(Source):
 class PairedCycle(Cycle):
     def __init__(self, engine, legacy):
         super().__init__(engine, engine.source.routes)
-        self.interval = 5
+        self.interval = 1
         self.legacy = legacy
         self.unsupported = {}
         self.sync_ui = None
@@ -86,6 +86,8 @@ class PairedCycle(Cycle):
         if key not in self.priority_keys:
             self.priority_keys.append(key)
         self.wake.set()
+        if hasattr(self, 'scanner'):
+            self.scanner.add(route, priority=True)
 
     def sync(self):
         source = self.paper.source
@@ -118,6 +120,18 @@ class PairedCycle(Cycle):
             for route in self.routes:
                 route.update(notional_usd=min(100, limit / 1.1), max_notional_usd=limit)
         original = self.entry_enabled
+        scanner = getattr(self, 'scanner', None)
+        if scanner is not None and not self.paper.positions:
+            now = self.paper.clock()
+            fresh = [c for c in self.candidates.values()
+                     if 0 <= now-c['position']['opened_at'] <= 30]
+            if fresh and getattr(self, 'auto_enabled', lambda: True)():
+                best = max(fresh, key=lambda c:c['position']['paired_policy']['partial_net'])
+                allowed = [r for r in self.routes if self.paper.source.venue_allowed(r['cex_venue'])]
+                self.index = next((i for i,r in enumerate(allowed)
+                                   if route_key(r)==route_key(best['route'])), 0)
+            else:
+                self.entry_enabled = False
         state = self.paper.state
         if state.get('day') == int(self.paper.clock()//86400) and state.get('day_net',0) <= -5:
             self.entry_enabled = False
@@ -129,7 +143,7 @@ class PairedCycle(Cycle):
                 self.candidates[route_key(candidate['route'])]=candidate
             self.candidates={k:c for k,c in self.candidates.items()
                              if 0<=self.paper.clock()-c['position']['opened_at']<=30}
-            if candidate and not self.paper.positions and self.entry_enabled and self.notify_candidate:
+            if scanner is None and candidate and not self.paper.positions and self.entry_enabled and self.notify_candidate:
                 await self.notify_candidate(candidate)
             return rows
         finally:
@@ -170,4 +184,10 @@ async def build(bundle, runtime, db_path, notify, allowed, notify_open=None):
             source.routes.append(old_routes)
     bundle.dex_paired = engine
     bundle.runtime.add('dex_paired', service)
+    from .dex_parallel_scanner import Scanner
+    service.scanner = Scanner(service)
+    bundle.runtime.add('dex_paired_scan', service.scanner)
+    from .dex_evm_catalog import Catalog
+    service.scanner.discovery = Catalog(service.scanner)
+    bundle.runtime.add('dex_paired_catalog', service.scanner.discovery)
     return engine

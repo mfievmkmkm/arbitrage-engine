@@ -42,11 +42,20 @@ def scanner(engine,service,manual=True):
                 and c['position'].get('fee_source')=='ACCOUNT_READ_ONLY'
                 and 0<=now-c['position']['opened_at']<=30]
     candidates.sort(key=lambda c:c['position']['paired_policy']['partial_net'],reverse=True)
-    duration=getattr(service,'last_cycle_seconds',None)
+    scan=getattr(service,'scanner',None)
+    duration=getattr(scan,'last_batch_seconds',None)
     text='🔎 <b>Сканер · Bybit ↔ DEX</b>\n\n'
-    text+=f'Последний цикл: {duration:.2f} сек.\n' if duration is not None else 'Первый цикл ещё не завершён.\n'
-    text+='Пауза между циклами: 5 сек.\n'
-    text+='Топ проверенных кандидатов · оценки до 30 сек.'
+    if scan:
+        text+=f'Пар: {len(scan.catalog)} · потоков: {scan.workers}\n'
+        text+=f'Проверок: {scan.checked}\n'
+        if duration is not None:
+            age=max(0,now-scan.last_batch_at)
+            text+=f'Пакет: {duration:.2f} сек. · {age:.0f} сек. назад\n'
+        if scan.last_sweep_seconds is not None:
+            text+=f'Полный обход: {scan.last_sweep_seconds:.1f} сек.\n'
+    else:
+        text+='Первый цикл ещё не завершён.\n'
+    text+='Топ по сценарному NET · не старше 30 сек.'
     rows=[]
     for i,c in enumerate(candidates[:3],1):
         p=c['position'];key=hashlib.sha256(json.dumps(route_key(c['route'])).encode()).hexdigest()[:16]

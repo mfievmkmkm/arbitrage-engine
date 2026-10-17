@@ -22,6 +22,11 @@ class Provider:
         self.access_block_until = 0
         self.access_error_code = None
         self.access_status = None
+        from .dex_request_budget import Budget
+        self.budget = Budget()
+        self.token_cache = {}
+        self.token_locks = {}
+        self.metadata_budget = Budget(spacing=2.1, concurrency=2)
 
     async def start(self):
         if self.session is None:
@@ -32,6 +37,20 @@ class Provider:
             await self.session.close()
 
     async def token(self, network, address):
+        key = (network, address.lower())
+        async with self.token_locks.setdefault(key, asyncio.Lock()):
+            cached = self.token_cache.get(key)
+            if cached and 0 <= self.clock()-cached[0] < 3600:
+                return dict(cached[1])
+            permit = await self.metadata_budget.acquire()
+            try:
+                result = await self._token(network, address)
+            finally:
+                self.metadata_budget.release(permit)
+            self.token_cache[key] = (self.clock(), dict(result))
+            return result
+
+    async def _token(self, network, address):
         if not ADDRESS.fullmatch(address):
             raise ValueError("TOKEN_ADDRESSES_INVALID")
         await self.start()
@@ -50,6 +69,13 @@ class Provider:
         return dict(symbol=attr["symbol"], decimals=decimals)
 
     async def price(self, chain_id, sell_token, buy_token, sell_amount, slippage_bps=None):
+        permit = await self.budget.acquire()
+        try:
+            return await self._price(chain_id, sell_token, buy_token, sell_amount, slippage_bps)
+        finally:
+            self.budget.release(permit)
+
+    async def _price(self, chain_id, sell_token, buy_token, sell_amount, slippage_bps=None):
         if not self.api_key:
             return {"ok": False, "reason": "DEX_API_KEY_MISSING"}
         if (
