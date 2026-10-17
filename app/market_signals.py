@@ -81,13 +81,15 @@ def economics(a, b, budget=25, capital=250):
 class Scanner:
     interval = 15
 
-    def __init__(self, path, notify, clock=time.time, venues=None,trade_venues=(),account_clients=None):
+    def __init__(self, path, notify, clock=time.time, venues=None,trade_venues=(),account_clients=None,shared_clients=None):
         self.clock, self.notify = clock, notify
         self.store = Store(path,clock)
         self.trade_venues = set(trade_venues)
-        self.names = list(dict.fromkeys((*sorted(self.trade_venues),*(venues if venues is not None else discover()))))
-        self.clients, self.health, self.tickers, self.currency_cache = {}, {}, {}, {}
-        self.pool_lock=asyncio.Lock();self.max_active_venues=3
+        self.shared_clients=dict(shared_clients or {})
+        self.names = list(dict.fromkeys((*sorted(self.trade_venues),*self.shared_clients,
+                                         *(venues if venues is not None else discover()))))
+        self.clients, self.health, self.tickers, self.currency_cache = dict(self.shared_clients), {}, {}, {}
+        self.pool_lock=asyncio.Lock();self.max_active_venues=1
         self.loaded_order=[]
         self.retry, self.load_cursor = {}, 0
         self.symbol_cursor = {}
@@ -109,6 +111,9 @@ class Scanner:
     async def init(self):
         await self.store.init()
         await self.paper.init()
+        for name in self.shared_clients:
+            self.health[name]='Загружена; ждём котировки'
+            self.workers[name]=asyncio.create_task(self.ticker_loop(name))
 
     async def load(self, name):
         async with self.pool_lock:
@@ -119,7 +124,7 @@ class Scanner:
                     await asyncio.wait_for(client.load_markets(),20)
                 if not any(spot(m) for m in client.markets.values()):
                     raise ValueError('Нет активного USDT-спота')
-                if len(self.clients)>=self.max_active_venues:
+                if len(self.loaded_order)>=self.max_active_venues:
                     evict=next((v for v in self.loaded_order if v not in self.trade_venues),self.loaded_order[0])
                     worker=self.workers.pop(evict,None)
                     if worker:
@@ -479,7 +484,7 @@ class Scanner:
                 'Котировки: '+escape(', '.join(ok) or 'ожидаем')+'\n'
                 'Ожидают/недоступны: '+escape('; '.join(failed)[:1200] or 'нет')+'\n'
                 f'Ещё не проверено: {len(set(self.names)-set(self.health))}\n'
-                'Покрытие: активный USDT-спот CEX, публичные API CCXT с тикерами и стаканами. Одновременно активны максимум 3 биржи; остальные ротируются примерно раз в 20 секунд, поэтому поиск неполный. DEX и фьючерсы не смешиваются со спотом. Охват не означает доступность биржи вашему аккаунту.\n'
+                'Покрытие: активный USDT-спот CEX, публичные API CCXT с тикерами и стаканами. Уже загруженные площадки основного бота используются повторно; дополнительно активна максимум одна биржа, остальные ротируются примерно раз в 20 секунд. Поиск неполный. DEX и фьючерсы не смешиваются со спотом. Охват не означает доступность биржи вашему аккаунту.\n'
                 'Сигналы по всем доступным площадкам; PAPER-циклы только на площадках с настроенными spot API. Реальных ордеров и выводов нет.')
 
     async def close(self):
@@ -487,4 +492,4 @@ class Scanner:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks,return_exceptions=True)
-        await asyncio.gather(*(c.close() for c in self.clients.values()),return_exceptions=True)
+        await asyncio.gather(*(c.close() for v,c in self.clients.items() if v not in self.shared_clients),return_exceptions=True)

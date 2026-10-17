@@ -2494,7 +2494,8 @@ async def main():
             from .credentials import configured
             trade_venues={'gate' if v=='gateio' else v for v in configured() if v in spot_private_clients}
             feed=MarketSignals(config.db_path,market_signal_notification,
-                               trade_venues=trade_venues,account_clients=spot_private_clients)
+                               trade_venues=trade_venues,account_clients=spot_private_clients,
+                               shared_clients=getattr(secondary,'clients',{}))
             await feed.init()
             async def position_card(p,text,message_id):
                 markup=transfer_position_keyboard(p)

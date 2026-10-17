@@ -46,14 +46,17 @@ def test_bounded_exchange_pool_rotates_without_evicting_configured_venue(tmp_pat
             async def close(self):closed.append(self.name)
         for name in ('bybit','gate','mexc','okx'):
             monkeypatch.setattr(signals.ccxt,name,lambda opts,name=name:Client(name))
-        scanner=Scanner(tmp_path/'db',None,venues=['bybit','gate','mexc','okx'],trade_venues={'bybit'})
+        shared=Client('bybit')
+        scanner=Scanner(tmp_path/'db',None,venues=['bybit','gate','mexc','okx'],trade_venues={'bybit'},shared_clients={'bybit':shared})
         async def idle(*args):await asyncio.sleep(3600)
         scanner.ticker_loop=idle
+        await scanner.init()
         for name in scanner.names:await scanner.load(name)
-        assert len(scanner.clients)==3 and 'bybit' in scanner.clients
-        assert closed==['gate']
+        assert len(scanner.clients)==2 and scanner.clients['bybit'] is shared
+        assert closed==['gate','mexc']
         assert 'gate' not in scanner.tickers
         await scanner.close()
+        assert 'bybit' not in closed and 'okx' in closed
     asyncio.run(go())
 
 
