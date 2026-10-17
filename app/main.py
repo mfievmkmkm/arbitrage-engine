@@ -198,6 +198,9 @@ strategy_lab = StrategyLab(config.db_path)
 strategy_lab_runtime = None
 notification_bot = None
 secondary = None
+from .wallet_watch import Store as WalletWatchStore
+wallet_watch_store = WalletWatchStore(config.runtime_state_path + '.wallet_watch.json')
+wallet_watch_pending = {}
 live_monitor = None
 live_exit_coordinator = None
 live_entry_coordinator = None
@@ -1486,8 +1489,55 @@ async def account_balances_action(q: CallbackQuery):
     from .account_balances import snapshot, render
     rows=await snapshot(spot_private_clients,private_clients)
     await safe_edit(q.message,render(rows),InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='👛 Кошелёк',callback_data='wallet:show',style='primary')],
         [InlineKeyboardButton(text='↻ Обновить',callback_data='balances:show',style='primary'),
          InlineKeyboardButton(text='‹ Назад',callback_data='home')]]))
+
+
+@dp.callback_query(F.data.startswith('wallet:'))
+async def wallet_watch_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    from .wallet_watch import snapshot,render
+    if q.data=='wallet:edit':
+        wallet_watch_pending[q.from_user.id]=(q.message.chat.id,q.message.message_id,time.time()+120)
+        await q.answer()
+        await safe_edit(q.message,'👛 <b>Адрес кошелька</b>\n\nПришли публичный EVM-адрес: 0x…\nТолько просмотр · 2 минуты на ввод.',InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='‹ Назад',callback_data='wallet:show')]]))
+        return
+    if q.data!='wallet:show':return await q.answer()
+    wallet_watch_pending.pop(q.from_user.id,None)
+    await q.answer('Читаю блокчейн')
+    try:
+        wallet=wallet_watch_store.get()
+    except (ValueError,KeyError,OSError):
+        wallet=None
+    routes=[]
+    service=getattr(getattr(secondary,'runtime',None),'services',{}).get('dex_paired')
+    if service:
+        routes=list(service.paper.source.routes)
+        scan=getattr(service,'scanner',None)
+        if scan:routes+=list(scan.catalog.values())
+    text=render(wallet,await snapshot(wallet,routes)) if wallet else '👛 <b>Кошелёк</b>\n\nАдрес не добавлен.'
+    await safe_edit(q.message,text,InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='↻ Обновить',callback_data='wallet:show',style='primary'),
+         InlineKeyboardButton(text='Адрес',callback_data='wallet:edit')],
+        [InlineKeyboardButton(text='‹ Балансы',callback_data='balances:show')]]))
+
+
+@dp.message(F.text.regexp(r'^0x[0-9a-fA-F]{40}$'))
+async def wallet_watch_address(m: Message):
+    if not m.from_user or not allowed(m.from_user.id):return
+    pending=wallet_watch_pending.get(m.from_user.id)
+    if not pending or pending[0]!=m.chat.id or time.time()>pending[2]:return
+    try:
+        wallet=wallet_watch_store.set(m.text)
+    except ValueError as exc:
+        return await m.answer(str(exc))
+    wallet_watch_pending.pop(m.from_user.id,None)
+    # Keep the saved address out of the public repository and trading config.
+    await m.bot.edit_message_text('👛 Адрес сохранён · только просмотр',chat_id=pending[0],message_id=pending[1],reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='Балансы кошелька',callback_data='wallet:show',style='primary')]]))
 
 
 @dp.callback_query(F.data.startswith('pairpos:'))

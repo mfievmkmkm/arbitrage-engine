@@ -28,7 +28,8 @@ def keyboard(screen, enabled, paused=False):
         rows = [[button(('🟢 ' if enabled.get(k) else '⚪ ')+LABELS[k], 'strategy:'+k,
                         'success' if enabled.get(k) else None)] for k in ('spot_futures','spot_spot','funding_arb')]
     elif screen == 'paper_settings':
-        rows = [[button('🏦 Биржи','exchanges'),button('🛡 Риск','ctl:risk')]]
+        rows = [[button('🏦 Биржи','exchanges'),button('🛡 Риск','ctl:risk')],
+                [button('👛 Кошелёк','wallet:show')]]
     elif screen == 'paper_checks':
         rows = [[button('Проверка запуска','startup'),button('Рынок','top')],
                 [button('Исторический Replay','replay'),button('Задержки и fills','execution_replay')],
