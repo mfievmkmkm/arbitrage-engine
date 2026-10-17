@@ -232,18 +232,17 @@ class Paper:
                 'CLOSED':'Цикл закрыт','BUY_ABORTED':'Покупка отменена',
                 'ABORTED_AFTER_FUNDING':'Покупка отменена',
                 'CANCELLED_BEFORE_BUY':'Покупка отменена оператором'}
-        text=(f"🧪 <b>PAPER · позиция #{escape(p['id'])}</b>\n"
-              f"{escape(s['symbol'])}: {escape(s['buy'])} → {escape(s['sell'])}\n"
-              f"Этап: {escape(stages.get(status,status))}\n"
-              f"План: купить на ${float(model['spent']):.2f}, перевести BASE и продать после зачисления. "
-              f"NET при неизменной цене ${float(model['net_after_reserve']):+.3f}; это сценарий, не прибыль.\n"
-              f"BASE осталось {escape(p['remaining'])}; продано {escape(p['sold'])}; "
-              f"выручка ${float(p['proceeds']):.3f}.\n")
-        if p.get('sale_held'):text+='⚠ Продажа удержана вручную: рыночный риск растёт.\n'
-        if p.get('net') is not None:text+=f"Итог PAPER {float(p['net']):+.4f} USDT.\n"
+        text=(f"🔁 <b>{escape(s['symbol'])} · PAPER</b> · #{escape(p['id'])}\n"
+              f"{escape(s['buy'].upper())} → {escape(s['sell'].upper())}\n\n"
+              f"<b>{escape(stages.get(status,status))}</b>\n"
+              f"Покупка ${float(model['spent']):.2f}\n"
+              f"Осталось {float(p['remaining']):.8g} · продано {float(p['sold']):.8g}\n"
+              f"Выручка ${float(p['proceeds']):.3f}\n")
+        if p.get('sale_held'):text+='⏸ Продажа удержана\n'
+        if p.get('net') is not None:text+=f"<b>NET {float(p['net']):+.4f} USDT</b>\n"
         if self.state['last_error'] and self.state.get('position') and p['id']==self.state['position']['id']:
             text+='Последняя проблема: '+escape(self.state['last_error'])+'\n'
-        return text+'В пути перевод не отменяется. Цена продажи берётся позже; реальных сделок нет.'
+        return text+'Цена продажи не закреплена.'
 
     async def flush(self,notify,quiet_lifecycle=False):
         # Persistent outbox with at-least-once delivery. State lock prevents

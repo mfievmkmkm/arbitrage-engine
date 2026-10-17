@@ -107,6 +107,7 @@ class Scanner:
         self.accounts=Accounts(account_clients or {},clock)
         self.paper=TransferPaper(self.store,clock)
         self.position_card=None
+        self.actionable_only=False
         self.remove_position_card=None
 
     async def init(self):
@@ -344,37 +345,25 @@ class Scanner:
             e['reasons'].extend(account['reasons'])
         return e
 
-    def format(self,e):
-        lines=['📡 <b>SPOT · сигнал для проверки</b>',escape(e['symbol'])+' · '+escape(e['buy'])+' → '+escape(e['sell']),
-               f"Спред первых уровней {float(e['spread_pct']):.3f}% (ещё не прибыль)"]
+    def format(self,e,include_code=True):
         p=e.get('transfer')
-        lines.append('🔁 <b>Купить → перевести → продать ПОЗЖЕ</b>')
+        lines=[f'🔁 <b>{escape(e["symbol"])} · PAPER</b>',
+               escape(e['buy'].upper())+' → '+escape(e['sell'].upper())]
         if p:
-            lines.append(f"Покупка {float(p['buy_qty']):.8g} BASE; после сети {float(p['received_qty']):.8g}; продажа {float(p['sell_qty']):.8g}; пыль {float(p['dust_qty']):.8g}")
-            lines.append(f"Если будущая цена останется прежней: NET после возврата USDT и резерва ${float(p['net_after_reserve']):+.4f}. Это сценарий, не зафиксированная прибыль.")
-            lines.append('Падение цены продажи: '+', '.join(f"{x['drop_pct']}% → ${float(x['net']):+.2f}" for x in p['scenarios']))
-            lines.append(f"Цена безубыточности продажи ≈{float(p['break_even_sell']):.8g}; запас до неё {float(p['price_drop_to_break_even_pct']):.2f}%.")
-            lines.append('15 минут на перевод монеты и 15 минут на возврат USDT — непроверенные допущения модели.')
-            if p.get('funding_route'):
-                lines.append(f"Сначала USDT {escape(p['funding_source'])} → {escape(e['buy'])}; дополнительная комиссия ${float(p['funding_route']['fee']):.4f} и модельные 15 минут. Покупка будет заново оценена после зачисления.")
-            lines.append('Сети: '+escape(p['base_route']['network'])+' / возврат USDT '+escape(p['quote_route']['network']))
-        else:lines.append('⛔ Невозможно проверить последовательный перевод по этим данным.')
-        if not e.get('trade_configured',False):
-            lines.append('Для этой пары бирж нет настроенных spot API. Доступен только сигнал, не PAPER-цикл с настроенными площадками.')
-        elif e.get('accounts'):
-            a=e['accounts'];lines.append('Spot API: '+('остатки/комиссии прочитаны' if not a['reasons'] else 'есть ошибки чтения')+'. Адрес депозита, права вывода, тарифная валюта и доступные для вывода средства не подтверждены.')
+            lines += [f"Покупка <b>${float(p['spent']):.2f}</b> · {float(p['buy_qty']):.8g} монет",
+                      f"Цены ≈ {float(p['buy_vwap']):.8g} → {float(p['sell_vwap']):.8g}",
+                      f"Спред {float(p['spread_pct']):.2f}%",
+                      f"Торговые комиссии ≈${float(p['buy_fee'])+float(p['sell_fee']):.3f}",
+                      f"Вывод: {float(p['base_route']['fee']):.8g} монет + ${float(p['return_fee']):.3f} USDT",
+                      f"Сценарный NET: <b>${float(p['net_after_reserve']):+.3f}</b>",
+                      'Сеть: '+escape(p['base_route']['network']),
+                      'Продажа после перевода. Цена может измениться.']
         if e['reasons']:
-            lines.append('⛔ ВХОД НЕ ПОДТВЕРЖДЁН:\n'+'\n'.join('• '+escape(r) for r in e['reasons']))
-        else:
-            lines.append('🟡 Экономика модели прошла фильтры для PAPER. USDT нужен на бирже покупки. Балансы, ваши комиссии и адреса не подтверждены для LIVE.')
-        lines.append(f"Размер покупки ${float(p['spent']):.2f} из общих $250." if p else 'Размер покупки не подтверждён.')
-        if e.get('id'):
+            lines.append('⛔ Вход недоступен: '+escape(str(e['reasons'][0])))
+        elif not e.get('trade_configured'):
+            lines.append('⛔ Биржи не подключены')
+        if include_code and e.get('id'):
             lines.append('Код карточки: '+e['id'])
-        for label,v in (('Купить',e['buy']),('Продать',e['sell'])):
-            url,exact=market_link(v,e['symbol'].split('/')[0],self.clients[v].urls.get('www'))
-            if url:
-                lines.append('<a href="'+escape(url,quote=True)+'">'+label+(' · пара' if exact else ' · сайт биржи')+'</a>')
-        lines.append('Котировки UTC '+time.strftime('%H:%M:%S',time.gmtime(e['ts']))+'. До клика могут измениться. В PAPER будущая продажа использует новый стакан; реальных ордеров/переводов бот не отправляет.')
         return '\n'.join(lines)
 
     async def queue_channel(self,post):
@@ -420,6 +409,10 @@ class Scanner:
                     result=self.format(item['payload'])
                 await self.store.result(item['key'],result)
             # Ambiguous Telegram timeout may duplicate a message, never a trade.
+            if self.actionable_only and (item['kind']=='channel' or item['payload'].get('reasons')
+                    or not item['payload'].get('trade_configured')):
+                await self.store.delivered(item['key'])
+                continue
             delivery=result
             if item['kind']=='channel' and self.clock()-item['ts']>90:
                 delivery='⚠ Задержанная доставка. Проверка ниже устарела; НЕ использовать для текущего входа.\n\n'+delivery

@@ -23,7 +23,7 @@ def render(p, now):
     if p.get('status')=='EXIT_ACCOUNTING_PENDING':
         out.append('Выход смоделирован · итог ждёт сверки funding.')
     if p.get('data_reason') not in (None,'OK'):
-        out.append('Данные: '+escape(str(p['data_reason'])))
+        out.append('⏳ Ожидаем данные выхода')
     rows=[]
     if p.get('operator_exit_requested') is None and p.get('status')!='EXIT_ACCOUNTING_PENDING':
         rows.append([button('Закрыть пару',f'pairpos:{p["id"]}:close','danger')])

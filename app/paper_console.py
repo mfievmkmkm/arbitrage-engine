@@ -12,26 +12,23 @@ LABELS = {'spot_inventory':'Spot/Spot · размещённые средства
 
 def main_menu(paused=False):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [button('📦 Сделки','inv:show','primary'),button('💰 Балансы','balances:show','primary')],
-        [button('🧭 Режимы','strategies'),button('📒 Дневник','diary')],
+        [button('💰 Балансы','balances:show','primary'),button('📈 Сделки','paper','primary')],
+        [button('🧭 Стратегии','strategies'),button('📒 Дневник','diary')],
         [button('⚙️ Настройки','paper_settings'),button('▶ Продолжить' if paused else '⏸ Пауза','resume' if paused else 'pause','success' if paused else None)],
-        [button('📊 Результат','strategy_stats'),button('↻ Обновить','home')]])
+    ])
 
 
 def keyboard(screen, enabled, paused=False):
     if screen == 'home':
         return main_menu(paused)
     if screen == 'strategies':
-        rows = [[button('📉 Сжатие · две позиции', 'pair:show', 'primary')],
-                [button('🔁 Покупка → перевод → продажа', 'sig:show', 'primary')],
-                [button('Другие тесты', 'paper_modes_more'),button('Проверки','paper_checks')]]
+        rows = [[button('📉 Сжатие', 'pair:show', 'primary')],
+                [button('🔁 Перевод', 'sig:show', 'primary')]]
     elif screen == 'paper_modes_more':
         rows = [[button(('🟢 ' if enabled.get(k) else '⚪ ')+LABELS[k], 'strategy:'+k,
                         'success' if enabled.get(k) else None)] for k in ('spot_futures','spot_spot','funding_arb')]
     elif screen == 'paper_settings':
-        rows = [[button('🎛 Среда · режим · риск','ctl:show')],
-                [button('🏦 Биржи','exchanges'),button('💼 Капитал и риск','capital')],
-                [button('🔎 Проверки','paper_checks'),button('🗂 Старая история','paper_archive')]]
+        rows = [[button('🏦 Биржи','exchanges'),button('🛡 Риск','ctl:risk')]]
     elif screen == 'paper_checks':
         rows = [[button('Проверка запуска','startup'),button('Рынок','top')],
                 [button('Исторический Replay','replay'),button('Задержки и fills','execution_replay')],
@@ -50,7 +47,10 @@ def keyboard(screen, enabled, paused=False):
         rows = [[button('‹ Проверки','paper_checks')]]
     else:
         return None
-    rows.append([button('↻ Обновить',screen),button('‹ Главное меню','home')])
+    if screen not in ('strategies','paper_settings'):
+        rows.append([button('↻ Обновить',screen),button('‹ Назад','home')])
+    else:
+        rows.append([button('‹ Назад','home')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -122,7 +122,7 @@ def positions(paper,bundle):
             count+=1
             out.append(f'<b>{escape(p["symbol"])}</b> · {label}\nNET модели: {p.get("net",0):+.4f} USD')
     if not count:
-        out.append('Открытых сделок нет. Причины пропусков — в «Режимы → Условия и пропуски».')
+        out.append('Открытых сделок нет.')
     return _bounded(out)
 
 
@@ -138,6 +138,35 @@ def _bounded(parts):
 async def render(screen,path,paper,scanner,risk,runtime,bundle):
     dex=getattr(bundle,'dex_paired',None);enabled=runtime.enabled
     inventory=getattr(bundle,'inventory_paper',None)
+    feed=getattr(bundle,'market_signals',None)
+    transfer=getattr(getattr(feed,'paper',None),'state',None) or {}
+    if screen=='paper_settings':
+        return '⚙️ <b>Настройки</b>\n\nPAPER · виртуальные деньги'
+    if screen=='strategies':
+        return ('🧭 <b>Стратегии</b>\n\n'
+                '📉 <b>Сжатие</b>\nDEX-покупка + шорт Bybit.\n\n'
+                '🔁 <b>Перевод</b>\nКупить → перевести → продать.')
+    if screen=='paper':
+        text=positions(paper,bundle)
+        if transfer.get('position'):
+            text=text.replace('Открытых сделок нет.','')
+            return _bounded([text,feed.paper.card(transfer['position'])])
+        return text
+    if screen in ('home','diary','strategy_stats'):
+        stats=await summary(path,dex)
+        net=stats['net']+stats['dex_net']
+        closed=stats['count']+stats['dex_count']
+        opens=len(paper.positions)+(len(dex.positions) if dex else 0)+int(bool(transfer.get('position')))
+        if screen=='home':
+            return ('<b>АРБИТРАЖ</b> · PAPER\n\n'
+                    +('⏸ Входы на паузе' if scanner.paused else '🟢 Поиск включён')
+                    +f'\nОткрыто сделок: <b>{opens}</b>\n\n'
+                    +f'Парные сделки: <b>{net:+.4f} USD</b>\n'
+                    +f'Перевод: <b>{float(transfer.get("realized",0)):+.4f} USD</b>')
+        return ('📒 <b>Дневник · PAPER</b>\n\n'
+                f'Парные сделки: {closed} · <b>{net:+.4f} USD</b>\n'
+                f'Перевод: {transfer.get("closed",0)} · <b>{float(transfer.get("realized",0)):+.4f} USD</b>\n\n'
+                'Полная история — в выгрузке.')
     if inventory and screen in ('home','strategy_stats','capital','status','risk','paper_settings'):
         from .inventory_experiment import render as inventory_view
         text=inventory_view(inventory,getattr(bundle,'inventory_source',None))

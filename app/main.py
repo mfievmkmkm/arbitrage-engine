@@ -501,6 +501,9 @@ async def text_for(s):
         )
         return f"📔 ДНЕВНИК\nНаблюдений: {count}\nПоследнее: {stamp}\nЗакрыто paper: {trades}\nPaper NET: {pnl:+.4f} USD\nПрибыльных: {wins}"
     if s == "exchanges":
+        if paired_paper:
+            names=sorted(set(private_clients)|set(spot_private_clients))
+            return '🏦 <b>Биржи</b>\n\n'+('\n'.join(escape(x.upper())+' · ключ добавлен' for x in names) or 'Нет подключённых бирж.')
         health = scanner.health.snapshot()
         lines = []
         for x in scanner.ids:
@@ -989,6 +992,8 @@ def keyboard_for(screen):
     if screen == "top":
         return market_keyboard(merged_market(strategy_runtime))
     if screen == "exchanges":
+        if paired_paper:
+            return venue_keyboard(sorted(set(private_clients)|set(spot_private_clients)))
         return venue_keyboard(scanner.ids)
     if screen == "strategies":
         return strategy_menu(strategy_runtime.enabled)
@@ -1236,8 +1241,8 @@ async def trading_control_page(q: CallbackQuery):
             buttons = [[InlineKeyboardButton(text=r.get('label', r['cex_symbol'])[:50],
                 callback_data='dcard:'+hashlib.sha256(json.dumps(route_key(r)).encode()).hexdigest()[:16])]
                 for r in dex.source.routes[:12]]
-            buttons.append([InlineKeyboardButton(text='‹ Управление', callback_data='ctl:show')])
-            await safe_edit(q.message, 'Выбери DEX-пару для проверки. Позиция пока не открывается.', InlineKeyboardMarkup(inline_keyboard=buttons))
+            buttons.append([InlineKeyboardButton(text='‹ Назад', callback_data='pair:show')])
+            await safe_edit(q.message, '🔎 <b>Выбери пару</b> · PAPER', InlineKeyboardMarkup(inline_keyboard=buttons))
             await q.answer()
             return
         if parts[1] == 'env':
@@ -1255,11 +1260,23 @@ async def trading_control_page(q: CallbackQuery):
                 before=event['before'], after=event['after'])])
             trading_controls.events.pop(0)
         text, keyboard = render(trading_controls, config.live_enabled and config.live_entry_enabled,
-                                show_risk=parts[1] in ('risk','set'))
+                                show_risk=parts[1] in ('risk','set','field'),
+                                selected_key=parts[2] if parts[1] in ('set','field') else None)
         await safe_edit(q.message, text, keyboard)
         await q.answer('Сохранено' if parts[1]!='show' else '')
     except (ValueError, IndexError):
         await q.answer('Недопустимая настройка', show_alert=True)
+
+
+@dp.callback_query(F.data == 'dismiss:signal')
+async def dismiss_signal(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    await q.answer('Пропущено')
+    try:
+        await q.message.delete()
+    except Exception:
+        await q.message.edit_text('Пропущено',reply_markup=None)
 
 
 @dp.callback_query(F.data.startswith('enter:'))
@@ -1342,11 +1359,13 @@ async def manual_dex_card(q: CallbackQuery):
     token = trading_controls.issue('dex_paired', dict(symbol=p['symbol'], route_key=list(route_key(route))))
     text = (f'DEX BUY ↔ CEX SHORT · PAPER\n{escape(p["symbol"])}\n'
             + f'Равный объём ног: {p["base_qty"]:.8g}\nDEX ${p["entry_cash"]:.2f} · CEX ${p["base_qty"]*p["entry_price"]:.2f}\n'
+            + f'Расходы ≈${p["paired_policy"]["costs"]:.3f} · резерв funding ${p["paired_policy"]["funding_reserve"]:.3f}\n'
             + f'NET при частичном схождении: ${p["paired_policy"]["partial_net"]:.4f}\n'
-            + 'Это прогноз. Подтверждение действительно 30 секунд; цены и риск проверяются повторно.')
+            + 'Оценка модели · подтверждение 30 сек.')
     await safe_edit(q.message, text, InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='Подтвердить PAPER вход', callback_data='enter:'+token)],
-        [InlineKeyboardButton(text='‹ Управление', callback_data='ctl:show')]]))
+        [InlineKeyboardButton(text='✓ Открыть', callback_data='enter:'+token,style='success'),
+         InlineKeyboardButton(text='Пропустить', callback_data='dismiss:signal')],
+        [InlineKeyboardButton(text='‹ Назад', callback_data='pair:show')]]))
 
 
 @dp.callback_query(F.data.startswith("strategy:"))
@@ -1429,7 +1448,7 @@ async def inventory_action(q: CallbackQuery):
 def transfer_position_keyboard(p):
     ident=p['id'];status=p['status'];rows=[]
     if status=='BUY_PENDING':
-        rows.append([InlineKeyboardButton(text='⛔ Отменить покупку PAPER',callback_data=f'sig:position:{ident}:cancel_buy')])
+        rows.append([InlineKeyboardButton(text='Отменить покупку',callback_data=f'sig:position:{ident}:cancel_buy',style='danger')])
     if status in ('BASE_IN_TRANSIT','SELL_PENDING'):
         if p.get('sale_held'):
             rows.append([InlineKeyboardButton(text='▶️ Продолжить продажу',callback_data=f'sig:position:{ident}:resume_sale',style='primary')])
@@ -1438,7 +1457,7 @@ def transfer_position_keyboard(p):
             if status=='SELL_PENDING':
                 rows.append([InlineKeyboardButton(text='💱 Продать сейчас',callback_data=f'sig:position:{ident}:sell_now',style='primary')])
     rows.append([InlineKeyboardButton(text='↻ Состояние',callback_data=f'sig:position:{ident}:refresh'),
-                 InlineKeyboardButton(text='‹ Сигналы',callback_data='sig:show')])
+                 InlineKeyboardButton(text='‹ Назад',callback_data='sig:show')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1566,13 +1585,14 @@ async def market_signals_action(q: CallbackQuery):
             row=await feed.store.signal(q.data.split(':',2)[2])
             e=await feed.review(row['symbol'],row['buy'],row['sell'],read_accounts=True)
             e['id']=row['id']
-            links=[[InlineKeyboardButton(text='↻ Новые котировки и балансы',callback_data=q.data)]]
+            links=[[InlineKeyboardButton(text='↻ Обновить',callback_data=q.data)]]
             if e['transfer'] and not e['reasons'] and e['trade_configured']:
                 token=await feed.store.issue(e)
-                links.append([InlineKeyboardButton(text='🧪 Подтвердить PAPER-покупку',callback_data='sig:paper:'+token,style='primary')])
-            links.append([InlineKeyboardButton(text='‹ Сигналы',callback_data='sig:show')])
+                links.append([InlineKeyboardButton(text='✓ Открыть',callback_data='sig:paper:'+token,style='success'),
+                              InlineKeyboardButton(text='Пропустить',callback_data='dismiss:signal')])
+            links.append([InlineKeyboardButton(text='‹ Назад',callback_data='sig:show')])
             await q.answer()
-            return await safe_edit(q.message,feed.format(e),InlineKeyboardMarkup(inline_keyboard=links))
+            return await safe_edit(q.message,feed.format(e,include_code=False),InlineKeyboardMarkup(inline_keyboard=links))
         if q.data.startswith('sig:paper:'):
             control=await feed.store.control()
             if control['mode']!='manual':raise ValueError('Режим изменился: ручное подтверждение недоступно')
@@ -1584,39 +1604,19 @@ async def market_signals_action(q: CallbackQuery):
             await feed.paper.open(dict(signal=e,transfer=e['transfer']))
             if feed.position_card:
                 await feed.paper.sync_cards(feed.position_card,feed.remove_position_card)
-            await q.answer('PAPER-цикл записан')
-            return await safe_edit(q.message,feed.paper.render(),InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text='↻ PAPER-цикл',callback_data='sig:state')],
-                [InlineKeyboardButton(text='‹ Сигналы',callback_data='sig:show')]]))
+            await q.answer('Открыто · PAPER')
+            from .transfer_console import render
+            text,keyboard=await render(feed,'sig:show',scanner.paused)
+            return await safe_edit(q.message,text,keyboard)
+
     except ValueError as exc:
         await q.answer(str(exc)[:190],show_alert=True)
         return
-    enabled=await feed.store.enabled()
-    control=await feed.store.control()
-    reader=getattr(secondary,'public_channel_reader',None)
-    text=feed.status()+'\n\nУведомления: '+('включены' if enabled else 'выключены')
-    if scanner.paused:
-        text+='\nОбщая пауза: отправка и сканирование приостановлены.'
-    text+='\nКанал: '+escape(reader.status if reader else 'публичное чтение не запущено')
-    text+=(f"\n\n🔁 PAPER перевод · {'Авто' if control['mode']=='auto' else 'Подтверждаю сам'}"
-           f"\nПокупка до ${control['budget']:g}; спред {control['min_spread']:g}–{control['max_spread']:g}%"
-           f" · NET от ${control['min_net']:g} даже при падении цены на {control['stress_drop']:g}%"
-           '\nВход только на биржах с настроенным spot API; реальный режим недоступен.\n\n'+feed.paper.render())
-    rows=[[InlineKeyboardButton(text='👆 Подтверждаю сам',callback_data='sig:mode:manual',style='primary' if control['mode']=='manual' else None),
-           InlineKeyboardButton(text='🤖 PAPER авто',callback_data='sig:mode:auto',style='primary' if control['mode']=='auto' else None)],
-          [InlineKeyboardButton(text='Покупка $10',callback_data='sig:set:budget:10'),InlineKeyboardButton(text='$25',callback_data='sig:set:budget:25'),InlineKeyboardButton(text='$50',callback_data='sig:set:budget:50')],
-          [InlineKeyboardButton(text='Спред ≥5%',callback_data='sig:set:min_spread:5'),InlineKeyboardButton(text='≥7.5%',callback_data='sig:set:min_spread:7.5')],
-          [InlineKeyboardButton(text='Максимум 10%',callback_data='sig:set:max_spread:10'),InlineKeyboardButton(text='15%',callback_data='sig:set:max_spread:15')],
-          [InlineKeyboardButton(text='Падение 3%',callback_data='sig:set:stress_drop:3'),InlineKeyboardButton(text='5%',callback_data='sig:set:stress_drop:5')],
-          [InlineKeyboardButton(text='NET ≥$0.25',callback_data='sig:set:min_net:0.25'),InlineKeyboardButton(text='≥$0.50',callback_data='sig:set:min_net:0.5')],
-          [InlineKeyboardButton(text='Выключить сигналы' if enabled else 'Включить сигналы',callback_data='sig:toggle')],
-          [InlineKeyboardButton(text='↻ Обновить',callback_data='sig:show'),InlineKeyboardButton(text='‹ Сделки',callback_data='inv:show')]]
-    if not feed.paper.state.get('home'):
-        venues=sorted(feed.trade_venues)
-        rows.insert(1,[InlineKeyboardButton(text='🏦 Начать PAPER на '+v,callback_data='sig:fund:'+v) for v in venues[:3]])
-        if len(venues)>3:rows.insert(2,[InlineKeyboardButton(text='🏦 '+v,callback_data='sig:fund:'+v) for v in venues[3:7]])
+    from .transfer_console import render
+    text,keyboard=await render(feed,q.data,scanner.paused)
     await q.answer()
-    await safe_edit(q.message,text,InlineKeyboardMarkup(inline_keyboard=rows))
+    await safe_edit(q.message,text,keyboard)
+
 
 
 async def notify_paper_close(symbol, net, reason):
@@ -2598,9 +2598,11 @@ async def main():
                           f'Объём хеджа {p["base_qty"]:.8g}\n'
                           f'DEX ${p["entry_cash"]:.2f} · фьючерс ${p["base_qty"]*p["entry_price"]:.2f}\n'
                           f'Сценарный NET ${p["paired_policy"]["partial_net"]:.4f}\n\n'
-                          'Котировки модели, прибыль не гарантирована. Перед подтверждением — новая проверка.')
+                          f'Расходы ≈${p["paired_policy"]["costs"]:.3f}\n'
+                          'Оценка модели · перед входом повторная проверка.')
                     await bot.send_message(config.admin_id,text,parse_mode='HTML',reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text='Проверить сейчас',callback_data='dcard:'+key,style='primary')]]))
+                        [InlineKeyboardButton(text='Проверить',callback_data='dcard:'+key,style='primary'),
+                         InlineKeyboardButton(text='Пропустить',callback_data='dismiss:signal')]]))
                     await db.execute('INSERT INTO paired_candidate_alerts VALUES(?,?) ON CONFLICT(route) DO UPDATE SET sent=excluded.sent',(key,time.time()))
                     await db.commit()
             secondary.runtime.services['dex_paired'].notify_candidate=pair_candidate
@@ -2610,6 +2612,9 @@ async def main():
         if paired_paper:
             from .inventory_experiment import build as build_inventory, migrate as migrate_inventory
             migrate_inventory(config.runtime_state_path,strategy_runtime,strategy_toggles,trading_controls)
+            # Retire new inventory experiments; their open positions remain monitored.
+            strategy_runtime.enabled['spot_inventory']=False
+            strategy_toggles.save(strategy_runtime.enabled)
             async def inventory_notification(event,position):
                 plan=position['plan']
                 from .inventory_cards import entry_text,entry_keyboard,card_row
@@ -2638,8 +2643,10 @@ async def main():
             async def market_signal_notification(text):
                 import re
                 match=re.search(r'Код карточки: ([0-9a-f]{16})',text)
+                text=re.sub(r'\nКод карточки: [0-9a-f]{16}','',text)
                 markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-                    text='🔎 Проверить сейчас',callback_data='sig:card:'+match[1])]]) if match else None
+                    text='Проверить',callback_data='sig:card:'+match[1],style='primary'),
+                    InlineKeyboardButton(text='Пропустить',callback_data='dismiss:signal')]]) if match else None
                 await bot.send_message(config.admin_id,text,parse_mode='HTML',
                                        disable_web_page_preview=True,reply_markup=markup)
             from .credentials import configured
@@ -2648,6 +2655,7 @@ async def main():
                                trade_venues=trade_venues,account_clients=spot_private_clients,
                                shared_clients=getattr(secondary,'clients',{}))
             await feed.init()
+            feed.actionable_only=True
             async def position_card(p,text,message_id):
                 markup=transfer_position_keyboard(p)
                 if message_id:
