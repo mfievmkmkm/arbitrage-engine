@@ -179,3 +179,56 @@ def test_usdt_relocation_rechecks_after_arrival_and_accounts_for_fee(tmp_path):
             assert D(paper.state['realized'])==D(p['net_now'])-D('.05')
     asyncio.run(go())
     asyncio.run(go(True))
+
+
+def test_dedicated_position_card_and_operator_sale_hold(tmp_path):
+    async def go():
+        clock=[1000.0];store=Store(tmp_path/'db',lambda:clock[0]);await store.init()
+        paper=Paper(store,lambda:clock[0]);await paper.init();await paper.set_home('buy',{'buy','sell'})
+        p=plan(books('100'),books('107'),*routes())
+        position=await paper.open(dict(signal=dict(symbol='SOL/USDT',buy='buy',sell='sell',ts=1000),transfer=p))
+        calls=[]
+        async def deliver(pos,text,message_id):
+            calls.append((pos['status'],message_id,text));return 41
+        await paper.sync_cards(deliver);await paper.sync_cards(deliver)
+        assert len(calls)==1 and calls[0][1] is None and 'не прибыль' in calls[0][2]
+        class Source:
+            clients={'sell':NS(markets={'SOL/USDT':market()})}
+            async def route(self,*args):return routes()
+            async def book(self,*args):return books('107',stamp=clock[0]) | dict(ts=D(clock[0]))
+        source=Source();clock[0]=1901
+        source.book=lambda *args: immediate(books('107',size='.1',stamp=clock[0]) | dict(ts=D(clock[0])))
+        await paper.monitor(source)
+        assert paper.state['position']['status']=='SELL_PENDING'
+        await paper.control(position['id'],'hold_sale')
+        clock[0]=1904;await paper.monitor(source)
+        assert paper.state['position']['sold']==paper.state['position']['fills'][0]['qty']
+        restored=Paper(store,lambda:clock[0]);await restored.init()
+        assert restored.state['position']['sale_held'] is True
+        await restored.control(position['id'],'resume_sale')
+        source.book=lambda *args: immediate(books('107',stamp=clock[0]) | dict(ts=D(clock[0])))
+        await restored.monitor(source);await restored.sync_cards(deliver)
+        assert calls[-1][1]==41 and restored.state['position']['status']=='QUOTE_IN_TRANSIT'
+    async def immediate(x):return x
+    asyncio.run(go())
+
+
+def test_operator_can_cancel_only_before_buy_after_funding(tmp_path):
+    async def go():
+        clock=[1000.0];store=Store(tmp_path/'db',lambda:clock[0]);await store.init()
+        paper=Paper(store,lambda:clock[0]);await paper.init();await paper.set_home('home',{'home','buy','sell'})
+        p=plan(books('100'),books('107'),*routes())
+        p.update(funding_source='home',funding_route=routes()[1],funding_amount='25.05',funding_credit='25')
+        opened=await paper.open(dict(signal=dict(symbol='SOL/USDT',buy='buy',sell='sell',ts=1000),transfer=p))
+        with pytest.raises(ValueError,match='недоступно'):
+            await paper.control(opened['id'],'cancel_buy')
+        class Source:
+            async def quote_route(self,*args):return routes()[1]
+        clock[0]=1901;await paper.monitor(Source())
+        assert paper.state['position']['status']=='BUY_PENDING'
+        await paper.control(opened['id'],'cancel_buy')
+        assert paper.state['position'] is None
+        assert D(paper.state['realized'])==D('-.05')
+        assert D(paper.state['balances']['buy'])==25
+        assert paper.state['last_position']['status']=='CANCELLED_BEFORE_BUY'
+    asyncio.run(go())

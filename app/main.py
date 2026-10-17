@@ -1416,6 +1416,22 @@ async def inventory_action(q: CallbackQuery):
                         trading_controls,lambda:not scanner.paused and strategy_runtime.enabled.get('spot_inventory'),safe_edit)
 
 
+def transfer_position_keyboard(p):
+    ident=p['id'];status=p['status'];rows=[]
+    if status=='BUY_PENDING':
+        rows.append([InlineKeyboardButton(text='⛔ Отменить покупку PAPER',callback_data=f'sig:position:{ident}:cancel_buy')])
+    if status in ('BASE_IN_TRANSIT','SELL_PENDING'):
+        if p.get('sale_held'):
+            rows.append([InlineKeyboardButton(text='▶️ Продолжить продажу',callback_data=f'sig:position:{ident}:resume_sale',style='primary')])
+        else:
+            rows.append([InlineKeyboardButton(text='⏸ Удержать продажу',callback_data=f'sig:position:{ident}:hold_sale')])
+            if status=='SELL_PENDING':
+                rows.append([InlineKeyboardButton(text='💱 Продать сейчас',callback_data=f'sig:position:{ident}:sell_now',style='primary')])
+    rows.append([InlineKeyboardButton(text='↻ Состояние',callback_data=f'sig:position:{ident}:refresh'),
+                 InlineKeyboardButton(text='‹ Сигналы',callback_data='sig:show')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.callback_query(F.data.startswith('sig:'))
 async def market_signals_action(q: CallbackQuery):
     if not allowed(q.from_user.id):
@@ -1424,6 +1440,22 @@ async def market_signals_action(q: CallbackQuery):
     if feed is None:
         return await q.answer('Сканер сигналов отключён: MARKET_SIGNALS_ENABLED',show_alert=True)
     try:
+        if q.data.startswith('sig:position:'):
+            _,_,ident,action=q.data.split(':',3)
+            p=feed.paper.positions.get(ident)
+            if action!='refresh':
+                if p is None:raise ValueError('Позиция уже закрыта')
+                await feed.paper.control(ident,action)
+            current=feed.paper.state.get('position') or feed.paper.state.get('last_position')
+            if current is None or current['id']!=ident:raise ValueError('Карточка позиции устарела')
+            await q.answer('Действие записано' if action!='refresh' else '')
+            await safe_edit(q.message,feed.paper.card(current),transfer_position_keyboard(current))
+            # The card remains bound to this message after operator edits.
+            async with feed.paper.lock:
+                state=__import__('copy').deepcopy(feed.paper.state)
+                state['position_cards'][ident]=dict(message_id=q.message.message_id,text=feed.paper.card(current))
+                await feed.paper.save(state,'POSITION_CARD_OPERATOR',dict(id=ident,action=action))
+            return
         if q.data=='sig:toggle':
             await feed.store.toggle()
         if q.data.startswith('sig:mode:'):
@@ -1453,6 +1485,8 @@ async def market_signals_action(q: CallbackQuery):
             if not e['trade_configured'] or e['reasons'] or e['transfer'] is None:
                 raise ValueError('Новые данные не прошли проверку; позиция не открыта')
             await feed.paper.open(dict(signal=e,transfer=e['transfer']))
+            if feed.position_card:
+                await feed.paper.sync_cards(feed.position_card)
             await q.answer('PAPER-цикл записан')
             return await safe_edit(q.message,feed.paper.render(),InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text='↻ PAPER-цикл',callback_data='sig:state')],
@@ -2462,6 +2496,17 @@ async def main():
             feed=MarketSignals(config.db_path,market_signal_notification,
                                trade_venues=trade_venues,account_clients=spot_private_clients)
             await feed.init()
+            async def position_card(p,text,message_id):
+                markup=transfer_position_keyboard(p)
+                if message_id:
+                    try:
+                        await bot.edit_message_text(text,config.admin_id,message_id,parse_mode='HTML',reply_markup=markup)
+                        return message_id
+                    except Exception:
+                        log.exception('PAPER position card edit failed; sending replacement')
+                sent=await bot.send_message(config.admin_id,text,parse_mode='HTML',reply_markup=markup)
+                return sent.message_id
+            feed.position_card=position_card
             feed.channel_review=Reviewer(secondary)
             secondary.market_signals=feed
             secondary.runtime.add('market_signals',feed)

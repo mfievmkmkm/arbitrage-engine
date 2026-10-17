@@ -19,7 +19,8 @@ class Paper:
 
     async def init(self):
         import aiosqlite
-        initial=dict(cash='250',balances={},home='',realized='0',closed=0,wins=0,losses=0,position=None,daily={},last_error='',notifications={})
+        initial=dict(cash='250',balances={},home='',realized='0',closed=0,wins=0,losses=0,position=None,last_position=None,
+                     position_cards={},daily={},last_error='',notifications={})
         async with aiosqlite.connect(self.store.path) as db:
             await db.executescript('''CREATE TABLE IF NOT EXISTS signal_transfer_state(id INTEGER PRIMARY KEY,version INTEGER,payload TEXT);
                 CREATE TABLE IF NOT EXISTS signal_transfer_events(id INTEGER PRIMARY KEY,ts REAL,reason TEXT,payload TEXT);''')
@@ -30,6 +31,7 @@ class Paper:
             # This draft never shipped, but refuse to turn an unknown balance
             # location into free funds on every venue.
             self.state['balances']={};self.state['home']=''
+        self.state.setdefault('position_cards',{});self.state.setdefault('last_position',None)
 
     def funding_source(self,buy,budget):
         if not self.state or not self.state.get('home'):
@@ -130,7 +132,7 @@ class Paper:
                         state['closed']+=1;state['losses']+=1
                         today=day(self.clock());state['daily'][today]=str(D(state['daily'].get(today,'0'))+loss)
                         p.update(status='ABORTED_AFTER_FUNDING',closed=self.clock(),net=str(loss),reason=str(exc))
-                        state['position']=None
+                        state['last_position']=copy.deepcopy(p);state['position']=None
                         state['notifications']['abort:'+p['id']]=f"⛔ PAPER #{p['id']}: покупка отменена после зачисления USDT: {exc}. Потеря комиссии ${float(-loss):.4f}; USDT остаётся на {s['buy']}."
                         await self.save(state,'BUY_ABORTED',p);return
                     state['balances'][s['buy']]=str(D(state['balances'][s['buy']])-cost)
@@ -138,6 +140,10 @@ class Paper:
                     p.update(plan=new,remaining=new['received_qty'],status='BASE_IN_TRANSIT',due=self.clock()+900)
                     state['notifications']['buy:'+p['id']]=f"🧪 PAPER #{p['id']}: после получения USDT обновили стаканы, покупка смоделирована на ${float(cost):.4f}. Теперь ждём BASE на продаже."
                     await self.save(state,'BUY_AFTER_FUNDING',p);return
+                if p['status']=='SELL_PENDING' and p.get('sale_held'):
+                    p['due']=self.clock()+15
+                    await self.save(state,'SALE_HELD_BY_OPERATOR',dict(id=p['id']))
+                    return
                 # Conservative receipt model: route must still be available.
                 base,quote=await source.route(s['symbol'].split('/')[0],s['buy'],s['sell'])
                 if base['network']!=plan['base_route']['network'] or quote['network']!=plan['quote_route']['network']:
@@ -150,9 +156,13 @@ class Paper:
                     state['wins' if net>0 else 'losses']+=1
                     today=day(self.clock());state['daily'][today]=str(D(state['daily'].get(today,'0'))+net)
                     p.update(status='CLOSED',closed=self.clock(),net=str(net))
-                    state['position']=None;state['last_error']=''
+                    state['last_position']=copy.deepcopy(p);state['position']=None;state['last_error']=''
                     state['notifications']['close:'+p['id']]=f"🧪 PAPER перевод #{p['id']} завершён. Фактический NET модели {float(net):+.4f} USDT, после более поздней продажи и обоих переводов. Резерв $0.10 не списывался как реальная комиссия."
                     await self.save(state,'QUOTE_CREDIT_AND_CLOSE',p);return
+                if p['status']=='BASE_IN_TRANSIT' and p.get('sale_held'):
+                    p['status']='SELL_PENDING';p['due']=self.clock()+15
+                    await self.save(state,'BASE_CREDIT_SALE_HELD',dict(id=p['id']))
+                    return
                 p['status']='SELL_PENDING'
                 b=await source.book(s['sell'],s['symbol'])
                 if not ZERO<=D(self.clock())-D(b['ts'])<=3:raise ValueError('Нет свежего стакана выхода')
@@ -187,6 +197,54 @@ class Paper:
                     state['notifications'].setdefault('delay:'+p['id'],f"⚠ PAPER перевод #{p['id']}: более часа без завершения. Новые входы заблокированы, сопровождение продолжается. "+state['last_error'])
                 await self.save(state,'MONITOR_WAIT',dict(position=p,reason=state['last_error']))
 
+    async def control(self,ident,action):
+        async with self.lock:
+            state=copy.deepcopy(self.state);p=state.get('position')
+            if not p or p['id']!=ident:raise ValueError('Активная позиция изменилась')
+            if action=='cancel_buy' and p['status']=='BUY_PENDING':
+                fee=D(p['funding_fee']);loss=-fee
+                state['realized']=str(D(state['realized'])+loss)
+                state['closed']+=1;state['losses']+=1
+                today=day(self.clock());state['daily'][today]=str(D(state['daily'].get(today,'0'))+loss)
+                p.update(status='CANCELLED_BEFORE_BUY',closed=self.clock(),net=str(loss),
+                         reason='Отмена оператором после перевода USDT')
+                state['last_position']=copy.deepcopy(p);state['position']=None
+                state['notifications']['cancel:'+ident]='⛔ PAPER #'+ident+': покупка отменена. USDT остаётся на бирже покупки, комиссия первого перевода списана.'
+            elif action=='hold_sale' and p['status'] in ('BASE_IN_TRANSIT','SELL_PENDING'):
+                p['sale_held']=True
+            elif action=='resume_sale' and p['status'] in ('BASE_IN_TRANSIT','SELL_PENDING'):
+                p['sale_held']=False
+                if p['status']=='SELL_PENDING':p['due']=self.clock()
+            elif action=='sell_now' and p['status']=='SELL_PENDING':
+                p['sale_held']=False;p['due']=self.clock()
+            else:raise ValueError('Это действие недоступно на текущем этапе перевода')
+            await self.save(state,'OPERATOR_'+action.upper(),dict(id=ident,status=p['status']))
+            return p
+
+    def card(self,p):
+        from html import escape
+        s=p['signal'];model=p['plan'];status=p['status']
+        stages={'USDT_TO_BUY_IN_TRANSIT':'USDT переводится к месту покупки',
+                'BUY_PENDING':'USDT зачислен, покупка ожидает свежей проверки',
+                'BASE_IN_TRANSIT':'Монета переводится к месту продажи',
+                'SELL_PENDING':'Продажа по доступному свежему стакану',
+                'QUOTE_IN_TRANSIT':'USDT возвращается после продажи',
+                'CLOSED':'Цикл закрыт','BUY_ABORTED':'Покупка отменена',
+                'ABORTED_AFTER_FUNDING':'Покупка отменена',
+                'CANCELLED_BEFORE_BUY':'Покупка отменена оператором'}
+        text=(f"🧪 <b>PAPER · позиция #{escape(p['id'])}</b>\n"
+              f"{escape(s['symbol'])}: {escape(s['buy'])} → {escape(s['sell'])}\n"
+              f"Этап: {escape(stages.get(status,status))}\n"
+              f"План: купить на ${float(model['spent']):.2f}, перевести BASE и продать после зачисления. "
+              f"NET при неизменной цене ${float(model['net_after_reserve']):+.3f}; это сценарий, не прибыль.\n"
+              f"BASE осталось {escape(p['remaining'])}; продано {escape(p['sold'])}; "
+              f"выручка ${float(p['proceeds']):.3f}.\n")
+        if p.get('sale_held'):text+='⚠ Продажа удержана вручную: рыночный риск растёт.\n'
+        if p.get('net') is not None:text+=f"Итог PAPER {float(p['net']):+.4f} USDT.\n"
+        if self.state['last_error'] and self.state.get('position') and p['id']==self.state['position']['id']:
+            text+='Последняя проблема: '+escape(self.state['last_error'])+'\n'
+        return text+'В пути перевод не отменяется. Цена продажи берётся позже; реальных сделок нет.'
+
     async def flush(self,notify):
         # Persistent outbox with at-least-once delivery. State lock prevents
         # UI opens racing a completion notification acknowledgement.
@@ -195,6 +253,22 @@ class Paper:
                 await notify(message)
                 state=copy.deepcopy(self.state);state['notifications'].pop(key,None)
                 await self.save(state,'NOTIFIED',dict(key=key))
+
+    async def sync_cards(self,deliver):
+        # A dedicated Telegram message per position; resend only on change.
+        async with self.lock:
+            for p in (self.state.get('position'),self.state.get('last_position')):
+                if not p:continue
+                ident=p['id'];card=self.state['position_cards'].get(ident,{})
+                text=self.card(p)
+                if card.get('text')==text:continue
+                try:
+                    message_id=await deliver(p,text,card.get('message_id'))
+                except Exception:
+                    continue
+                state=copy.deepcopy(self.state)
+                state['position_cards'][ident]=dict(message_id=message_id,text=text)
+                await self.save(state,'POSITION_CARD_SYNC',dict(id=ident,message_id=message_id))
 
     def render(self):
         from html import escape
