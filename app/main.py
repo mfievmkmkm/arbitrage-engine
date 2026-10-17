@@ -1432,6 +1432,18 @@ def transfer_position_keyboard(p):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+@dp.callback_query(F.data == 'balances:show')
+async def account_balances_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    await q.answer('Обновляю балансы')
+    from .account_balances import snapshot, render
+    rows=await snapshot(spot_private_clients,private_clients)
+    await safe_edit(q.message,render(rows),InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='↻ Обновить',callback_data='balances:show',style='primary'),
+         InlineKeyboardButton(text='‹ Назад',callback_data='home')]]))
+
+
 @dp.callback_query(F.data.startswith('sig:'))
 async def market_signals_action(q: CallbackQuery):
     if not allowed(q.from_user.id):
@@ -1443,11 +1455,19 @@ async def market_signals_action(q: CallbackQuery):
         if q.data.startswith('sig:position:'):
             _,_,ident,action=q.data.split(':',3)
             p=feed.paper.positions.get(ident)
+            if p is None:
+                if feed.position_card:
+                    await feed.paper.sync_cards(feed.position_card,feed.remove_position_card)
+                return await q.answer('Сделка завершена · результат в дневнике',show_alert=True)
             if action!='refresh':
                 if p is None:raise ValueError('Позиция уже закрыта')
                 await feed.paper.control(ident,action)
             current=feed.paper.state.get('position') or feed.paper.state.get('last_position')
             if current is None or current['id']!=ident:raise ValueError('Карточка позиции устарела')
+            if not feed.paper.state.get('position'):
+                if feed.position_card:
+                    await feed.paper.sync_cards(feed.position_card,feed.remove_position_card)
+                return await q.answer('Сделка завершена · результат в дневнике',show_alert=True)
             await q.answer('Действие записано' if action!='refresh' else '')
             await safe_edit(q.message,feed.paper.card(current),transfer_position_keyboard(current))
             # The card remains bound to this message after operator edits.
@@ -1486,7 +1506,7 @@ async def market_signals_action(q: CallbackQuery):
                 raise ValueError('Новые данные не прошли проверку; позиция не открыта')
             await feed.paper.open(dict(signal=e,transfer=e['transfer']))
             if feed.position_card:
-                await feed.paper.sync_cards(feed.position_card)
+                await feed.paper.sync_cards(feed.position_card,feed.remove_position_card)
             await q.answer('PAPER-цикл записан')
             return await safe_edit(q.message,feed.paper.render(),InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text='↻ PAPER-цикл',callback_data='sig:state')],
@@ -2508,6 +2528,14 @@ async def main():
                 sent=await bot.send_message(config.admin_id,text,parse_mode='HTML',reply_markup=markup)
                 return sent.message_id
             feed.position_card=position_card
+            async def remove_position_card(message_id):
+                from aiogram.exceptions import TelegramBadRequest
+                try:
+                    await bot.delete_message(config.admin_id,message_id)
+                except TelegramBadRequest as exc:
+                    if 'message to delete not found' not in str(exc).lower():
+                        raise
+            feed.remove_position_card=remove_position_card
             feed.channel_review=Reviewer(secondary)
             secondary.market_signals=feed
             secondary.runtime.add('market_signals',feed)

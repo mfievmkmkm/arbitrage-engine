@@ -245,20 +245,36 @@ class Paper:
             text+='Последняя проблема: '+escape(self.state['last_error'])+'\n'
         return text+'В пути перевод не отменяется. Цена продажи берётся позже; реальных сделок нет.'
 
-    async def flush(self,notify):
+    async def flush(self,notify,quiet_lifecycle=False):
         # Persistent outbox with at-least-once delivery. State lock prevents
         # UI opens racing a completion notification acknowledgement.
         async with self.lock:
             for key,message in list(self.state['notifications'].items()):
-                await notify(message)
+                if not quiet_lifecycle or not key.startswith(('open:','close:','abort:','buy:','cancel:')):
+                    await notify(message)
                 state=copy.deepcopy(self.state);state['notifications'].pop(key,None)
                 await self.save(state,'NOTIFIED',dict(key=key))
 
-    async def sync_cards(self,deliver):
+    async def sync_cards(self,deliver,remove=None):
         # A dedicated Telegram message per position; resend only on change.
         async with self.lock:
+            active=self.state.get('position')
+            # The financial close is committed before Telegram is touched.
+            # Retry failed deletions, including older cards after a restart.
+            if remove is not None:
+                for ident,card in list(self.state['position_cards'].items()):
+                    if active and active['id']==ident:continue
+                    try:
+                        if card.get('message_id'):
+                            await remove(card['message_id'])
+                    except Exception:
+                        continue
+                    state=copy.deepcopy(self.state)
+                    state['position_cards'].pop(ident,None)
+                    await self.save(state,'POSITION_CARD_REMOVED',dict(id=ident))
             for p in (self.state.get('position'),self.state.get('last_position')):
                 if not p:continue
+                if remove is not None and (not active or p['id']!=active['id']):continue
                 ident=p['id'];card=self.state['position_cards'].get(ident,{})
                 text=self.card(p)
                 if card.get('text')==text:continue

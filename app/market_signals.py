@@ -107,6 +107,7 @@ class Scanner:
         self.accounts=Accounts(account_clients or {},clock)
         self.paper=TransferPaper(self.store,clock)
         self.position_card=None
+        self.remove_position_card=None
 
     async def init(self):
         await self.store.init()
@@ -429,8 +430,8 @@ class Scanner:
         async with self.lock:
             await self.paper.monitor(self)
             if self.position_card:
-                await self.paper.sync_cards(self.position_card)
-            await self.paper.flush(self.notify)
+                await self.paper.sync_cards(self.position_card,self.remove_position_card)
+            await self.paper.flush(self.notify,quiet_lifecycle=self.position_card is not None)
             if not await self.store.enabled():
                 return []
             if not self.entry_enabled:
@@ -466,7 +467,7 @@ class Scanner:
                             and not e['reasons'] and not self.paper.positions):
                         await self.paper.open(dict(signal=e,transfer=e['transfer']))
                         if self.position_card:
-                            await self.paper.sync_cards(self.position_card)
+                            await self.paper.sync_cards(self.position_card,self.remove_position_card)
                 else:
                     await self.store.enqueue(key,'miss',{})
                     await self.store.delivered(key)

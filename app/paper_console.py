@@ -12,10 +12,10 @@ LABELS = {'spot_inventory':'Spot/Spot · размещённые средства
 
 def main_menu(paused=False):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [button('📦 Сделки','inv:show','primary'),button('📊 Результат','strategy_stats','primary')],
+        [button('📦 Сделки','inv:show','primary'),button('💰 Балансы','balances:show','primary')],
         [button('🧭 Режимы','strategies'),button('📒 Дневник','diary')],
         [button('⚙️ Настройки','paper_settings'),button('▶ Продолжить' if paused else '⏸ Пауза','resume' if paused else 'pause','success' if paused else None)],
-        [button('↻ Обновить','home')]])
+        [button('📊 Результат','strategy_stats'),button('↻ Обновить','home')]])
 
 
 def keyboard(screen, enabled, paused=False):

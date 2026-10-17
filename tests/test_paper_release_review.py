@@ -42,7 +42,8 @@ def test_release_menu_reports_new_net_and_unknown_funding_without_old_profit(tmp
         home=await main.text_for('home')
         assert '+0.7500' in home and '-100' not in home
         callbacks={b.callback_data for row in main.menu().inline_keyboard for b in row}
-        assert len(callbacks)==7 and 'live_stop' not in callbacks and 'live' not in callbacks
+        assert len(callbacks)==8 and 'balances:show' in callbacks
+        assert 'live_stop' not in callbacks and 'live' not in callbacks
         class Query:
             from_user=NS(id=1);message=object();data='pause'
             async def answer(self,*args,**kwargs):pass
