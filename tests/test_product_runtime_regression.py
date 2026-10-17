@@ -318,14 +318,22 @@ def test_main_wires_secondary_runtime_and_cleans_up_without_network(
             async def start(self):
                 events.append("secondary-start")
 
+            def add(self,name,service):
+                self.services[name]=service
+
         bundle = SimpleNamespace(
             runtime=Runtime(),
             sf_paper=Engine(),
             ss_paper=SimpleNamespace(used_capital=0),
             funding_paper=None,
+            dex_experiments={},
         )
 
         async def close():
+            if getattr(bundle,'public_channel_reader',None):
+                await bundle.public_channel_reader.stop()
+            if getattr(bundle,'market_signals',None):
+                await bundle.market_signals.close()
             events.append("secondary-close")
 
         bundle.close = close
@@ -360,7 +368,16 @@ def test_main_wires_secondary_runtime_and_cleans_up_without_network(
             main, "Bot", lambda **kw: SimpleNamespace(session=Session())
         )
         monkeypatch.setattr(main.dp, "start_polling", poll)
+        from app import dex_public_channel_reader
+        class OfflineReader(dex_public_channel_reader.Reader):
+            async def run(self):
+                await asyncio.Future()
+        monkeypatch.setattr(dex_public_channel_reader,'Reader',OfflineReader)
+        monkeypatch.setenv('MARKET_SIGNALS_ENABLED','true')
         await main.main()
+        assert 'market_signals' in bundle.runtime.services
+        assert bundle.public_channel_reader.report_only
+        assert bundle.public_channel_reader.task is None
         assert main.scanner.book_recorder.closed
         assert main.scanner.book_recorder.task is None
         assert main.live_exit_coordinator is not None

@@ -10,6 +10,9 @@ from .export_service import write_csv
 from .secret_redaction import redact
 
 TABLES = {
+    "Market signals queue": "market_signal_queue",
+    "Market signals settings": "market_signal_settings",
+    "Market signals channel posts": "channel_signal_posts",
     "Inventory Paper state": "inventory_paper_state",
     "Inventory Paper trades": "inventory_paper_trades",
     "Inventory Paper events": "inventory_paper_events",

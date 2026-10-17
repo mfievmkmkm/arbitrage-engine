@@ -1,4 +1,5 @@
 import time
+import os
 import asyncio, logging, tempfile
 from html import escape
 from pathlib import Path
@@ -1415,6 +1416,27 @@ async def inventory_action(q: CallbackQuery):
                         trading_controls,lambda:not scanner.paused and strategy_runtime.enabled.get('spot_inventory'),safe_edit)
 
 
+@dp.callback_query(F.data.startswith('sig:'))
+async def market_signals_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    feed=getattr(secondary,'market_signals',None)
+    if feed is None:
+        return await q.answer('Сканер сигналов отключён: MARKET_SIGNALS_ENABLED',show_alert=True)
+    if q.data=='sig:toggle':
+        await feed.store.toggle()
+    enabled=await feed.store.enabled()
+    reader=getattr(secondary,'public_channel_reader',None)
+    text=feed.status()+'\n\nУведомления: '+('включены' if enabled else 'выключены')
+    if scanner.paused:
+        text+='\nОбщая пауза: отправка и сканирование приостановлены.'
+    text+='\nКанал: '+escape(reader.status if reader else 'публичное чтение не запущено')
+    rows=[[InlineKeyboardButton(text='Выключить уведомления' if enabled else 'Включить уведомления',callback_data='sig:toggle')],
+          [InlineKeyboardButton(text='↻ Обновить покрытие',callback_data='sig:show'),InlineKeyboardButton(text='‹ Сделки',callback_data='inv:show')]]
+    await q.answer()
+    await safe_edit(q.message,text,InlineKeyboardMarkup(inline_keyboard=rows))
+
+
 async def notify_paper_close(symbol, net, reason):
     if notification_bot is None:
         return
@@ -2313,7 +2335,7 @@ async def main():
                     notify_open=notify_dex_open)
                 secondary.dex_paired.operator_notional = lambda: trading_controls.profile('paper')['notional_usd']
             await secondary.route_discovery.start()
-            if focus_enabled("DEX_CHANNEL_PUBLIC_READER_ENABLED"):
+            if focus_enabled("DEX_CHANNEL_PUBLIC_READER_ENABLED") and os.getenv('MARKET_SIGNALS_ENABLED','true').lower() not in ('true','1','yes','on'):
                 from .dex_public_channel_reader import Reader as PublicChannelReader
                 secondary.public_channel_reader = PublicChannelReader(
                     secondary.dex_experiments["dex_channel"],
@@ -2374,6 +2396,27 @@ async def main():
             await build_inventory(secondary,config.db_path,trading_controls,strategy_runtime,
                                   inventory_notification,lambda:scanner.paused,venue_controller.get,
                                   network_clients=private_clients)
+        if os.getenv('MARKET_SIGNALS_ENABLED','true').lower() in ('true','1','yes','on'):
+            from .market_signals import Scanner as MarketSignals
+            from .channel_signal_review import Reviewer
+            async def market_signal_notification(text):
+                await bot.send_message(config.admin_id,text,parse_mode='HTML',
+                                       disable_web_page_preview=True)
+            feed=MarketSignals(config.db_path,market_signal_notification)
+            await feed.init()
+            feed.channel_review=Reviewer(secondary)
+            secondary.market_signals=feed
+            secondary.runtime.add('market_signals',feed)
+            from .dex_public_channel_reader import Reader as PublicChannelReader
+            channel_engine=secondary.dex_experiments.get('dex_channel')
+            if channel_engine is None:
+                from types import SimpleNamespace
+                channel_engine=SimpleNamespace(path=config.db_path,clock=time.time,sql=lambda s:s)
+            secondary.public_channel_reader=PublicChannelReader(
+                channel_engine,lambda:True,on_post=feed.queue_channel,report_only=True)
+            if secondary.dex_experiments.get('dex_channel'):
+                secondary.dex_experiments['dex_channel'].channel_reader=secondary.public_channel_reader
+            await secondary.public_channel_reader.start()
         await secondary.runtime.start()
         await live_monitor.start()
         if paired_paper:

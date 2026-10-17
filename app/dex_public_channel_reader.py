@@ -62,12 +62,14 @@ def parse_posts(html):
 
 
 class Reader:
-    def __init__(self, engine, enabled, fetch=None):
+    def __init__(self, engine, enabled, fetch=None, on_post=None, report_only=False):
         self.engine, self.enabled, self.fetch = engine, enabled, fetch
         self.task = None
         self.status = "Ожидает запуска публичного чтения"
         self.seen = set()
         self.metrics = dict(received=0, accepted=0, last="Нет новых сигналов")
+        self.on_post = on_post
+        self.report_only = report_only
 
     async def start(self):
         async with aiosqlite.connect(self.engine.path) as d:
@@ -90,6 +92,10 @@ class Reader:
     async def accept(self, post):
         if post["id"] in self.seen or not self.enabled():
             return
+        # Queue durably before marking seen. Reports are independent of legacy
+        # strategy admission, malformed routes, and a later Telegram outage.
+        if self.on_post and ("SHORT?" in post['text'] or "LONG?" in post['text']):
+            await self.on_post(post)
         self.seen.add(post["id"])
         if len(self.seen) > 2000:
             self.seen = set(sorted(self.seen)[-1000:])
@@ -98,14 +104,18 @@ class Reader:
         detail = dict(channel=CHANNEL, message_id=post["id"], timestamp=post["timestamp"], source="PUBLIC_TELEGRAM_PREVIEW")
         reason = "DEX_CHANNEL_PUBLIC_ACCEPTED"
         try:
-            resolver = getattr(self.engine.source, "resolve_signal", None)
-            if resolver:
-                await resolver(post["text"], post["timestamp"])
-            s = self.engine.source.signals.add(post["text"], self.engine.source.routes, post["timestamp"], "PUBLIC_TELEGRAM_PREVIEW:" + CHANNEL)
-            detail.update(base=s["base"], side=s["side"], chain_id=s["chain_id"], asset=s["asset"])
-            self.status = "Читает публично · последний сигнал " + s["base"]
-            self.metrics["accepted"] += 1
-            self.metrics["last"] = s["base"] + " · принят для проверки входа"
+            if self.report_only:
+                reason = 'DEX_CHANNEL_REVIEW_QUEUED'
+                self.metrics['last'] = 'Сообщение поставлено в очередь независимой проверки'
+            else:
+                resolver = getattr(self.engine.source, "resolve_signal", None)
+                if resolver:
+                    await resolver(post["text"], post["timestamp"])
+                s = self.engine.source.signals.add(post["text"], self.engine.source.routes, post["timestamp"], "PUBLIC_TELEGRAM_PREVIEW:" + CHANNEL)
+                detail.update(base=s["base"], side=s["side"], chain_id=s["chain_id"], asset=s["asset"])
+                self.status = "Читает публично · последний сигнал " + s["base"]
+                self.metrics["accepted"] += 1
+                self.metrics["last"] = s["base"] + " · принят для проверки входа"
         except ValueError as exc:
             reason = "DEX_CHANNEL_PUBLIC_SKIPPED"
             detail["reason"] = str(exc)
@@ -119,7 +129,11 @@ class Reader:
         self.metrics["last_post"] = post["id"]
         self.metrics["last_at"] = self.engine.clock()
         async with aiosqlite.connect(self.engine.path) as d:
-            await d.execute(self.engine.sql("INSERT INTO cex_dex_paper_decisions(ts,reason,payload) VALUES(?,?,?)"),
+            if self.report_only:
+                await d.execute('CREATE TABLE IF NOT EXISTS channel_signal_posts(id INTEGER PRIMARY KEY,ts REAL,reason TEXT,payload TEXT)')
+            table='channel_signal_posts' if self.report_only else 'cex_dex_paper_decisions'
+            statement='INSERT INTO '+table+'(ts,reason,payload) VALUES(?,?,?)'
+            await d.execute(statement if self.report_only else self.engine.sql(statement),
                             (self.engine.clock(), reason, json.dumps(detail)))
             await d.execute("CREATE TABLE IF NOT EXISTS dex_channel_reader_state(id INTEGER PRIMARY KEY,payload TEXT)")
             await d.execute("INSERT OR REPLACE INTO dex_channel_reader_state VALUES(1,?)", (json.dumps(dict(seen=sorted(self.seen), metrics=self.metrics)),))

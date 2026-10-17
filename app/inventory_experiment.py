@@ -131,5 +131,6 @@ def keyboard(engine=None):
         [button('Включить/выключить входы','strategy:spot_inventory')],
         [button('🎛 Среда и режим','ctl:show'),button('Ручной вход','inv:card')],
         [button('🧪 Проверить симулятор','inv:demo'),button('Прежние позиции','paper')],
+        [button('📡 Сигналы и покрытие бирж','sig:show')],
         [button('↻ Обновить','inv:show'),button('📒 Выгрузка','export')],
         [button('‹ Главное меню','home')]])

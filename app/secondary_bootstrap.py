@@ -49,6 +49,7 @@ class Bundle:
         self.wallet_session = None
         self.dex_live = None
         self.book_recorder = None
+        self.market_signals = None
 
     async def close(self):
         if self.public_channel_reader:
@@ -56,6 +57,8 @@ class Bundle:
         if self.route_discovery:
             await self.route_discovery.stop()
         await self.runtime.stop()
+        if self.market_signals:
+            await self.market_signals.close()
         if self.owns_clients:
             await close(self.clients)
         if self.book_recorder:
