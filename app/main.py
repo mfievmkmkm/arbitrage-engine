@@ -624,9 +624,26 @@ async def start(m: Message):
         )
 
 
-@dp.message(F.text.contains("SHORT?") | F.text.contains("LONG?"))
+@dp.message(F.text.contains("SHORT?") | F.text.contains("LONG?") | F.caption.contains("SHORT?") | F.caption.contains("LONG?"))
 async def accept_dex_signal(m: Message):
     if not m.from_user or not allowed(m.from_user.id):
+        return
+    text=m.text or m.caption or ''
+    if paired_paper:
+        origin=m.forward_origin
+        if (origin is None or getattr(origin,'type',None)!='channel'
+                or (getattr(origin.chat,'username','') or '').lower()!='mexcdexspreadtracker'):
+            return await m.answer('Перешли исходный пост из @MexcDexSpreadTracker.')
+        intake=getattr(secondary,'paired_signal_intake',None)
+        if intake is None:
+            return await m.answer('Приём DEX-сигналов пока недоступен.')
+        status=await m.answer('🔎 Проверяю токен…')
+        result=await intake.accept(dict(id=origin.message_id,text=text,timestamp=origin.date.timestamp()))
+        from .tg_ui import button
+        label=(escape(result.get('base','Токен'))+' · проверка в приоритете' if result['ok']
+               else '⛔ '+escape(result['reason']))
+        await status.edit_text(label,parse_mode='HTML',reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [button('📉 Сжатие','pair:show','primary')]]))
         return
     if not dual_paper and not focus_enabled("DEX_CHANNEL_SIGNALS_ONLY"):
         return await m.answer("Приём сигналов включается переменной DEX_CHANNEL_SIGNALS_ONLY=true.")
@@ -642,8 +659,8 @@ async def accept_dex_signal(m: Message):
     try:
         resolver = getattr(engine.source, "resolve_signal", None)
         if resolver:
-            await resolver(m.text, origin.date.timestamp())
-        signal = signals.add(m.text, engine.source.routes, origin.date.timestamp(), "MexcDexSpreadTracker")
+            await resolver(text, origin.date.timestamp())
+        signal = signals.add(text, engine.source.routes, origin.date.timestamp(), "MexcDexSpreadTracker")
     except ValueError as exc:
         return await m.answer(str(exc))
     if paired_paper:
@@ -1240,7 +1257,7 @@ async def trading_control_page(q: CallbackQuery):
             from .dex_virtual_paper_source import route_key
             buttons = [[InlineKeyboardButton(text=r.get('label', r['cex_symbol'])[:50],
                 callback_data='dcard:'+hashlib.sha256(json.dumps(route_key(r)).encode()).hexdigest()[:16])]
-                for r in dex.source.routes[:12]]
+                for r in [r for r in dex.source.routes if dex.source.venue_allowed(r['cex_venue'])][:12]]
             buttons.append([InlineKeyboardButton(text='‹ Назад', callback_data='pair:show')])
             await safe_edit(q.message, '🔎 <b>Выбери пару</b> · PAPER', InlineKeyboardMarkup(inline_keyboard=buttons))
             await q.answer()
@@ -1503,6 +1520,14 @@ async def paired_control_action(q: CallbackQuery):
     if not allowed(q.from_user.id):
         return await q.answer('Нет доступа',show_alert=True)
     engine=getattr(secondary,'dex_paired',None)
+    if q.data=='pair:scan':
+        if engine is None:
+            return await q.answer('Сканер недоступен',show_alert=True)
+        from .paired_console import scanner as scan_view
+        service=secondary.runtime.services.get('dex_paired')
+        text,keyboard=scan_view(engine,service,manual=trading_controls.environment=='paper' and trading_controls.profile('paper')['mode']=='manual')
+        await q.answer()
+        return await safe_edit(q.message,text,keyboard)
     try:
         if q.data != 'pair:show':
             if engine is None:
@@ -2637,6 +2662,10 @@ async def main():
             await build_inventory(secondary,config.db_path,trading_controls,strategy_runtime,
                                   inventory_notification,lambda:scanner.paused,venue_controller.get,
                                   network_clients=private_clients)
+        if paired_engine is not None and getattr(secondary,'route_discovery',None) is not None:
+            from .paired_signal_intake import Intake
+            secondary.paired_signal_intake=Intake(config.db_path,secondary.route_discovery,
+                                                  secondary.runtime.services['dex_paired'])
         if os.getenv('MARKET_SIGNALS_ENABLED','true').lower() in ('true','1','yes','on'):
             from .market_signals import Scanner as MarketSignals
             from .channel_signal_review import Reviewer
@@ -2683,8 +2712,15 @@ async def main():
             if channel_engine is None:
                 from types import SimpleNamespace
                 channel_engine=SimpleNamespace(path=config.db_path,clock=time.time,sql=lambda s:s)
+            async def channel_post(post):
+                await feed.queue_channel(post)
+                intake=getattr(secondary,'paired_signal_intake',None)
+                if intake is not None:
+                    result=await intake.accept(post)
+                    if result.get('ok') and not result.get('duplicate'):
+                        log.info('PAPER_CHANNEL | candidate=%s | intake_ms=%s',result.get('base'),result.get('elapsed_ms'))
             secondary.public_channel_reader=PublicChannelReader(
-                channel_engine,lambda:True,on_post=feed.queue_channel,report_only=True)
+                channel_engine,lambda:True,on_post=channel_post,report_only=True)
             if secondary.dex_experiments.get('dex_channel'):
                 secondary.dex_experiments['dex_channel'].channel_reader=secondary.public_channel_reader
             await secondary.public_channel_reader.start()

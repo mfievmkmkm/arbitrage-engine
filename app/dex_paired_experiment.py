@@ -1,6 +1,7 @@
 """Isolated two-leg virtual DEX BUY / CEX SHORT; no wallet or order writes."""
 import json
 import math
+import asyncio
 from .dex_virtual_paper_source import Source, route_key
 from .dex_cex_identity import Gate
 from .cex_dex_paper import Engine, Cycle
@@ -76,6 +77,15 @@ class PairedCycle(Cycle):
         self.unsupported = {}
         self.sync_ui = None
         self.notify_candidate = None
+        self.wake=asyncio.Event()
+        self.priority_keys=[]
+        self.candidates={}
+
+    def prioritize(self, route):
+        key=route_key(route)
+        if key not in self.priority_keys:
+            self.priority_keys.append(key)
+        self.wake.set()
 
     def sync(self):
         source = self.paper.source
@@ -96,6 +106,13 @@ class PairedCycle(Cycle):
 
     async def cycle(self):
         self.sync()
+        if not self.paper.positions and self.entry_enabled and self.priority_keys:
+            allowed=[r for r in self.routes if self.paper.source.venue_allowed(r['cex_venue'])]
+            key=self.priority_keys.pop(0)
+            for i,r in enumerate(allowed):
+                if route_key(r)==key:
+                    self.index=i
+                    break
         if hasattr(self.paper, 'operator_notional'):
             limit = self.paper.operator_notional()
             for route in self.routes:
@@ -108,6 +125,10 @@ class PairedCycle(Cycle):
             self.paper.source.last_candidate=None
             rows=await super().cycle()
             candidate=getattr(self.paper.source,'last_candidate',None)
+            if candidate:
+                self.candidates[route_key(candidate['route'])]=candidate
+            self.candidates={k:c for k,c in self.candidates.items()
+                             if 0<=self.paper.clock()-c['position']['opened_at']<=30}
             if candidate and not self.paper.positions and self.entry_enabled and self.notify_candidate:
                 await self.notify_candidate(candidate)
             return rows
@@ -122,6 +143,7 @@ async def build(bundle, runtime, db_path, notify, allowed, notify_open=None):
     # Seed a genuine paired route even when the legacy watchlist is Solana-only.
     routes = [dict(default_routes('paired', 100)[0], max_notional_usd=110)]
     source = PairedSource(original, routes)
+    source.entry_venues={'bybit'}
     engine = Engine(db_path, source, capital=250, virtual=True, namespace='paired',
                     clock=source.clock, min_edge=.25, max_seconds=1200)
     await engine.init()
