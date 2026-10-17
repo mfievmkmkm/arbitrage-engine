@@ -52,7 +52,7 @@ def test_scanner_does_not_require_prefunded_base_on_sell_venue(tmp_path):
         result=await scanner.evaluate('SOL/USDT','buy','sell')
         assert result['transfer'] and not result['reasons']
         assert D(result['transfer']['spent'])<=25
-        assert 'будущая цена' in scanner.format(result)
+        assert 'Цена может измениться' in scanner.format(result)
     asyncio.run(go())
 
 
@@ -191,7 +191,7 @@ def test_dedicated_position_card_and_operator_sale_hold(tmp_path):
         async def deliver(pos,text,message_id):
             calls.append((pos['status'],message_id,text));return 41
         await paper.sync_cards(deliver);await paper.sync_cards(deliver)
-        assert len(calls)==1 and calls[0][1] is None and 'не прибыль' in calls[0][2]
+        assert len(calls)==1 and calls[0][1] is None and 'Цена продажи не закреплена' in calls[0][2]
         class Source:
             clients={'sell':NS(markets={'SOL/USDT':market()})}
             async def route(self,*args):return routes()

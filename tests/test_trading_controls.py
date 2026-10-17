@@ -173,8 +173,8 @@ def test_controls_view_names_units_and_marks_live_blocked(tmp_path):
     text, keyboard = render(c, False, show_risk=True)
     assert 'LIVE заблокирован' in text
     buttons = [b for row in keyboard.inline_keyboard for b in row]
-    assert any(b.callback_data == 'ctl:mode:observe' for b in buttons)
-    assert any('Стоп закрытого NET' in b.text for b in buttons)
+    assert any(b.callback_data == 'ctl:field:daily_loss_usd' for b in buttons)
+    assert any('Дневной стоп' in b.text for b in buttons)
     assert all(len(b.callback_data.encode()) <= 64 for b in buttons)
 
 

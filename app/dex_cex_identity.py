@@ -51,8 +51,13 @@ class Gate:
     def __init__(self, public, private, clock):
         self.public, self.private, self.clock = public, private, clock
         self.cache = {}
+        self.locks = {}
 
     async def verify(self, route):
+        async with self.locks.setdefault(route['cex_venue'], asyncio.Lock()):
+            return await self._verify(route)
+
+    async def _verify(self, route):
         venue = route['cex_venue']
         cached = self.cache.get(venue)
         if not cached or self.clock()-cached[0] > 300:

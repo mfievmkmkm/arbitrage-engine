@@ -142,6 +142,30 @@ class Engine:
             finally:
                 self.pending = 0
 
+    async def request_exit(self, ident):
+        """Persist a paired PAPER exit intent; the monitor still needs fresh quotes."""
+        if not self.virtual or self.namespace != 'paired':
+            raise ValueError('PAIRED_PAPER_ONLY')
+        async with self.lock:
+            state=copy.deepcopy(self.state)
+            p=state['positions'].get(str(ident))
+            if p is None:
+                raise ValueError('POSITION_ALREADY_CLOSED')
+            if p.get('operator_exit_requested') or p.get('exit_quote'):
+                return
+            p['operator_exit_requested']=self.clock()
+            async with aiosqlite.connect(self.path) as db:
+                await db.execute('BEGIN IMMEDIATE')
+                c=await db.execute(self.sql('UPDATE cex_dex_paper_state SET version=version+1,payload=? WHERE id=1 AND version=?'),
+                                   (json.dumps(state),self.version))
+                if c.rowcount!=1:
+                    raise ValueError('DEX_PAPER_CONCURRENT_WRITER')
+                await db.execute(self.sql('UPDATE cex_dex_paper SET payload=? WHERE id=?'),(json.dumps(p),p['id']))
+                await db.execute(self.sql('INSERT INTO cex_dex_paper_decisions(ts,reason,payload) VALUES(?,?,?)'),
+                                 (self.clock(),'MANUAL_EXIT_REQUESTED',json.dumps(dict(position_id=p['id']))))
+                await db.commit()
+            self.state,self.version=state,self.version+1
+
     async def _cycle(self, route, entry_enabled):
         state = copy.deepcopy(self.state)
         saved, marks, events, closed, decisions, opened = [], [], [], [], [], []
@@ -227,6 +251,8 @@ class Engine:
             if not pending and p.get('paired_policy'):
                 from .paired_paper_policy import exit_reason
                 reason = exit_reason(p['paired_policy'], p['opened_at'], p['best_net'], m, h.verified)
+            if not pending and self.virtual and self.namespace=='paired' and p.get('operator_exit_requested') is not None:
+                reason = 'MANUAL_EXIT'
             if reason:
                 p.update(
                     status="EXIT_ACCOUNTING_PENDING",

@@ -32,7 +32,7 @@ def main_menu(paused=False):
                 button("📊 Аналитика", "strategy_stats"),
                 button("🧪 Проверка истории", "replay"),
             ],
-            [button("📔 Дневник", "diary"), button("💼 Капитал", "capital")],
+            [button("📔 Дневник", "diary"), button("💰 Балансы", "balances:show")],
             [
                 button("📤 Выгрузить историю", "export"),
                 button("🚦 Проверка запуска", "startup"),

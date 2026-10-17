@@ -40,18 +40,38 @@ class SecondaryRuntime:
         if inner is not None and hasattr(inner,'positions'):return not inner.positions
         return False
 
+    async def wait(self, service):
+        event=getattr(service,'wake',None)
+        interval=getattr(service,'interval',self.interval)
+        if event is None:
+            return await asyncio.sleep(interval)
+        try:
+            await asyncio.wait_for(event.wait(),timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+        event.clear()
+
     async def _loop(self, name, service):
         while self.running:
             try:
                 service.entry_enabled = (
-                    self.runtime.enabled.get(name, True) and not self.paused()
+                    self.runtime.enabled.get(getattr(service, 'enabled_name', name), True) and not self.paused()
                 )
                 if not service.entry_enabled and (not getattr(service, "paper", None)
                         or (getattr(service,'idle_when_disabled',False) and self.idle_paper(service))):
                     self.runtime.update(name, [])
-                    await asyncio.sleep(getattr(service, "interval", self.interval))
+                    await self.wait(service)
                     continue
-                rows = await service.cycle()
+                started=time.perf_counter()
+                try:
+                    rows = await service.cycle()
+                finally:
+                    service.last_cycle_seconds=time.perf_counter()-started
+                    service.last_cycle_at=time.time()
+                    if name in ('dex_paired','dex_paired_scan','dex_paired_catalog','market_signals') and time.monotonic()-getattr(service,'last_timing_log',0)>=60:
+                        logging.getLogger('arbitrage').info('PAPER_SCAN | %s | cycle_ms=%.0f | entries=%s',
+                            name,service.last_cycle_seconds*1000,service.entry_enabled)
+                        service.last_timing_log=time.monotonic()
                 ts = time.time()
                 self.runtime.update(name, rows if service.entry_enabled else [])
                 obs = []
@@ -84,7 +104,7 @@ class SecondaryRuntime:
                 logging.getLogger("arbitrage").exception(
                     "Secondary strategy failed: %s", name
                 )
-            await asyncio.sleep(getattr(service, "interval", self.interval))
+            await self.wait(service)
 
     async def start(self):
         self.running = True
