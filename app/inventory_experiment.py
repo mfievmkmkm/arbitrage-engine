@@ -36,12 +36,22 @@ async def build(bundle,path,controls,runtime,notify,paused,venue_modes,network_c
         return (not paused() and controls.environment=='paper' and controls.entry_reason('paper','spot_inventory',symbol) is None
                 and runtime.enabled.get('spot_inventory',False))
     service=Service(source,engine,allowed);engine.on_event=notify
+    service.rebalance_mode=lambda:'manual' if controls.profile('paper')['mode']=='manual' else 'auto'
+    service.signal_allowed=lambda:not paused() and controls.environment=='paper' and runtime.enabled.get('spot_inventory',False)
     bundle.inventory_paper=engine;bundle.inventory_source=source
     bundle.runtime.add('spot_inventory',service)
     return service
 
 
 REASONS={
+    'INVENTORY_CANDIDATE':'Найден кандидат после проверки объёма и расходов.',
+    'INVENTORY_EXECUTION_MODEL':'Покупка и продажа отсимулированы; результат записан.',
+    'INVENTORY_MONITOR':'Состояние открытого цикла обновлено.',
+    'INVENTORY_MANUAL_CLOSE':'Запрос ручного закрытия сохранён.',
+    'INVENTORY_MANUAL_TRANSFER':'Запрошено восстановление запасов переводами.',
+    'INVENTORY_MANUAL_FINISH':'Запрошено завершение цикла после зачисления переводов.',
+    'INVENTORY_ENTRY_CARD_STALE':'Настройки изменились: нужна новая карточка входа.',
+
     'WAITING_FOR_SEED_QUOTES':'Ждём свежие стаканы для начального виртуального распределения.',
     'INVENTORY_SPREAD_TOO_SMALL':'Исполнимый спред меньше установленного минимума.',
     'INVENTORY_SPREAD_ANOMALY':'Разрыв выше допустимого: возможна аномалия или несовместимость.',
@@ -75,6 +85,7 @@ def human(reason):
 def render(engine,source=None):
     if engine is None:
         return '📦 Spot/Spot · PAPER\nЭксперимент ещё не готов.'
+    from .inventory_cards import STATUS
     s=engine.state;p=engine.p;v=s.get('valuation',{})
     lines=['📦 <b>Spot/Spot · размещённые средства</b>',
         f'Отдельный PAPER-счёт ${p["capital"]:.2f}\nСпред {p["min_spread_pct"]:g}–{p["max_spread_pct"]:g}% · покупка до ${p["max_notional"]:g}\n'
@@ -95,7 +106,7 @@ def render(engine,source=None):
     for pos in list(s['positions'].values())[:2]:
         x=pos['plan']
         lines.append(f'<b>{escape(x["asset"])}</b> · {escape(x["buy"])} → {escape(x["sell"])}\n'
-            f'{escape(pos["status"])} · спред входа {float(x["spread_pct"]):.3f}%\n'
+            f'{escape(STATUS.get(pos['status'],pos['status']))} · спред входа {float(x["spread_pct"]):.3f}%\n'
             f'Непокрытый остаток BASE: {escape(pos["residual"])}\n'
             + '\n'.join(escape(t['asset'])+': '+escape(t['status']) for t in pos['transfers']))
     lines.append('Последняя проверка: '+escape(human(s['last_reason'])))
@@ -109,13 +120,16 @@ def render(engine,source=None):
     return '\n\n'.join(lines)[:3900]
 
 
-def keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
+def keyboard(engine=None):
+    positions=[]
+    if engine:
+        positions=[[button('📈 '+p['plan']['asset']+' · управление #'+str(p['id']),'inv:pos:'+str(p['id']))] for p in engine.positions.values()]
+    return InlineKeyboardMarkup(inline_keyboard=positions+[
         [button('Спред ≥5%','inv:set:min_spread_pct:5'),button('≥7.5%','inv:set:min_spread_pct:7.5')],
         [button('Покупка $10','inv:set:max_notional:10'),button('$25','inv:set:max_notional:25'),button('$50','inv:set:max_notional:50')],
         [button('NET ≥$0.25','inv:set:min_net:0.25'),button('≥$0.50','inv:set:min_net:0.5')],
         [button('Включить/выключить входы','strategy:spot_inventory')],
         [button('🎛 Среда и режим','ctl:show'),button('Ручной вход','inv:card')],
-        [button('Прежние позиции','paper')],
+        [button('🧪 Проверить симулятор','inv:demo'),button('Прежние позиции','paper')],
         [button('↻ Обновить','inv:show'),button('📒 Выгрузка','export')],
         [button('‹ Главное меню','home')]])

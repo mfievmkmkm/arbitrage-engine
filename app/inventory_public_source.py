@@ -186,14 +186,16 @@ class Service:
         self.source,self.paper,self.allowed=source,paper,allowed
         self.entry_enabled=True;self.idle_when_disabled=False
         self.wallets={}
+        self.rebalance_mode=lambda:"auto"
+        self.signal_allowed=lambda:True
 
     @property
     def interval(self):
-        return 2 if any(D(p['residual'])>0 for p in self.paper.positions.values()) else 30
+        return 2 if any(D(p['residual'])>0 or p['status']=='MANUAL_EXIT_PENDING' for p in self.paper.positions.values()) else 30
 
     async def cycle(self):
         await self.paper.monitor(self.source)
-        if any(D(p['residual'])>0 for p in self.paper.positions.values()):
+        if any(D(p['residual'])>0 or p['status']=='MANUAL_EXIT_PENDING' for p in self.paper.positions.values()):
             return []
         snapshots=await self.source.capture()
         if not self.paper.state['initialized']:
@@ -209,6 +211,8 @@ class Service:
                     notional=float(plan['cost']),net=float(D(plan['projected_net'])/D(plan['cost'])*100),
                     hypothetical_edge=float(D(plan['projected_net'])/D(plan['cost'])*100),
                     projected_net_usd=float(plan['projected_net']),edge_unit='percent',ts=float(s['ts']),plan=plan))
+                if self.entry_enabled and self.signal_allowed():
+                    await self.paper.offer_candidate(plan)
                 if self.entry_enabled and self.allowed(s['asset']+'/USDT') and all(self.source.allowed_venue(v) for v in (s['buy'],s['sell'])):
                     await self.enter_route(s['asset'],s['buy'],s['sell'],refresh_wallets=False)
             except (Invalid,KeyError,TypeError,ValueError,ArithmeticError) as exc:
@@ -217,7 +221,7 @@ class Service:
             await self.paper.note('INVENTORY_CAPTURE_UNAVAILABLE',self.source.errors)
         return rows
 
-    async def enter_route(self,asset,buy,sell,refresh_wallets=True):
+    async def enter_route(self,asset,buy,sell,refresh_wallets=True,expected_policy=None,confirmation_guard=None):
         if refresh_wallets:
             snapshots=await self.source.capture()
             self.wallets={k:b for s in snapshots for k,b in s['wallet_books'].items()}
@@ -228,4 +232,6 @@ class Service:
         second=await self.source.book(sell,asset)
         recovery=await self.source.book(buy,asset)
         return await self.paper.execute(fresh,first,second,recovery,
-            allow_entry=self.allowed(asset+'/USDT') and all(self.source.allowed_venue(v) for v in (buy,sell)))
+            allow_entry=self.allowed(asset+'/USDT') and (confirmation_guard is None or confirmation_guard())
+                and all(self.source.allowed_venue(v) for v in (buy,sell)),
+            rebalance_mode=self.rebalance_mode(),expected_policy=expected_policy)

@@ -1272,7 +1272,11 @@ async def manual_entry(q: CallbackQuery):
                 service=secondary.runtime.services['spot_inventory']
                 if not strategy_runtime.enabled.get('spot_inventory'):
                     raise ValueError('STRATEGY_DISABLED')
-                position=await service.enter_route(row['asset'],row['buy'],row['sell'])
+                if not row.get('inventory_policy'):
+                    raise ValueError('INVENTORY_ENTRY_CARD_STALE')
+                position=await service.enter_route(row['asset'],row['buy'],row['sell'],expected_policy=row['inventory_policy'],
+                    confirmation_guard=lambda:trading_controls.state['revision']==item['revision']
+                        and trading_controls.environment=='paper' and trading_controls.profile('paper')['mode']=='manual')
                 result='PAPER: '+position['status'] if position else 'PAPER: вход отклонён'
             elif item['environment'] == 'paper' and item['strategy'] == 'dex_paired':
                 from .dex_virtual_paper_source import route_key
@@ -1406,38 +1410,9 @@ async def inventory_action(q: CallbackQuery):
     engine=getattr(secondary,'inventory_paper',None)
     if engine is None:
         return await q.answer('Эксперимент ещё не готов',show_alert=True)
-    parts=q.data.split(':')
-    if parts==['inv','card']:
-        if trading_controls.environment!='paper' or trading_controls.profile('paper')['mode']!='manual':
-            return await q.answer('Выбери PAPER → Вручную в управлении.',show_alert=True)
-        if scanner.paused or not strategy_runtime.enabled.get('spot_inventory'):
-            return await q.answer('Новые входы на паузе или режим выключен.',show_alert=True)
-        source=secondary.inventory_source
-        snapshots=await source.capture()
-        await engine.mark({k:b for x in snapshots for k,b in x['wallet_books'].items()})
-        for snapshot in snapshots:
-            try:
-                plan=engine.plan(snapshot)
-            except ValueError:
-                continue
-            if not all(source.allowed_venue(v) for v in (plan['buy'],plan['sell'])):
-                continue
-            row=dict(asset=plan['asset'],symbol=plan['asset']+'/USDT',buy=plan['buy'],sell=plan['sell'])
-            token=trading_controls.issue('spot_inventory',row)
-            from .inventory_paper import explanation
-            await safe_edit(q.message,escape(explanation(plan)),InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text='Подтвердить PAPER вход',callback_data='enter:'+token)],
-                [InlineKeyboardButton(text='‹ Назад',callback_data='inv:show')]]))
-            return await q.answer()
-        return await q.answer('Подтверждённого маршрута с нужным NET сейчас нет.',show_alert=True)
-    if len(parts)==4 and parts[1]=='set':
-        try:
-            await engine.configure(**{parts[2]:parts[3]})
-        except ValueError:
-            return await q.answer('Недопустимые параметры',show_alert=True)
-    from .inventory_experiment import render,keyboard
-    await safe_edit(q.message,render(engine,secondary.inventory_source),keyboard())
-    await q.answer()
+    from .inventory_cards import handle_action
+    await handle_action(q,engine,secondary.inventory_source,secondary.runtime.services['spot_inventory'],
+                        trading_controls,lambda:not scanner.paused and strategy_runtime.enabled.get('spot_inventory'),safe_edit)
 
 
 async def notify_paper_close(symbol, net, reason):
@@ -2379,13 +2354,23 @@ async def main():
             migrate_inventory(config.runtime_state_path,strategy_runtime,strategy_toggles,trading_controls)
             async def inventory_notification(event,position):
                 plan=position['plan']
+                from .inventory_cards import entry_text,entry_keyboard,card_row
+                if event=='CANDIDATE':
+                    token=None
+                    if trading_controls.environment=='paper' and trading_controls.profile('paper')['mode']=='manual':
+                        row=card_row(plan,secondary.inventory_paper)
+                        token=trading_controls.issue('spot_inventory',row)
+                    await bot.send_message(config.admin_id,entry_text(plan),reply_markup=entry_keyboard(token),parse_mode='HTML')
+                    return
                 title={'OPEN':'Модельные исполнения','CLOSE':'Цикл завершён по модели','ALERT':'Задержка восстановления запасов'}[event]
                 text=(f"📦 PAPER · {title}\n{escape(plan['asset'])} · {escape(plan['buy'])} → {escape(plan['sell'])}\n"
                       f"BASE куплено {float(position['bought']):.8g} / продано {float(position.get('sold',position['matched'])):.8g}\n"
                       f"Спред плана {float(plan['spread_pct']):.3f}%\n"+escape(position['thesis']))
                 if event=='CLOSE':
                     text+=f"\nNET цикла модели: {float(position['net']):+.4f} USDT."
-                await bot.send_message(config.admin_id,text,parse_mode='HTML')
+                rows=[[InlineKeyboardButton(text='📈 Данные и управление',callback_data='inv:pos:'+str(position['id']))]] if position['status']!='CLOSED' else []
+                rows.append([InlineKeyboardButton(text='📦 Сделки',callback_data='inv:show')])
+                await bot.send_message(config.admin_id,text,parse_mode='HTML',reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
             await build_inventory(secondary,config.db_path,trading_controls,strategy_runtime,
                                   inventory_notification,lambda:scanner.paused,venue_controller.get,
                                   network_clients=private_clients)

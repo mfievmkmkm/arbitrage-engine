@@ -10,6 +10,7 @@ import json
 import time
 from datetime import datetime, timezone
 import aiosqlite
+from .inventory_operator import Operator
 from .strategy_math import D, ZERO, ONE, Invalid, positive, nonnegative, plain, common_quantity
 
 SCHEMA='''
@@ -37,7 +38,7 @@ def day(ts):
     return datetime.fromtimestamp(float(D(ts)+D(18000)),timezone.utc).date().isoformat()
 
 
-def fill(book,qty,side,limit=None):
+def fill(book,qty,side,limit=None,cash_limit=None):
     """Partial native BASE fill up to an IOC limit, using visible depth only."""
     remaining=positive(qty);levels=book['asks' if side=='buy' else 'bids'];cash=ZERO;done=ZERO
     step=positive(book['step'])
@@ -45,7 +46,13 @@ def fill(book,qty,side,limit=None):
         price,size=positive(price),positive(size)
         if limit is not None and ((side=='buy' and price>limit) or (side=='sell' and price<limit)):
             break
-        q=common_quantity(min(remaining,size),[step])
+        available=min(remaining,size)
+        if side=='buy' and cash_limit is not None:
+            rate=nonnegative(book['fee_rate'])
+            available=min(available,max(ZERO,D(cash_limit)-cash*(ONE+rate))/(price*(ONE+rate)))
+        if available<=0:
+            break
+        q=common_quantity(available,[step])
         if q<=0:
             continue
         done+=q;cash+=q*price;remaining-=q
@@ -64,7 +71,7 @@ def explanation(plan):
             'PAPER: видимая глубина не гарантирует реальные fills; срок перевода — допущение.')
 
 
-class Engine:
+class Engine(Operator):
     def __init__(self,path,values=None,clock=time.time):
         self.path,self.p,self.clock=str(path),policy(values),clock
         self.state=None;self.version=0;self.lock=asyncio.Lock();self.on_event=None
@@ -210,6 +217,8 @@ class Engine:
             raise Invalid('INVENTORY_NET_TOO_SMALL')
         return plain(dict(route=route,asset=asset,buy=buy,sell=sell,quantity=qty,cost=cost,proceeds=proceeds,
             ask=cost/qty,bid=proceeds/qty,spread_pct=spread,projected_net=net,safety=self.p['safety'],
+            buy_fee=fa,sell_fee=fb,transfer_base_fee=base_fee,transfer_quote_fee=quote_fee,
+            transfer_cost_usd=base_fee*cost/qty+quote_fee,quote_ts=s['ts'],book_ts=[a['ts'],b['ts']],
             rebalance=rb,ioc_slippage=self.p['ioc_slippage'],quality='PUBLIC_DEPTH_PAPER_NOT_REAL_FILLS'))
 
     @staticmethod
@@ -252,13 +261,18 @@ class Engine:
         state['transfer_costs']=str(D(state['transfer_costs'])+quotefee+D(pos['base_fee_value']))
         pos['status']='REBALANCE_PENDING'
 
-    async def execute(self,snapshot,first,second,recovery,allow_entry=True):
+    async def execute(self,snapshot,first,second,recovery,allow_entry=True,rebalance_mode="auto",expected_policy=None):
         """Initial plan + sequential book captures, never fictitious zero-loss fills."""
         async with self.lock:
             if not allow_entry:
                 return None
             # All plan gates again; recovery data cannot authorize new positions.
+            if expected_policy is not None and expected_policy!=self.policy_fingerprint():
+                raise Invalid('INVENTORY_ENTRY_CARD_STALE')
+            if rebalance_mode not in ('auto','manual'):
+                raise Invalid('INVENTORY_REBALANCE_MODE_INVALID')
             plan=self.plan(snapshot)
+            plan['rebalance_mode']=rebalance_mode
             for b,venue in ((first,plan['buy']),(second,plan['sell']),(recovery,plan['buy'])):
                 self.fresh_book(b)
                 if b['venue']!=venue or b['asset']!=plan['asset']:
@@ -286,7 +300,10 @@ class Engine:
             state['fees']=str(D(state['fees'])+fee+sellfee)
             self.recover(state,pos,recovery)
             if D(pos['residual'])==0:
-                self.transfers(state,pos)
+                if rebalance_mode=='manual' and D(pos['matched'])>0:
+                    pos['status']='AWAITING_REBALANCE'
+                else:
+                    self.transfers(state,pos)
             if pos['status']!='CLOSED':
                 state['positions'][str(pos['id'])]=pos
             state['last_entry'][plan['route']]=str(self.clock())
@@ -329,7 +346,13 @@ class Engine:
         async with self.lock:
             state=copy.deepcopy(self.state);changed=[];events=[];now=D(self.clock())
             for key,pos in list(state['positions'].items()):
-                if pos['status']=='RECOVERY_REQUIRED':
+                if pos['status']=='MANUAL_EXIT_PENDING':
+                    try:
+                        a,b=await asyncio.gather(source.book(pos['plan']['buy'],pos['plan']['asset']),source.book(pos['plan']['sell'],pos['plan']['asset']))
+                        self.operator_exit_step(state,pos,a,b)
+                    except Exception as exc:
+                        pos['data_error']=type(exc).__name__
+                elif pos['status']=='RECOVERY_REQUIRED':
                     try:
                         book=await source.book(pos['plan']['buy'],pos['plan']['asset']);self.fresh_book(book)
                         self.recover(state,pos,book)
@@ -337,6 +360,8 @@ class Engine:
                             if pos.get('recovery_reason') in ('PARTIAL_BELOW_TRANSFER_MINIMUM','TRANSFER_BALANCE_SHORTFALL'):
                                 other=await source.book(pos['plan']['sell'],pos['plan']['asset']);self.fresh_book(other)
                                 self.reverse_matched(state,pos,book,other)
+                            elif pos['plan'].get('rebalance_mode')=='manual' and D(pos['matched'])>0:
+                                pos['status']='AWAITING_REBALANCE'
                             else:
                                 self.transfers(state,pos)
                     except Exception as exc:
@@ -352,14 +377,17 @@ class Engine:
                         self.change(state,t['destination']+'|'+t['asset'],D(t['amount']))
                         t.update(status='CREDITED',credited_at=str(now))
                 if pos['status']!='CLOSED' and pos['transfers'] and all(t['status']=='CREDITED' for t in pos['transfers']):
-                    self.finish(state,pos,'REBALANCE_MODEL_COMPLETE')
+                    self.finish(state,pos,'MANUAL_REBALANCE_COMPLETE' if pos.get('manual_close_requested') else 'REBALANCE_MODEL_COMPLETE')
                 if pos['status']=='CLOSED':
                     events.append(('CLOSE',pos))
                 elif D(pos['residual'])>0 and now-D(pos['opened_at'])>=self.p['max_unhedged_seconds']:
                     if not state['halted']:
                         state['halted']='INVENTORY_UNHEDGED_TIMEOUT';events.append(('ALERT',pos))
                 elif now-D(pos['opened_at'])>=self.p['max_pending_seconds']:
-                    pos['status']='REBALANCE_DELAYED' if pos['transfers'] else 'RECOVERY_REQUIRED'
+                    if pos['transfers']:
+                        pos['status']='REBALANCE_DELAYED'
+                    elif pos['status'] not in ('AWAITING_REBALANCE','MANUAL_EXIT_PENDING'):
+                        pos['status']='RECOVERY_REQUIRED'
                     if not state['halted']:
                         state['halted']='INVENTORY_TRANSFER_OR_RECOVERY_TIMEOUT';events.append(('ALERT',pos))
                 changed.append(pos)
