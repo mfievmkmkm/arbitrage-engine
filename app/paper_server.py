@@ -36,15 +36,17 @@ def run_database(db):
     db = Path(db).absolute()
     if not db.is_file() or db.is_symlink():
         raise ValueError("PAPER_SERVER_MIGRATED_DATABASE_REQUIRED")
-    with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True) as connection:
-        if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
-            raise ValueError("PAPER_SERVER_DATABASE_CHECK_FAILED")
     import fcntl
     with (db.parent / "paper.instance.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError("PAPER_SERVER_INSTANCE_ALREADY_RUNNING") from None
+        # A read-only SQLite connection cannot recover a persisted hot WAL.
+        # mode=rw permits recovery but refuses to create a missing ledger.
+        with sqlite3.connect(db.as_uri() + "?mode=rw", uri=True) as connection:
+            if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                raise ValueError("PAPER_SERVER_DATABASE_CHECK_FAILED")
         runpy.run_module("app.main", run_name="__main__")
 
 

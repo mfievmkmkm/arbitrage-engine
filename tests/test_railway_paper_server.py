@@ -3,9 +3,27 @@ import json
 import sqlite3
 
 import pytest
+from app import paper_server
 
 from app.railway_paper_server import prepare_environment, expand_watchlist, DEFAULT_PAPER_EXCHANGES
 from app.configure_virtual_paper import default_routes
+
+
+def test_server_checks_existing_wal_database_with_writable_recovery(tmp_path,monkeypatch):
+    db=tmp_path/'arbitrage.sqlite3'
+    with sqlite3.connect(db) as connection:
+        connection.execute('PRAGMA journal_mode=WAL')
+        connection.execute('CREATE TABLE ledger(net REAL)')
+        connection.execute('INSERT INTO ledger VALUES(-1.25)')
+        connection.commit()
+    launched=[]
+    monkeypatch.setattr(paper_server.runpy,'run_module',lambda *a,**k:launched.append(True))
+    paper_server.run_database(db)
+    assert launched
+    with sqlite3.connect(db) as connection:
+        assert connection.execute('SELECT net FROM ledger').fetchone()==(-1.25,)
+    with pytest.raises(ValueError,match='MIGRATED_DATABASE_REQUIRED'):
+        paper_server.run_database(tmp_path/'missing.sqlite3')
 
 
 def test_railway_paper_default_scans_all_supported_public_venues():
