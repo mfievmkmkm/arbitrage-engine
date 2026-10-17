@@ -47,12 +47,12 @@ def scanner(engine,service,manual=True):
     text='🔎 <b>Сканер · Bybit ↔ DEX</b>\n\n'
     if scan:
         text+=f'Пар: {len(scan.catalog)} · потоков: {scan.workers}\n'
-        text+=f'Проверок: {scan.checked}\n'
+        text+=f'Попыток проверки: {scan.checked}\n'
         if duration is not None:
             age=max(0,now-scan.last_batch_at)
             text+=f'Пакет: {duration:.2f} сек. · {age:.0f} сек. назад\n'
         if scan.last_sweep_seconds is not None:
-            text+=f'Полный обход: {scan.last_sweep_seconds:.1f} сек.\n'
+            text+=f'Обход списка: {scan.last_sweep_seconds:.1f} сек.\n'
     else:
         text+='Первый цикл ещё не завершён.\n'
     text+='Топ по сценарному NET · не старше 30 сек.'
@@ -62,7 +62,16 @@ def scanner(engine,service,manual=True):
         text+=f'\n\n<b>{i}. {escape(p["symbol"])}</b>\nСценарный NET ${p["paired_policy"]["partial_net"]:+.3f}'
         if manual:
             rows.append([button(f'Проверить {p["symbol"]}','dcard:'+key,'primary')])
-    if not candidates:text+='\n\nПодходящих проверенных пар сейчас нет.'
+    reasons=getattr(scan,'last_reasons',{}) if scan else {}
+    failures=sum(reasons.values())
+    denied=sum(reasons.get(k,0) for k in ('DEX_HTTP_401','DEX_HTTP_403'))
+    if failures and denied==failures:
+        code='403' if reasons.get('DEX_HTTP_403') else '401'
+        text+=f'\n\n⛔ 0x: нет доступа к котировкам · HTTP {code}.\nНужна проверка API-ключа и разрешений. Поиск не подтверждён.'
+    elif failures and reasons.get('DEX_HTTP_429',0)==failures:
+        text+='\n\n⏳ 0x: лимит запросов. Повтор после паузы провайдера.'
+    elif not candidates:
+        text+='\n\nПодходящих проверенных пар сейчас нет.'
     rows.append([button('↻ Обновить','pair:scan')])
     if manual:rows.append([button('Список пар','ctl:dex')])
     rows.append([button('‹ Назад','pair:show')])

@@ -70,3 +70,22 @@ def test_toggle_is_explicit_persisted_and_starts_manual_without_erasing_position
         assert not runtime.enabled['product_dex_paired'] and not runtime.enabled['dex_paired']
         assert engine.positions == {'1': {'status':'OPEN'}}
     asyncio.run(run())
+
+
+def test_scanner_does_not_disguise_provider_denial_as_no_market_opportunities():
+    from app.paired_console import scanner
+    from collections import Counter
+    engine=NS(clock=lambda:100)
+    scan=NS(last_batch_seconds=.5,last_batch_at=100,last_sweep_seconds=4,
+            catalog={1:{}},workers=3,checked=90,last_reasons=Counter(DEX_HTTP_403=3))
+    service=NS(scanner=scan,candidates={})
+    text,_=scanner(engine,service)
+    assert 'HTTP 403' in text and 'Попыток проверки: 90' in text
+    assert 'Обход списка: 4.0' in text
+    assert 'Подходящих проверенных пар сейчас нет' not in text
+    scan.last_reasons=Counter(DEX_HTTP_429=3)
+    text,_=scanner(engine,service)
+    assert 'лимит запросов' in text and 'Подходящих проверенных пар сейчас нет' not in text
+    scan.last_reasons=Counter(PAIRED_PARTIAL_NET_LOW=3)
+    text,_=scanner(engine,service)
+    assert 'Подходящих проверенных пар сейчас нет' in text
