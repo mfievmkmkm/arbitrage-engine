@@ -35,6 +35,28 @@ def test_discovery_excludes_dex_and_includes_supported_spot_adapters():
     assert len(venues)==len(set(venues))
 
 
+def test_bounded_exchange_pool_rotates_without_evicting_configured_venue(tmp_path,monkeypatch):
+    import app.market_signals as signals
+    async def go():
+        closed=[]
+        class Client:
+            def __init__(self,name):
+                self.name=name;self.markets={'X/USDT':dict(spot=True,active=True,quote='USDT',base='X')}
+            async def load_markets(self):pass
+            async def close(self):closed.append(self.name)
+        for name in ('bybit','gate','mexc','okx'):
+            monkeypatch.setattr(signals.ccxt,name,lambda opts,name=name:Client(name))
+        scanner=Scanner(tmp_path/'db',None,venues=['bybit','gate','mexc','okx'],trade_venues={'bybit'})
+        async def idle(*args):await asyncio.sleep(3600)
+        scanner.ticker_loop=idle
+        for name in scanner.names:await scanner.load(name)
+        assert len(scanner.clients)==3 and 'bybit' in scanner.clients
+        assert closed==['gate']
+        assert 'gate' not in scanner.tickers
+        await scanner.close()
+    asyncio.run(go())
+
+
 def test_durable_queue_dedup_toggle_and_delivery_retry(tmp_path):
     async def go():
         now=[100];sent=[]

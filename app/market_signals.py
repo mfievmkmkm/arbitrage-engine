@@ -84,8 +84,11 @@ class Scanner:
     def __init__(self, path, notify, clock=time.time, venues=None,trade_venues=(),account_clients=None):
         self.clock, self.notify = clock, notify
         self.store = Store(path,clock)
-        self.names = venues if venues is not None else discover()
+        self.trade_venues = set(trade_venues)
+        self.names = list(dict.fromkeys((*sorted(self.trade_venues),*(venues if venues is not None else discover()))))
         self.clients, self.health, self.tickers, self.currency_cache = {}, {}, {}, {}
+        self.pool_lock=asyncio.Lock();self.max_active_venues=3
+        self.loaded_order=[]
         self.retry, self.load_cursor = {}, 0
         self.symbol_cursor = {}
         self.loader = None
@@ -98,7 +101,6 @@ class Scanner:
         self.lock = asyncio.Lock()
         self.budget = min(100, max(5, float(os.getenv('MARKET_SIGNALS_NOTIONAL','25'))))
         self.capital = 250
-        self.trade_venues = set(trade_venues)
         from .signal_account_check import Accounts
         self.accounts=Accounts(account_clients or {},clock)
         self.paper=TransferPaper(self.store,clock)
@@ -109,31 +111,40 @@ class Scanner:
         await self.paper.init()
 
     async def load(self, name):
-        if name in self.clients or self.clock() < self.retry.get(name,0):
-            return
-        client = getattr(ccxt,name)({'enableRateLimit':True,'timeout':10000,'options':{'defaultType':'spot'}})
-        try:
-            async with self.gate:
-                await asyncio.wait_for(client.load_markets(),20)
-            if not any(spot(m) for m in client.markets.values()):
-                raise ValueError('Нет активного USDT-спота')
-            self.clients[name] = client
-            self.health[name] = 'Загружена; ждём котировки'
-            self.workers[name] = asyncio.create_task(self.ticker_loop(name))
-        except asyncio.CancelledError:
-            await client.close()
-            raise
-        except Exception as exc:
-            self.health[name] = type(exc).__name__ if not isinstance(exc,ValueError) else str(exc)
-            self.retry[name] = self.clock()+900
-            await client.close()
+        async with self.pool_lock:
+            if name in self.clients or self.clock() < self.retry.get(name,0):return
+            client = getattr(ccxt,name)({'enableRateLimit':True,'timeout':10000,'options':{'defaultType':'spot'}})
+            try:
+                async with self.gate:
+                    await asyncio.wait_for(client.load_markets(),20)
+                if not any(spot(m) for m in client.markets.values()):
+                    raise ValueError('Нет активного USDT-спота')
+                if len(self.clients)>=self.max_active_venues:
+                    evict=next((v for v in self.loaded_order if v not in self.trade_venues),self.loaded_order[0])
+                    worker=self.workers.pop(evict,None)
+                    if worker:
+                        worker.cancel();await asyncio.gather(worker,return_exceptions=True)
+                    previous=self.clients.pop(evict)
+                    self.tickers.pop(evict,None);self.currency_cache.pop(evict,None)
+                    self.loaded_order.remove(evict);self.health[evict]='Ротация: не активна'
+                    await previous.close()
+                self.clients[name] = client;self.loaded_order.append(name)
+                self.health[name] = 'Загружена; ждём котировки'
+                self.workers[name] = asyncio.create_task(self.ticker_loop(name))
+            except asyncio.CancelledError:
+                await client.close();raise
+            except Exception as exc:
+                self.health[name] = type(exc).__name__ if not isinstance(exc,ValueError) else str(exc)
+                self.retry[name] = self.clock()+900
+                await client.close()
 
     async def load_loop(self):
         while True:
-            batch=[self.names[(self.load_cursor+i)%len(self.names)] for i in range(min(4,len(self.names)))] if self.names else []
-            self.load_cursor+=len(batch)
-            await asyncio.gather(*(self.load(v) for v in batch))
-            await asyncio.sleep(2)
+            if self.names:
+                name=self.names[self.load_cursor%len(self.names)]
+                self.load_cursor+=1
+                await self.load(name)
+            await asyncio.sleep(20)
 
     async def ticker_loop(self,name):
         while True:
@@ -468,7 +479,7 @@ class Scanner:
                 'Котировки: '+escape(', '.join(ok) or 'ожидаем')+'\n'
                 'Ожидают/недоступны: '+escape('; '.join(failed)[:1200] or 'нет')+'\n'
                 f'Ещё не проверено: {len(set(self.names)-set(self.health))}\n'
-                'Покрытие: активный USDT-спот CEX, публичные API CCXT с тикерами и стаканами. При отсутствии массового API пары перебираются постепенно. DEX и фьючерсы не смешиваются со спотом. Загрузка с ограничением запросов; охват не означает доступность биржи вашему аккаунту.\n'
+                'Покрытие: активный USDT-спот CEX, публичные API CCXT с тикерами и стаканами. Одновременно активны максимум 3 биржи; остальные ротируются примерно раз в 20 секунд, поэтому поиск неполный. DEX и фьючерсы не смешиваются со спотом. Охват не означает доступность биржи вашему аккаунту.\n'
                 'Сигналы по всем доступным площадкам; PAPER-циклы только на площадках с настроенными spot API. Реальных ордеров и выводов нет.')
 
     async def close(self):
