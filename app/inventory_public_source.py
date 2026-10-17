@@ -121,6 +121,8 @@ class Source:
             if minimum is None or deposit is None:
                 continue
             found.append(dict(network=canonical,fee=str(nonnegative(aa['fee'])),minimum=str(max(nonnegative(minimum),nonnegative(deposit))),
+                              withdraw_minimum=str(nonnegative(minimum)),deposit_minimum=str(nonnegative(deposit)),
+                              deposit_fee=bb.get('deposit_fee'),deposit_fee_percentage=bb.get('deposit_fee_percentage'),
                               available=True,delay_seconds='900',delay_evidence='PAPER_ASSUMPTION_NOT_MEASURED'))
         if not found:
             raise Invalid('INVENTORY_NETWORK_IDENTITY_OR_FEE_UNKNOWN')

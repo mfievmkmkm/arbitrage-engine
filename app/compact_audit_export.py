@@ -13,7 +13,7 @@ from .secret_redaction import redact
 
 def selected_tables():
     return {title: table for title, table in TABLES.items()
-            if title.startswith(("Inventory Paper ","Market signals ")) or title == "Channel reader state" or title.startswith('Strategy lab ')
+            if title.startswith(("Inventory Paper ","Market signals ","Transfer PAPER ","Transfer signal ")) or title == "Channel reader state" or title.startswith('Strategy lab ')
             or "trades" in title.lower()
             or title in ("Paper trades", "Paper marks", "Decisions", "Ledger", "Scan cycles")
             or (title.startswith(("DEX channel", "DEX Bybit", "DEX paired", "CEX DEX Paper", "DEX virtual"))

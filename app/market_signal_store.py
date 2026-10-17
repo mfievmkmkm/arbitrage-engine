@@ -17,6 +17,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS market_signal_settings(
                     id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER);
                 INSERT OR IGNORE INTO market_signal_settings VALUES(1,1);
+                CREATE TABLE IF NOT EXISTS signal_transfer_control(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT);
+                INSERT OR IGNORE INTO signal_transfer_control VALUES(1,'{"mode":"manual","budget":25,"min_spread":5,"max_spread":10,"min_net":0.25,"stress_drop":3}');
+                CREATE TABLE IF NOT EXISTS signal_transfer_tickets(token TEXT PRIMARY KEY,expires REAL,symbol TEXT,buy TEXT,sell TEXT);
             ''')
             await db.commit()
 
@@ -50,3 +53,54 @@ class Store:
         async with aiosqlite.connect(self.path) as db:
             await db.execute('UPDATE market_signal_queue SET delivered=1 WHERE key=?', (key,))
             await db.commit()
+
+    async def control(self):
+        async with aiosqlite.connect(self.path) as db:
+            row=await (await db.execute('SELECT payload FROM signal_transfer_control WHERE id=1')).fetchone()
+        return json.loads(row[0])
+
+    async def set_control(self,key,value):
+        from .strategy_math import D
+        if key not in ('mode','budget','min_spread','max_spread','min_net','stress_drop'):
+            raise ValueError('Неизвестная настройка')
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute('BEGIN IMMEDIATE')
+            p=json.loads((await (await db.execute('SELECT payload FROM signal_transfer_control WHERE id=1')).fetchone())[0])
+            if key=='mode':
+                if value not in ('manual','auto'):raise ValueError('Режим должен быть manual/auto')
+                p[key]=value
+            else:
+                v=D(value)
+                if not (('budget'==key and 5<=v<=50) or ('min_spread'==key and 5<=v<=20) or
+                        ('max_spread'==key and 5<=v<=30) or ('min_net'==key and D('.25')<=v<=5) or
+                        ('stress_drop'==key and 1<=v<=10)):
+                    raise ValueError('Значение вне диапазона')
+                p[key]=float(v)
+            if p['min_spread']>p['max_spread']:raise ValueError('Минимальный спред больше максимума')
+            await db.execute('UPDATE signal_transfer_control SET payload=? WHERE id=1',(json.dumps(p),))
+            await db.commit()
+        return p
+
+    async def issue(self,signal):
+        import secrets
+        token=secrets.token_urlsafe(12)
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute('INSERT INTO signal_transfer_tickets VALUES(?,?,?,?,?)',
+                             (token,self.clock()+30,signal['symbol'],signal['buy'],signal['sell']))
+            await db.commit()
+        return token
+
+    async def claim(self,token):
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute('BEGIN IMMEDIATE')
+            row=await (await db.execute('SELECT expires,symbol,buy,sell FROM signal_transfer_tickets WHERE token=?',(token,))).fetchone()
+            await db.execute('DELETE FROM signal_transfer_tickets WHERE token=?',(token,))
+            await db.commit()
+        if row is None or row[0]<self.clock():raise ValueError('Кнопка устарела. Открой карточку заново')
+        return dict(symbol=row[1],buy=row[2],sell=row[3])
+
+    async def signal(self,ident):
+        async with aiosqlite.connect(self.path) as db:
+            row=await (await db.execute('SELECT payload,ts FROM market_signal_queue WHERE kind="spot" AND json_extract(payload,"$.id")=? ORDER BY ts DESC LIMIT 1',(ident,))).fetchone()
+        if row is None or self.clock()-row[1]>300:raise ValueError('Сигнал отсутствует или устарел')
+        return json.loads(row[0])

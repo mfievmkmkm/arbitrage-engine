@@ -1423,16 +1423,67 @@ async def market_signals_action(q: CallbackQuery):
     feed=getattr(secondary,'market_signals',None)
     if feed is None:
         return await q.answer('Сканер сигналов отключён: MARKET_SIGNALS_ENABLED',show_alert=True)
-    if q.data=='sig:toggle':
-        await feed.store.toggle()
+    try:
+        if q.data=='sig:toggle':
+            await feed.store.toggle()
+        if q.data.startswith('sig:mode:'):
+            await feed.store.set_control('mode',q.data.split(':',2)[2])
+        if q.data.startswith('sig:fund:'):
+            await feed.paper.set_home(q.data.split(':',2)[2],feed.trade_venues)
+        if q.data.startswith('sig:set:'):
+            _,_,key,value=q.data.split(':',3)
+            await feed.store.set_control(key,value)
+        if q.data.startswith('sig:card:'):
+            row=await feed.store.signal(q.data.split(':',2)[2])
+            e=await feed.review(row['symbol'],row['buy'],row['sell'],read_accounts=True)
+            e['id']=row['id']
+            links=[[InlineKeyboardButton(text='↻ Новые котировки и балансы',callback_data=q.data)]]
+            if e['transfer'] and not e['reasons'] and e['trade_configured']:
+                token=await feed.store.issue(e)
+                links.append([InlineKeyboardButton(text='🧪 Подтвердить PAPER-покупку',callback_data='sig:paper:'+token,style='primary')])
+            links.append([InlineKeyboardButton(text='‹ Сигналы',callback_data='sig:show')])
+            await q.answer()
+            return await safe_edit(q.message,feed.format(e),InlineKeyboardMarkup(inline_keyboard=links))
+        if q.data.startswith('sig:paper:'):
+            control=await feed.store.control()
+            if control['mode']!='manual':raise ValueError('Режим изменился: ручное подтверждение недоступно')
+            route=await feed.store.claim(q.data.split(':',2)[2])
+            if not (feed.entry_enabled and not scanner.paused):raise ValueError('Сканер на паузе')
+            e=await feed.review(**route)
+            if not e['trade_configured'] or e['reasons'] or e['transfer'] is None:
+                raise ValueError('Новые данные не прошли проверку; позиция не открыта')
+            await feed.paper.open(dict(signal=e,transfer=e['transfer']))
+            await q.answer('PAPER-цикл записан')
+            return await safe_edit(q.message,feed.paper.render(),InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text='↻ PAPER-цикл',callback_data='sig:state')],
+                [InlineKeyboardButton(text='‹ Сигналы',callback_data='sig:show')]]))
+    except ValueError as exc:
+        await q.answer(str(exc)[:190],show_alert=True)
+        return
     enabled=await feed.store.enabled()
+    control=await feed.store.control()
     reader=getattr(secondary,'public_channel_reader',None)
     text=feed.status()+'\n\nУведомления: '+('включены' if enabled else 'выключены')
     if scanner.paused:
         text+='\nОбщая пауза: отправка и сканирование приостановлены.'
     text+='\nКанал: '+escape(reader.status if reader else 'публичное чтение не запущено')
-    rows=[[InlineKeyboardButton(text='Выключить уведомления' if enabled else 'Включить уведомления',callback_data='sig:toggle')],
-          [InlineKeyboardButton(text='↻ Обновить покрытие',callback_data='sig:show'),InlineKeyboardButton(text='‹ Сделки',callback_data='inv:show')]]
+    text+=(f"\n\n🔁 PAPER перевод · {'Авто' if control['mode']=='auto' else 'Подтверждаю сам'}"
+           f"\nПокупка до ${control['budget']:g}; спред {control['min_spread']:g}–{control['max_spread']:g}%"
+           f" · NET от ${control['min_net']:g} даже при падении цены на {control['stress_drop']:g}%"
+           '\nВход только на биржах с настроенным spot API; реальный режим недоступен.\n\n'+feed.paper.render())
+    rows=[[InlineKeyboardButton(text='👆 Подтверждаю сам',callback_data='sig:mode:manual',style='primary' if control['mode']=='manual' else None),
+           InlineKeyboardButton(text='🤖 PAPER авто',callback_data='sig:mode:auto',style='primary' if control['mode']=='auto' else None)],
+          [InlineKeyboardButton(text='Покупка $10',callback_data='sig:set:budget:10'),InlineKeyboardButton(text='$25',callback_data='sig:set:budget:25'),InlineKeyboardButton(text='$50',callback_data='sig:set:budget:50')],
+          [InlineKeyboardButton(text='Спред ≥5%',callback_data='sig:set:min_spread:5'),InlineKeyboardButton(text='≥7.5%',callback_data='sig:set:min_spread:7.5')],
+          [InlineKeyboardButton(text='Максимум 10%',callback_data='sig:set:max_spread:10'),InlineKeyboardButton(text='15%',callback_data='sig:set:max_spread:15')],
+          [InlineKeyboardButton(text='Падение 3%',callback_data='sig:set:stress_drop:3'),InlineKeyboardButton(text='5%',callback_data='sig:set:stress_drop:5')],
+          [InlineKeyboardButton(text='NET ≥$0.25',callback_data='sig:set:min_net:0.25'),InlineKeyboardButton(text='≥$0.50',callback_data='sig:set:min_net:0.5')],
+          [InlineKeyboardButton(text='Выключить сигналы' if enabled else 'Включить сигналы',callback_data='sig:toggle')],
+          [InlineKeyboardButton(text='↻ Обновить',callback_data='sig:show'),InlineKeyboardButton(text='‹ Сделки',callback_data='inv:show')]]
+    if not feed.paper.state.get('home'):
+        venues=sorted(feed.trade_venues)
+        rows.insert(1,[InlineKeyboardButton(text='🏦 Начать PAPER на '+v,callback_data='sig:fund:'+v) for v in venues[:3]])
+        if len(venues)>3:rows.insert(2,[InlineKeyboardButton(text='🏦 '+v,callback_data='sig:fund:'+v) for v in venues[3:7]])
     await q.answer()
     await safe_edit(q.message,text,InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -2400,9 +2451,16 @@ async def main():
             from .market_signals import Scanner as MarketSignals
             from .channel_signal_review import Reviewer
             async def market_signal_notification(text):
+                import re
+                match=re.search(r'Код карточки: ([0-9a-f]{16})',text)
+                markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                    text='🔎 Проверить сейчас',callback_data='sig:card:'+match[1])]]) if match else None
                 await bot.send_message(config.admin_id,text,parse_mode='HTML',
-                                       disable_web_page_preview=True)
-            feed=MarketSignals(config.db_path,market_signal_notification)
+                                       disable_web_page_preview=True,reply_markup=markup)
+            from .credentials import configured
+            trade_venues={'gate' if v=='gateio' else v for v in configured() if v in spot_private_clients}
+            feed=MarketSignals(config.db_path,market_signal_notification,
+                               trade_venues=trade_venues,account_clients=spot_private_clients)
             await feed.init()
             feed.channel_review=Reviewer(secondary)
             secondary.market_signals=feed

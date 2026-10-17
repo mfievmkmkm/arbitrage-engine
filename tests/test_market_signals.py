@@ -58,7 +58,7 @@ def test_durable_queue_dedup_toggle_and_delivery_retry(tmp_path):
         restored.notify=notify
         now[0]=200
         await restored.flush()
-        assert len(sent)==1 and sent[0].endswith('result') and 'Задержанная доставка' in sent[0]
+        assert len(sent)==1 and '\n\nresult\n\n🔎 CEX spot:' in sent[0] and 'Задержанная доставка' in sent[0]
         assert not await restored.store.pending()
         await restored.store.toggle()
         assert not await Store(tmp_path/'db').enabled()
@@ -71,6 +71,7 @@ def test_durable_queue_dedup_toggle_and_delivery_retry(tmp_path):
 def test_missing_identity_is_reported_not_qualified_and_links_present(tmp_path):
     async def go():
         s=Scanner(tmp_path/'db',None,clock=lambda:100,venues=[])
+        await s.init()
         market=dict(taker=.001,limits=dict(amount=dict(min=.001),cost=dict(min=1)))
         s.clients={'bybit':NS(markets={'X/USDT':market},urls={'www':'https://www.bybit.com'}),
                    'gate':NS(markets={'X/USDT':market},urls={'www':'https://www.gate.com'})}
@@ -78,9 +79,9 @@ def test_missing_identity_is_reported_not_qualified_and_links_present(tmp_path):
         async def capture(venue,symbol):return book(100 if venue=='bybit' else 107)
         s.route=route;s.book=capture
         e=await s.evaluate('X/USDT','bybit','gate')
-        assert e['net'] is None
+        assert e['transfer'] is None
         t=s.format(e)
-        assert 'ВХОД НЕ ПОДТВЕРЖДЁН' in t and 'Итоговый NET неизвестен' in t
+        assert 'ВХОД НЕ ПОДТВЕРЖДЁН' in t and 'Невозможно проверить последовательный перевод' in t
         assert 'https://www.bybit.com/en/trade/spot/X/USDT' in t
         assert 'https://www.gate.com/trade/X_USDT' in t
         assert len(t)<4096
@@ -90,13 +91,15 @@ def test_missing_identity_is_reported_not_qualified_and_links_present(tmp_path):
 def test_network_expense_turns_positive_spread_into_rejection(tmp_path):
     async def go():
         s=Scanner(tmp_path/'db',None,clock=lambda:100,venues=[])
+        await s.init()
         m=dict(taker=.002,limits=dict(amount=dict(min=0),cost=dict(min=0)))
         s.clients={'a':NS(markets={'BTC/USDT':m}),'b':NS(markets={'BTC/USDT':m})}
-        async def route(*args):return dict(fee='.001',minimum='.001',network='BTC'),dict(fee='2',minimum='1',network='TRC20')
+        async def route(*args):return (dict(fee='.001',withdraw_minimum='.001',deposit_minimum='.001',deposit_fee='0',deposit_fee_percentage=False,network='BTC'),
+                                       dict(fee='2',withdraw_minimum='1',deposit_minimum='1',deposit_fee='0',deposit_fee_percentage=False,network='TRC20'))
         async def capture(venue,symbol):return book(100 if venue=='a' else 107)
         s.route=route;s.book=capture
         e=await s.evaluate('BTC/USDT','a','b')
-        assert D(e['net'])<0 and 'NET после расходов и резерва меньше $0.25' in e['reasons']
+        assert D(e['transfer']['net_after_reserve'])<0 and any('NET после резерва' in r for r in e['reasons'])
         async def low(venue,symbol):return book(100 if venue=='a' else 105)
         s.book=low
         assert await s.evaluate('BTC/USDT','a','b') is None
@@ -106,6 +109,7 @@ def test_network_expense_turns_positive_spread_into_rejection(tmp_path):
 def test_stale_skew_and_extreme_gap_rejected(tmp_path):
     async def go():
         s=Scanner(tmp_path/'db',None,clock=lambda:100,venues=[])
+        await s.init()
         async def route(*args):raise ValueError('unknown')
         async def capture(venue,symbol):return dict(book(100 if venue=='a' else 112),ts=D(98 if venue=='a' else 100))
         s.route=route;s.book=capture

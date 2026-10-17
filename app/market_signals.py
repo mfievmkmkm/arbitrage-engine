@@ -8,6 +8,7 @@ import asyncio
 import math
 import os
 import time
+import hashlib
 from html import escape
 import ccxt.async_support as ccxt
 import aiosqlite
@@ -18,6 +19,8 @@ from .strategy_math import D, ONE, ZERO, common_quantity, plain
 from .public_books import normalize
 from .market_signal_links import market_link
 from .market_signal_store import Store
+from .transfer_signal_math import plan as transfer_plan
+from .transfer_signal_paper import Paper as TransferPaper
 
 PRIORITY = ('bybit','gate','gateio','mexc','binance','okx','bitget','kucoin','htx','coinex','bitmart')
 
@@ -78,7 +81,7 @@ def economics(a, b, budget=25, capital=250):
 class Scanner:
     interval = 15
 
-    def __init__(self, path, notify, clock=time.time, venues=None):
+    def __init__(self, path, notify, clock=time.time, venues=None,trade_venues=(),account_clients=None):
         self.clock, self.notify = clock, notify
         self.store = Store(path,clock)
         self.names = venues if venues is not None else discover()
@@ -95,9 +98,14 @@ class Scanner:
         self.lock = asyncio.Lock()
         self.budget = min(100, max(5, float(os.getenv('MARKET_SIGNALS_NOTIONAL','25'))))
         self.capital = 250
+        self.trade_venues = set(trade_venues)
+        from .signal_account_check import Accounts
+        self.accounts=Accounts(account_clients or {},clock)
+        self.paper=TransferPaper(self.store,clock)
 
     async def init(self):
         await self.store.init()
+        await self.paper.init()
 
     async def load(self, name):
         if name in self.clients or self.clock() < self.retry.get(name,0):
@@ -218,73 +226,166 @@ class Scanner:
         except ValueError:
             raise ValueError('Не подтверждены сеть, комиссия или минимумы перевода BASE/USDT') from None
 
+    async def quote_route(self,src,dst):
+        ca,cb=await asyncio.gather(self.currencies(src),self.currencies(dst))
+        from .inventory_public_source import NATIVE
+        source=Source(self.clients,(src,dst),registry={'BTC':dict(native=True,networks=list(NATIVE['BTC']))},clock=self.clock)
+        source.networks={src:ca,dst:cb};source.network_ts={src:self.currency_cache[src][0],dst:self.currency_cache[dst][0]}
+        return source.network('USDT',src,dst)
+
     async def evaluate(self,symbol,a,b):
         base=symbol.split('/')[0]
         # Metadata requests happen BEFORE fresh books.
         reasons=[];routes=None
+        control=await self.store.control()
         try:
             routes=await self.route(base,a,b)
         except Exception as exc:
             reasons.append(str(exc) if isinstance(exc,ValueError) else type(exc).__name__)
+        configured=a in self.trade_venues and b in self.trade_venues
+        funding=None;source=None
+        if configured:
+            source=self.paper.funding_source(a,D(control['budget']))
+            if source is None:
+                reasons.append('PAPER: выбери стартовую биржу и обеспечь виртуальный USDT')
+            elif source!=a:
+                try:
+                    funding=await self.quote_route(source,a)
+                except Exception as exc:
+                    reasons.append('USDT до биржи покупки: '+(str(exc) if isinstance(exc,ValueError) else type(exc).__name__))
         aa,bb=await asyncio.gather(self.book(a,symbol),self.book(b,symbol))
         if abs(aa['ts']-bb['ts'])>1 or any(not ZERO<=D(self.clock())-x['ts']<=3 for x in (aa,bb)):
             raise ValueError('Стаканы устарели или не синхронизированы')
-        e=economics(aa,bb,self.budget,self.capital)
-        if D(e['spread_pct'])<5:
+        raw_spread=(D(bb['bids'][0][0])/D(aa['asks'][0][0])-ONE)*100
+        if raw_spread<D(control['min_spread']):
             return None
-        if D(e['spread_pct'])>10:
-            reasons.append('Спред выше 10%: аномалия, требуется отдельная проверка')
-        for v,cash in ((a,e['buy_cash']),(b,e['sell_cash'])):
-            m=self.clients[v].markets[symbol];limits=m.get('limits') or {}
-            minimum=(limits.get('amount') or {}).get('min'); cost=(limits.get('cost') or {}).get('min')
-            maximum=(limits.get('amount') or {}).get('max'); max_cost=(limits.get('cost') or {}).get('max')
-            if minimum is None or cost is None:
-                reasons.append(v+': неизвестен минимум ордера')
-            elif D(e['qty'])<D(minimum) or D(cash)<D(cost):
-                reasons.append(v+': размер меньше минимума ордера')
-            if (maximum is not None and D(e['qty'])>D(maximum)) or (max_cost is not None and D(cash)>D(max_cost)):
-                reasons.append(v+': превышен максимум ордера')
+        transfer=None
         if routes:
-            rb,rq=routes
-            transfer=D(rb['fee'])*D(e['buy_vwap'])+D(rq['fee'])
-            if D(e['qty'])<=D(rb['fee']) or D(e['qty'])<D(rb['minimum']) or D(e['qty'])-D(rb['fee'])<D(rb['minimum']):
-                reasons.append('BASE не хватает на комиссию и минимумы перевода')
-            if D(e['sell_cash'])-D(bb['fee_rate'])*D(e['sell_cash'])-D(rq['fee'])<D(rq['minimum']):
-                reasons.append('USDT не хватает на обратный перевод')
-            e.update(transfer_cost=str(transfer),net=str(D(e['trade_net'])-transfer-D('.10')),
-                     network=rb['network'],quote_network=rq['network'])
-            if D(e['net'])<D('.25'):
-                reasons.append('NET после расходов и резерва меньше $0.25')
-        else:
-            e.update(transfer_cost=None,net=None)
-        e.update(symbol=symbol,buy=a,sell=b,ts=self.clock(),reasons=reasons)
+            try:
+                transfer=transfer_plan(aa,bb,*routes,budget=control['budget'],capital=self.capital,
+                    min_spread=control['min_spread'],max_spread=control['max_spread'],
+                    min_net=control['min_net'],stress_drop=control['stress_drop'])
+                reasons.extend(transfer['reasons'])
+            except (ValueError,KeyError) as exc:
+                reasons.append('Последовательный перевод: '+str(exc))
+        if transfer:
+            for venue,qty,cash in ((a,transfer['buy_qty'],transfer['buy_cash']),
+                                   (b,transfer['sell_qty'],transfer['sell_cash'])):
+                try:
+                    from .transfer_signal_math import limits
+                    limits(self.clients[venue].markets[symbol],qty,cash)
+                except ValueError as exc:
+                    reasons.append(venue+': '+str(exc))
+        if transfer and configured and source and source!=a and funding:
+            try:
+                    fee=D(funding['fee']);amount=D(control['budget'])+fee
+                    if funding.get('deposit_fee') is None or D(funding['deposit_fee'])!=0 or funding.get('deposit_fee_percentage') is not False:
+                        raise ValueError('Не подтверждена нулевая комиссия ввода USDT')
+                    if amount<D(funding['withdraw_minimum']) or D(control['budget'])<D(funding['deposit_minimum']):
+                        raise ValueError('Предварительный USDT-перевод меньше минимума')
+                    if D(self.paper.state['balances'][source])<amount:raise ValueError('Недостаточно USDT на бирже-источнике')
+                    transfer['funding_source']=source;transfer['funding_route']=funding
+                    transfer['funding_amount']=str(amount)
+                    transfer['funding_credit']=str(D(control['budget']))
+                    transfer['net_after_reserve']=str(D(transfer['net_after_reserve'])-fee)
+                    transfer['stress_net']=str(D(transfer['stress_net'])-fee)
+                    if D(transfer['stress_net'])<D(control['min_net']):
+                        reasons.append('Предварительный USDT-перевод уничтожает минимальный NET')
+            except ValueError as exc:
+                reasons.append('USDT до биржи покупки: '+str(exc))
+        e=dict(symbol=symbol,buy=a,sell=b,ts=float(min(aa['ts'],bb['ts'])),
+               spread_pct=str(raw_spread),reasons=list(dict.fromkeys(reasons)),
+                 transfer=transfer,mode=control['mode'],trade_configured=configured)
+        return e
+
+    async def review(self,symbol,buy,sell,read_accounts=False):
+        if buy not in self.clients or sell not in self.clients:
+            raise ValueError('Биржа сейчас недоступна')
+        e=await self.evaluate(symbol,buy,sell)
+        if e is None:
+            raise ValueError('Новые стаканы не подтверждают спред от 5%')
+        if read_accounts:
+            account=await self.accounts.check(symbol,buy,sell)
+            e['accounts']=account
+            # Read-only balances and account fee rates never grant execution.
+            if e['transfer']:
+                p=e['transfer'];source=p.get('funding_source',buy)
+                if source not in account['accounts'] and source!=buy:
+                    try:
+                        account['accounts'][source]=await self.accounts.read(source,symbol)
+                    except Exception as exc:
+                        e['reasons'].append(source+': не удалось прочитать исходный spot счёт ('+type(exc).__name__+')')
+                row=account['accounts'].get(source)
+                need=p['funding_amount'] if source!=buy else p['spent']
+                if row is None or row['free']['USDT'] is None or D(row['free']['USDT'])<D(need):
+                    e['reasons'].append(source+': не подтверждён свободный spot USDT для маршрута')
+                for venue in (buy,sell):
+                    actual=account['accounts'].get(venue)
+                    if actual and D(actual['taker'])>max(D('.002'),D(self.clients[venue].markets[symbol]['taker'])):
+                        e['reasons'].append(venue+': тарифная комиссия выше комиссии модели; пересчёт нужен до входа')
+            e['reasons'].extend(account['reasons'])
         return e
 
     def format(self,e):
-        lines=['📡 <b>SPOT · сигнал для ручной проверки</b>',escape(e['symbol'])+' · '+escape(e['buy'])+' → '+escape(e['sell']),
-               f"Спред по глубине {float(e['spread_pct']):.3f}% · BASE {escape(e['qty'])}",
-               f"Купить: VWAP {float(e['buy_vwap']):.8g} · ${float(e['buy_cash']):.4f}",
-               f"Продать: VWAP {float(e['sell_vwap']):.8g} · ${float(e['sell_cash']):.4f}",
-               f"Торговые комиссии ≥${float(e['fees']):.4f} (модель ≥0.2%/сторону)",
-               f"Разница после торговых комиссий: ${float(e['trade_net']):+.4f}"]
-        if e['net'] is not None:
-            lines.append(f"Переводы ≈${float(e['transfer_cost']):.4f} · резерв $0.10\nNET модели: ${float(e['net']):+.4f}\nСети: {escape(e['network'])} / USDT {escape(e['quote_network'])}")
-        else:
-            lines.append('Итоговый NET неизвестен: стоимость/возможность переводов не подтверждена.')
+        lines=['📡 <b>SPOT · сигнал для проверки</b>',escape(e['symbol'])+' · '+escape(e['buy'])+' → '+escape(e['sell']),
+               f"Спред первых уровней {float(e['spread_pct']):.3f}% (ещё не прибыль)"]
+        p=e.get('transfer')
+        lines.append('🔁 <b>Купить → перевести → продать ПОЗЖЕ</b>')
+        if p:
+            lines.append(f"Покупка {float(p['buy_qty']):.8g} BASE; после сети {float(p['received_qty']):.8g}; продажа {float(p['sell_qty']):.8g}; пыль {float(p['dust_qty']):.8g}")
+            lines.append(f"Если будущая цена останется прежней: NET после возврата USDT и резерва ${float(p['net_after_reserve']):+.4f}. Это сценарий, не зафиксированная прибыль.")
+            lines.append('Падение цены продажи: '+', '.join(f"{x['drop_pct']}% → ${float(x['net']):+.2f}" for x in p['scenarios']))
+            lines.append(f"Цена безубыточности продажи ≈{float(p['break_even_sell']):.8g}; запас до неё {float(p['price_drop_to_break_even_pct']):.2f}%.")
+            lines.append('15 минут на перевод монеты и 15 минут на возврат USDT — непроверенные допущения модели.')
+            if p.get('funding_route'):
+                lines.append(f"Сначала USDT {escape(p['funding_source'])} → {escape(e['buy'])}; дополнительная комиссия ${float(p['funding_route']['fee']):.4f} и модельные 15 минут. Покупка будет заново оценена после зачисления.")
+            lines.append('Сети: '+escape(p['base_route']['network'])+' / возврат USDT '+escape(p['quote_route']['network']))
+        else:lines.append('⛔ Невозможно проверить последовательный перевод по этим данным.')
+        if not e.get('trade_configured',False):
+            lines.append('Для этой пары бирж нет настроенных spot API. Доступен только сигнал, не PAPER-цикл с настроенными площадками.')
+        elif e.get('accounts'):
+            a=e['accounts'];lines.append('Spot API: '+('остатки/комиссии прочитаны' if not a['reasons'] else 'есть ошибки чтения')+'. Адрес депозита, права вывода, тарифная валюта и доступные для вывода средства не подтверждены.')
         if e['reasons']:
             lines.append('⛔ ВХОД НЕ ПОДТВЕРЖДЁН:\n'+'\n'.join('• '+escape(r) for r in e['reasons']))
         else:
-            lines.append('🟡 Экономика модели прошла фильтры. Условие: USDT уже на покупке и такой же BASE уже на продаже. Балансы и ваши комиссии не проверены.')
-        lines.append(f"Занятый капитал двух сторон ≈${float(e['capital_required']):.2f} из общих $250. Это не размер каждой ноги.")
+            lines.append('🟡 Экономика модели прошла фильтры для PAPER. USDT нужен на бирже покупки. Балансы, ваши комиссии и адреса не подтверждены для LIVE.')
+        lines.append(f"Размер покупки ${float(p['spent']):.2f} из общих $250." if p else 'Размер покупки не подтверждён.')
+        if e.get('id'):
+            lines.append('Код карточки: '+e['id'])
         for label,v in (('Купить',e['buy']),('Продать',e['sell'])):
             url,exact=market_link(v,e['symbol'].split('/')[0],self.clients[v].urls.get('www'))
             if url:
                 lines.append('<a href="'+escape(url,quote=True)+'">'+label+(' · пара' if exact else ' · сайт биржи')+'</a>')
-        lines.append('Котировки UTC '+time.strftime('%H:%M:%S',time.gmtime(e['ts']))+'. До клика могут измениться. Покупка → перевод → продажа НЕ фиксирует этот спред: цена за время перевода неизвестна. Неизвестная комиссия депозита в модели не учтена. Ордеров и переводов бот не отправляет.')
+        lines.append('Котировки UTC '+time.strftime('%H:%M:%S',time.gmtime(e['ts']))+'. До клика могут измениться. В PAPER будущая продажа использует новый стакан; реальных ордеров/переводов бот не отправляет.')
         return '\n'.join(lines)
 
     async def queue_channel(self,post):
         await self.store.enqueue('channel:'+str(post['id']),'channel',post)
+
+    async def assess_channel(self,post):
+        from .dex_signal_focus import parse_signal
+        from .inventory_public_source import Source, same_contract
+        try:
+            if not 0<=self.clock()-post['timestamp']<=90:return 'Сигнал канала старше 90 секунд; CEX spot не проверяется.'
+            s=parse_signal(post['text'])
+        except ValueError:
+            return 'Из поста не удалось выделить точный новый токен; CEX spot не проверяется.'
+        matches=[c for c in self.candidates() if c[1]==s['base']+'/USDT']
+        for _,symbol,a,b in matches[:3]:
+            try:
+                e=await self.evaluate(symbol,a,b)
+                if not e or e['transfer'] is None or e['reasons']:continue
+                for venue in (a,b):
+                    rows=Source.networks_for(self.currency_cache[venue][1].get(s['base'],{}))
+                    native=rows.get(e['transfer']['base_route']['network'],{})
+                    if not native.get('contract') or not same_contract(native['contract'],s['asset'],e['transfer']['base_route']['network']):
+                        raise ValueError('Токен канала не совпадает с CEX-контрактом')
+                key='spot:'+symbol+':'+a+':'+b+':'+str(int(self.clock()//300))
+                e['id']=hashlib.sha256(key.encode()).hexdigest()[:16]
+                await self.store.enqueue(key,'spot',e)
+                return 'Независимый CEX spot маршрут с тем же точным контрактом найден. Отдельная карточка проверяется и отправляется. Цена канала не использована как котировка.'
+            except (ValueError,KeyError,IndexError):continue
+        return 'Независимый CEX spot маршрут с точным контрактом, свежими стаканами и полной экономикой сейчас не найден. Цифры канала не подменяют сделку.'
 
     async def flush(self):
         for item in await self.store.pending():
@@ -296,6 +397,7 @@ class Scanner:
                     if self.channel_review is None:
                         continue
                     result=await self.channel_review(item['payload'])
+                    result+='\n\n🔎 CEX spot: '+await self.assess_channel(item['payload'])
                 else:
                     result=self.format(item['payload'])
                 await self.store.result(item['key'],result)
@@ -308,7 +410,11 @@ class Scanner:
 
     async def cycle(self):
         async with self.lock:
+            await self.paper.monitor(self)
+            await self.paper.flush(self.notify)
             if not await self.store.enabled():
+                return []
+            if not self.entry_enabled:
                 return []
             if self.loader is None and self.names:
                 self.loader=asyncio.create_task(self.load_loop())
@@ -334,7 +440,12 @@ class Scanner:
                 # Persist misses too, so one unsupported route cannot starve
                 # the same lower-ranked candidates on every cycle.
                 if e:
+                    e['id']=hashlib.sha256(key.encode()).hexdigest()[:16]
                     await self.store.enqueue(key,'spot',e)
+                    control=await self.store.control()
+                    if (control['mode']=='auto' and e.get('trade_configured') and e.get('transfer')
+                            and not e['reasons'] and not self.paper.positions):
+                        await self.paper.open(dict(signal=e,transfer=e['transfer']))
                 else:
                     await self.store.enqueue(key,'miss',{})
                     await self.store.delivered(key)
@@ -346,14 +457,14 @@ class Scanner:
     def status(self):
         ok=[v for v in self.clients if self.health.get(v)=='OK' and v in self.tickers and 0<=self.clock()-self.tickers[v][0]<=90]
         failed=[v+': '+s for v,s in self.health.items() if v not in ok and not v.startswith('route:')]
-        return ('📡 <b>Сигналы · только чтение</b>\n'
-                f'Общий депозит $250 · расчёт покупки до ${self.budget:g} · минимум 5%\n'
+        return ('📡 <b>Сигналы · PAPER перевод</b>\n'
+                'Отдельный виртуальный депозит $250 · настройки размера и спреда ниже\n'
                 f'Обнаружено адаптеров {len(self.names)} · загружено {len(self.clients)} · свежие тикеры {len(ok)}\n'
                 'Котировки: '+escape(', '.join(ok) or 'ожидаем')+'\n'
                 'Ожидают/недоступны: '+escape('; '.join(failed)[:1200] or 'нет')+'\n'
                 f'Ещё не проверено: {len(set(self.names)-set(self.health))}\n'
                 'Покрытие: активный USDT-спот CEX, публичные API CCXT с тикерами и стаканами. При отсутствии массового API пары перебираются постепенно. DEX и фьючерсы не смешиваются со спотом. Загрузка с ограничением запросов; охват не означает доступность биржи вашему аккаунту.\n'
-                'Сигналы не открывают сделки. PAPER-счёт и его список бирж сохраняются отдельно.')
+                'Сигналы по всем доступным площадкам; PAPER-циклы только на площадках с настроенными spot API. Реальных ордеров и выводов нет.')
 
     async def close(self):
         tasks=([self.loader] if self.loader else [])+list(self.workers.values())
