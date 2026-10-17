@@ -22,10 +22,9 @@ def keyboard(screen, enabled, paused=False):
     if screen == 'home':
         return main_menu(paused)
     if screen == 'strategies':
-        rows = [[button(('🟢 ' if enabled.get(k) else '⚪ ')+LABELS[k], 'strategy:'+k,
-                         'success' if enabled.get(k) else None)] for k in ('spot_inventory',)]
-        rows += [[button('Условия и пропуски','dex_paper'),button('Другие режимы','paper_modes_more')],
-                 [button('🧪 Все стратегии · Paper/replay','lab:home')]]
+        rows = [[button('📉 Сжатие · две позиции', 'pair:show', 'primary')],
+                [button('🔁 Покупка → перевод → продажа', 'sig:show', 'primary')],
+                [button('Другие тесты', 'paper_modes_more'),button('Проверки','paper_checks')]]
     elif screen == 'paper_modes_more':
         rows = [[button(('🟢 ' if enabled.get(k) else '⚪ ')+LABELS[k], 'strategy:'+k,
                         'success' if enabled.get(k) else None)] for k in ('spot_futures','spot_spot','funding_arb')]
@@ -162,6 +161,15 @@ async def render(screen,path,paper,scanner,risk,runtime,bundle):
                 + ('\n⛔ '+escape(risk.state.reason) if risk.state.halted else '')
                 + '\n\nПауза останавливает новые входы, открытые позиции сопровождаются. Виртуальный капитал не считается прибылью. Реальная торговля выключена.')
     if screen in ('strategies','paper_modes_more'):
+        if screen=='strategies':
+            return ('🧭 <b>Стратегии · PAPER</b>\n\n'
+                    '📉 <b>Сжатие</b>\nПокупка DEX + равный SHORT фьючерса. '
+                    'Выход по общему NET обеих сторон, риску или времени.\n\n'
+                    '🔁 <b>Перевод</b>\nПокупка → перевод → продажа после зачисления. '
+                    'Начальная цена продажи не фиксируется.\n\n'
+                    'Вручную или авто · новые входы можно выключить. '
+                    'Открытые сделки продолжают сопровождаться.\n'
+                    'Переводный контур сейчас моделирует CEX ↔ CEX; DEX-перевод ещё не подключён.')
         keys=('spot_futures','spot_spot','funding_arb') if screen=='paper_modes_more' else ('spot_inventory',)
         out=['🧭 <b>Режимы · виртуальные деньги</b>']
         for key in keys:

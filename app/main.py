@@ -244,7 +244,14 @@ def menu():
 
 
 def operator_paper_reason(strategy, row):
-    if paired_paper and getattr(secondary,'inventory_paper',None):
+    if paired_paper and getattr(secondary,'inventory_paper',None) and strategy == 'dex_paired':
+        if not strategy_runtime.enabled.get('product_dex_paired',False):
+            return 'PAIRED_PRODUCT_OPT_IN_REQUIRED'
+        if row.get('cex_venue') != 'bybit':
+            return 'PAIRED_PRODUCT_VENUE_DISABLED'
+        if row.get('fee_source') != 'ACCOUNT_READ_ONLY':
+            return 'PAIRED_PRODUCT_ACCOUNT_FEE_REQUIRED'
+    if paired_paper and getattr(secondary,'inventory_paper',None) and strategy != 'dex_paired':
         return 'RESEARCH_ONLY_USE_STRATEGY_LAB'
     risk.roll_day()
     symbol = row.get('symbol') or row.get('base')
@@ -1286,6 +1293,9 @@ async def manual_entry(q: CallbackQuery):
                 if not route:
                     raise ValueError('DEX_VIRTUAL_ROUTE_CHANGED')
                 await dex.cycle(route, entry_enabled=True)
+                sync_ui=getattr(secondary.runtime.services.get('dex_paired'),'sync_ui',None)
+                if sync_ui is not None:
+                    await sync_ui()
                 result = 'DEX PAPER: ' + dex.state.get('last_decision', 'Проверь дневник')
             elif item['environment'] == 'paper' and paired_paper and item['strategy'] == 'futures_futures':
                 position, reason, fresh = await paper_futures_entry(row)
@@ -1347,7 +1357,7 @@ async def strategy_toggle(q: CallbackQuery):
     name = q.data.split(":", 1)[1]
     if name not in strategy_runtime.enabled:
         return await q.answer("Неизвестная стратегия")
-    if paired_paper and getattr(secondary,'inventory_paper',None) and name != 'spot_inventory':
+    if paired_paper and getattr(secondary,'inventory_paper',None) and name not in ('spot_inventory','dex_paired'):
         return await q.answer('Исследовательский режим: новые входы — в Paper/replay. Старые позиции сопровождаются.',show_alert=True)
     if paired_paper and name in ('dex_channel', 'dex_bybit', 'cex_dex'):
         return await q.answer('Старый односторонний режим: новые входы отключены. История и сопровождение сохранены.', show_alert=True)
@@ -1442,6 +1452,73 @@ async def account_balances_action(q: CallbackQuery):
     await safe_edit(q.message,render(rows),InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='↻ Обновить',callback_data='balances:show',style='primary'),
          InlineKeyboardButton(text='‹ Назад',callback_data='home')]]))
+
+
+@dp.callback_query(F.data.startswith('pairpos:'))
+async def paired_position_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    engine=getattr(secondary,'dex_paired',None)
+    service=getattr(getattr(secondary,'runtime',None),'services',{}).get('dex_paired')
+    sync=getattr(service,'sync_ui',None)
+    if engine is None or sync is None:
+        return await q.answer('PAPER-контур недоступен',show_alert=True)
+    try:
+        _,ident,action=q.data.split(':')
+        if action not in ('close','refresh') or not ident.isdecimal():
+            raise ValueError('Недопустимое действие')
+        if str(ident) not in engine.positions:
+            await sync()
+            return await q.answer('Сделка завершена · результат в дневнике',show_alert=True)
+        if action=='close':
+            await engine.request_exit(ident)
+        await q.answer('Выход запрошен' if action=='close' else 'Обновляю')
+        await engine.cycle(entry_enabled=False)
+        await sync()
+    except ValueError as exc:
+        await q.answer(str(exc)[:190],show_alert=True)
+
+
+@dp.callback_query(F.data.startswith('pair:'))
+async def paired_control_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    engine=getattr(secondary,'dex_paired',None)
+    try:
+        if q.data != 'pair:show':
+            if engine is None:
+                raise ValueError('Парный PAPER-контур не загружен')
+            if trading_controls.environment != 'paper':
+                raise ValueError('Сначала выбери среду PAPER в настройках')
+            if q.data == 'pair:toggle':
+                enabled=not strategy_runtime.enabled.get('product_dex_paired',False)
+                strategy_runtime.enabled['product_dex_paired']=enabled
+                strategy_runtime.enabled['dex_paired']=enabled
+                if enabled:
+                    # Opt-in always starts with confirmation, regardless of
+                    # the historical global PAPER profile's default.
+                    trading_controls.update(mode='manual')
+                strategy_toggles.save(strategy_runtime.enabled)
+                await diary.record_decisions([dict(ts=time.time(),strategy='dex_paired',symbol='*',
+                    buy='',sell='',action='CONFIG_CHANGE',reason='PAPER_ENTRY_TOGGLE',
+                    enabled=strategy_runtime.enabled['dex_paired'])])
+            elif q.data in ('pair:mode:manual','pair:mode:auto'):
+                trading_controls.update(mode=q.data.rsplit(':',1)[1])
+                apply_operator_paper_limits()
+            else:
+                raise ValueError('Неизвестное действие')
+            while trading_controls.events:
+                event=trading_controls.events[0]
+                await diary.record_decisions([dict(ts=event['ts'],strategy='operator_control',symbol='*',
+                    buy='',sell='',action='CONFIG_CHANGE',reason='OPERATOR_UPDATE',
+                    before=event['before'],after=event['after'])])
+                trading_controls.events.pop(0)
+    except ValueError as exc:
+        return await q.answer(str(exc)[:190],show_alert=True)
+    from .paired_console import render
+    text,keyboard=render(engine,strategy_runtime.enabled,trading_controls,scanner.paused)
+    await q.answer()
+    await safe_edit(q.message,text,keyboard)
 
 
 @dp.callback_query(F.data.startswith('sig:'))
@@ -2475,6 +2552,60 @@ async def main():
                                                     'PUBLIC_CAPTURE_ROUTES_REQUIRED',time.time())
         bot = Bot(token=config.token)
         notification_bot = bot
+        paired_engine=getattr(secondary,'dex_paired',None)
+        if paired_engine is not None:
+            from .paired_position_cards import Cards
+            from aiogram.exceptions import TelegramBadRequest
+            cards=Cards(paired_engine)
+            async def deliver_pair(text,markup,message_id):
+                if message_id:
+                    try:
+                        await bot.edit_message_text(text,config.admin_id,message_id,parse_mode='HTML',reply_markup=markup)
+                        return message_id
+                    except TelegramBadRequest as exc:
+                        message=str(exc).lower()
+                        if 'message is not modified' in message:return message_id
+                        if 'message to edit not found' not in message:raise
+                sent=await bot.send_message(config.admin_id,text,parse_mode='HTML',reply_markup=markup)
+                return sent.message_id
+            async def remove_pair(message_id):
+                try:
+                    await bot.delete_message(config.admin_id,message_id)
+                except TelegramBadRequest as exc:
+                    if 'message to delete not found' not in str(exc).lower():raise
+            async def sync_pair():
+                await cards.sync(deliver_pair,remove_pair)
+            secondary.runtime.services['dex_paired'].sync_ui=sync_pair
+            async def pair_candidate(candidate):
+                if (trading_controls.environment!='paper' or trading_controls.profile('paper')['mode']!='manual'
+                        or not strategy_runtime.enabled.get('product_dex_paired',False) or scanner.paused):
+                    return
+                p=candidate['position'];route=candidate['route']
+                # Assess the same risk policy as confirmation, but never
+                # call an execution method inside this temporary context.
+                with trading_controls.manual_intent(dict(environment='paper',strategy='dex_paired',
+                        row=dict(symbol=p['symbol']),revision=trading_controls.state['revision'])):
+                    if operator_paper_reason('dex_paired',p) is not None:return
+                import hashlib,json,aiosqlite
+                from .dex_virtual_paper_source import route_key
+                key=hashlib.sha256(json.dumps(route_key(route)).encode()).hexdigest()[:16]
+                async with aiosqlite.connect(config.db_path) as db:
+                    await db.execute('CREATE TABLE IF NOT EXISTS paired_candidate_alerts(route TEXT PRIMARY KEY,sent REAL)')
+                    row=await (await db.execute('SELECT sent FROM paired_candidate_alerts WHERE route=?',(key,))).fetchone()
+                    if row and 0<=time.time()-row[0]<300:return
+                    text=(f'📉 <b>Сжатие · PAPER · {escape(p["symbol"])}</b>\n\n'
+                          f'DEX BUY ↔ {escape(p["cex_venue"].upper())} SHORT\n'
+                          f'Объём хеджа {p["base_qty"]:.8g}\n'
+                          f'DEX ${p["entry_cash"]:.2f} · фьючерс ${p["base_qty"]*p["entry_price"]:.2f}\n'
+                          f'Сценарный NET ${p["paired_policy"]["partial_net"]:.4f}\n\n'
+                          'Котировки модели, прибыль не гарантирована. Перед подтверждением — новая проверка.')
+                    await bot.send_message(config.admin_id,text,parse_mode='HTML',reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text='Проверить сейчас',callback_data='dcard:'+key,style='primary')]]))
+                    await db.execute('INSERT INTO paired_candidate_alerts VALUES(?,?) ON CONFLICT(route) DO UPDATE SET sent=excluded.sent',(key,time.time()))
+                    await db.commit()
+            secondary.runtime.services['dex_paired'].notify_candidate=pair_candidate
+            paired_engine.on_opened=None
+            paired_engine.on_closed=None
         strategy_lab.on_open = lambda p: notify_strategy_open(p['plan']['strategy'],p['plan'])
         if paired_paper:
             from .inventory_experiment import build as build_inventory, migrate as migrate_inventory

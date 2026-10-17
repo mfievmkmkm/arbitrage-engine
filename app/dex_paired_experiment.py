@@ -64,6 +64,7 @@ class PairedSource(Source):
         p.update(paired_policy=policy, cex_identity=evidence,
                  strategy='dex_paired', hedge_residual_qty=p['virtual_asset_qty']-p['base_qty'],
                  paired_route=dict(route),native_size_attempts=attempts)
+        self.last_candidate=dict(route=dict(route),position=p)
         return result
 
 
@@ -73,6 +74,8 @@ class PairedCycle(Cycle):
         self.interval = 5
         self.legacy = legacy
         self.unsupported = {}
+        self.sync_ui = None
+        self.notify_candidate = None
 
     def sync(self):
         source = self.paper.source
@@ -102,9 +105,16 @@ class PairedCycle(Cycle):
         if state.get('day') == int(self.paper.clock()//86400) and state.get('day_net',0) <= -5:
             self.entry_enabled = False
         try:
-            return await super().cycle()
+            self.paper.source.last_candidate=None
+            rows=await super().cycle()
+            candidate=getattr(self.paper.source,'last_candidate',None)
+            if candidate and not self.paper.positions and self.entry_enabled and self.notify_candidate:
+                await self.notify_candidate(candidate)
+            return rows
         finally:
             self.entry_enabled = original
+            if self.sync_ui is not None:
+                await self.sync_ui()
 
 
 async def build(bundle, runtime, db_path, notify, allowed, notify_open=None):
