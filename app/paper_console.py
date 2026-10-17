@@ -6,13 +6,13 @@ from aiogram.types import InlineKeyboardMarkup
 from .tg_ui import button
 from .paired_paper_view import reason
 
-LABELS = {'futures_futures':'Фьючерсы ↔ Фьючерсы', 'dex_paired':'DEX ↔ Фьючерсы',
+LABELS = {'spot_inventory':'Spot/Spot · размещённые средства', 'futures_futures':'Фьючерсы ↔ Фьючерсы', 'dex_paired':'DEX ↔ Фьючерсы',
           'spot_futures':'Спот ↔ Фьючерсы', 'spot_spot':'Спот ↔ Спот', 'funding_arb':'Funding'}
 
 
 def main_menu(paused=False):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [button('📈 Сделки','paper','primary'),button('📊 Результат','strategy_stats','primary')],
+        [button('📦 Сделки','inv:show','primary'),button('📊 Результат','strategy_stats','primary')],
         [button('🧭 Режимы','strategies'),button('📒 Дневник','diary')],
         [button('⚙️ Настройки','paper_settings'),button('▶ Продолжить' if paused else '⏸ Пауза','resume' if paused else 'pause','success' if paused else None)],
         [button('↻ Обновить','home')]])
@@ -23,7 +23,7 @@ def keyboard(screen, enabled, paused=False):
         return main_menu(paused)
     if screen == 'strategies':
         rows = [[button(('🟢 ' if enabled.get(k) else '⚪ ')+LABELS[k], 'strategy:'+k,
-                         'success' if enabled.get(k) else None)] for k in ('futures_futures','dex_paired')]
+                         'success' if enabled.get(k) else None)] for k in ('spot_inventory',)]
         rows += [[button('Условия и пропуски','dex_paper'),button('Другие режимы','paper_modes_more')],
                  [button('🧪 Все стратегии · Paper/replay','lab:home')]]
     elif screen == 'paper_modes_more':
@@ -138,6 +138,16 @@ def _bounded(parts):
 
 async def render(screen,path,paper,scanner,risk,runtime,bundle):
     dex=getattr(bundle,'dex_paired',None);enabled=runtime.enabled
+    inventory=getattr(bundle,'inventory_paper',None)
+    if inventory and screen in ('home','strategy_stats','capital','status','risk','paper_settings'):
+        from .inventory_experiment import render as inventory_view
+        text=inventory_view(inventory,getattr(bundle,'inventory_source',None))
+        mode='Авто' if enabled.get('spot_inventory') else 'Новые входы выключены'
+        return text+'\n\nРежим Spot/Spot: '+mode+(' · общая пауза' if scanner.paused else '')
+    if inventory and screen=='paper':
+        from .inventory_experiment import render as inventory_view
+        return _bounded([inventory_view(inventory,getattr(bundle,'inventory_source',None)),positions(paper,bundle)])
+
     if screen=='paper':
         return positions(paper,bundle)
     if screen in ('capital','risk','status','paper_settings'):
@@ -152,10 +162,12 @@ async def render(screen,path,paper,scanner,risk,runtime,bundle):
                 + ('\n⛔ '+escape(risk.state.reason) if risk.state.halted else '')
                 + '\n\nПауза останавливает новые входы, открытые позиции сопровождаются. Виртуальный капитал не считается прибылью. Реальная торговля выключена.')
     if screen in ('strategies','paper_modes_more'):
-        keys=('spot_futures','spot_spot','funding_arb') if screen=='paper_modes_more' else ('futures_futures','dex_paired')
+        keys=('spot_futures','spot_spot','funding_arb') if screen=='paper_modes_more' else ('spot_inventory',)
         out=['🧭 <b>Режимы · виртуальные деньги</b>']
         for key in keys:
             out.append(f'<b>{LABELS[key]}</b>\n{_state(enabled,key)}')
+        if inventory:
+            out.append('Основной тест — Spot/Spot. Остальные механики доступны для исследования в Paper/replay. Прежние позиции и история сохранены.')
         out.append('Нажми кнопку режима для переключения. Выключение запрещает новые входы и сохраняет сопровождение открытых позиций.')
         if screen=='paper_modes_more':out.append('Эти три режима используют общий счёт $250 и общий резерв. Спот ↔ Спот требует виртуального инвентаря на обеих биржах; без него входов нет.')
         return _bounded(out)

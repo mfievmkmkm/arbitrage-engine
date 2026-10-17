@@ -13,6 +13,7 @@ class CycleService:
         self.entry_enabled = True
         self.allow_open = lambda x: True
         self.on_closed = None
+        self.on_open = None
 
     async def restore(self):
         if not self.db_path or not self.paper:
@@ -54,6 +55,9 @@ class CycleService:
                         continue
                     await storage.save(self.db_path, p)
                     await storage.mark(self.db_path, p, time.time())
+            if self.on_open:
+                for p in opened:
+                    await self.on_open(p)
             if self.on_closed:
                 for p in closed:
                     await self.on_closed(p)

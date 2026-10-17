@@ -10,6 +10,9 @@ from .export_service import write_csv
 from .secret_redaction import redact
 
 TABLES = {
+    "Inventory Paper state": "inventory_paper_state",
+    "Inventory Paper trades": "inventory_paper_trades",
+    "Inventory Paper events": "inventory_paper_events",
     "Strategy lab state": "strategy_lab_state",
     "Strategy lab events": "strategy_lab_events",
     "Strategy lab positions": "strategy_lab_positions",

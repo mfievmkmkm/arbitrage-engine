@@ -2,6 +2,7 @@ class StrategyRuntime:
     def __init__(self):
         self.latest = {}
         self.enabled = {
+            "spot_inventory": False,
             "futures_futures": True,
             "spot_futures": True,
             "spot_spot": True,

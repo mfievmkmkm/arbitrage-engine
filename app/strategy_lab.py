@@ -51,6 +51,7 @@ class Lab:
         self.lock = asyncio.Lock()
         self.state, self.version = None, 0
         self.tickets = {}
+        self.on_open = None
 
     async def init(self):
         initial = dict(capital=str(self.initial), realized='0', positions={}, latest={},
@@ -642,6 +643,12 @@ class Lab:
                         raise Invalid('EVENT_UNSUPPORTED')
                     saved.append(pos)
                 committed = await self._commit(state, event_id, stamp, kind, dict(out, input=event), saved)
+                if committed and out.get('reason') == 'PAPER_OPEN' and self.on_open:
+                    try:
+                        await self.on_open(copy.deepcopy(pos))
+                    except Exception:
+                        import logging
+                        logging.getLogger('arbitrage').exception('Strategy lab open notification failed')
                 return plain(out) if committed else dict(reason='DUPLICATE_EVENT')
 
     async def export(self, limit=5000):

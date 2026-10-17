@@ -191,6 +191,7 @@ bankroll = Ledger(config.paper_capital)
 from .trading_controls import Controls
 trading_controls = Controls(config.runtime_state_path + '.trading_controls.json',
                             paper_notional=config.notional, live_notional=min(5, config.notional))
+from .strategy_explanation import describe as describe_strategy
 from .strategy_lab import Lab as StrategyLab
 strategy_lab = StrategyLab(config.db_path)
 strategy_lab_runtime = None
@@ -242,6 +243,8 @@ def menu():
 
 
 def operator_paper_reason(strategy, row):
+    if paired_paper and getattr(secondary,'inventory_paper',None):
+        return 'RESEARCH_ONLY_USE_STRATEGY_LAB'
     risk.roll_day()
     symbol = row.get('symbol') or row.get('base')
     reason = trading_controls.entry_reason('paper', strategy, symbol)
@@ -323,6 +326,9 @@ def fmt_paper():
 
 
 async def text_for(s):
+    if s == 'inventory_paper' and secondary:
+        from .inventory_experiment import render
+        return render(getattr(secondary,'inventory_paper',None),getattr(secondary,'inventory_source',None))
     if paired_paper and s in ('home','paper','strategy_stats','diary','capital','status','risk','export','strategies','paper_settings','paper_checks','paper_archive','paper_modes_more') and secondary:
         from .paper_console import render
         return await render(s,config.db_path,paper,scanner,risk,strategy_runtime,secondary)
@@ -1262,7 +1268,13 @@ async def manual_entry(q: CallbackQuery):
     row = item['row']
     try:
         with trading_controls.manual_intent(item):
-            if item['environment'] == 'paper' and item['strategy'] == 'dex_paired':
+            if item['environment']=='paper' and item['strategy']=='spot_inventory':
+                service=secondary.runtime.services['spot_inventory']
+                if not strategy_runtime.enabled.get('spot_inventory'):
+                    raise ValueError('STRATEGY_DISABLED')
+                position=await service.enter_route(row['asset'],row['buy'],row['sell'])
+                result='PAPER: '+position['status'] if position else 'PAPER: вход отклонён'
+            elif item['environment'] == 'paper' and item['strategy'] == 'dex_paired':
                 from .dex_virtual_paper_source import route_key
                 dex = getattr(secondary, 'dex_paired', None)
                 route = next((r for r in dex.source.routes if list(route_key(r)) == row['route_key']), None) if dex else None
@@ -1274,6 +1286,8 @@ async def manual_entry(q: CallbackQuery):
                 position, reason, fresh = await paper_futures_entry(row)
                 await diary.record_decisions([dict(fresh, strategy=item['strategy'],
                     paired_paper=True, manual=True, action='PAPER_OPEN' if position else 'SKIP', reason=reason)])
+                if position:
+                    await notify_strategy_open('futures_futures',position)
                 result = 'Виртуальная пара открыта' if position else 'Вход отклонён: '+reason
             elif item['environment'] == 'live' and config.live_enabled and config.live_entry_enabled and live_entry_coordinator:
                 async with live_monitor.lock:
@@ -1328,6 +1342,8 @@ async def strategy_toggle(q: CallbackQuery):
     name = q.data.split(":", 1)[1]
     if name not in strategy_runtime.enabled:
         return await q.answer("Неизвестная стратегия")
+    if paired_paper and getattr(secondary,'inventory_paper',None) and name != 'spot_inventory':
+        return await q.answer('Исследовательский режим: новые входы — в Paper/replay. Старые позиции сопровождаются.',show_alert=True)
     if paired_paper and name in ('dex_channel', 'dex_bybit', 'cex_dex'):
         return await q.answer('Старый односторонний режим: новые входы отключены. История и сопровождение сохранены.', show_alert=True)
     if not dual_paper and focus_enabled("DEX_REFERENCE_FOCUS") and name != "cex_dex":
@@ -1371,6 +1387,59 @@ async def venue_action(q: CallbackQuery):
     await q.answer()
 
 
+async def notify_strategy_open(strategy,position):
+    if notification_bot is None:
+        return
+    p=position if isinstance(position,dict) else vars(position)
+    symbol=p.get('symbol') or p.get('base') or p.get('route','')
+    try:
+        await notification_bot.send_message(config.admin_id,
+            '🧪 PAPER · позиция открыта\n'+escape(str(symbol))+'\n'+escape(describe_strategy(strategy,p)),parse_mode='HTML')
+    except Exception:
+        log.exception('Strategy open notification failed')
+
+
+@dp.callback_query(F.data.startswith('inv:'))
+async def inventory_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    engine=getattr(secondary,'inventory_paper',None)
+    if engine is None:
+        return await q.answer('Эксперимент ещё не готов',show_alert=True)
+    parts=q.data.split(':')
+    if parts==['inv','card']:
+        if trading_controls.environment!='paper' or trading_controls.profile('paper')['mode']!='manual':
+            return await q.answer('Выбери PAPER → Вручную в управлении.',show_alert=True)
+        if scanner.paused or not strategy_runtime.enabled.get('spot_inventory'):
+            return await q.answer('Новые входы на паузе или режим выключен.',show_alert=True)
+        source=secondary.inventory_source
+        snapshots=await source.capture()
+        await engine.mark({k:b for x in snapshots for k,b in x['wallet_books'].items()})
+        for snapshot in snapshots:
+            try:
+                plan=engine.plan(snapshot)
+            except ValueError:
+                continue
+            if not all(source.allowed_venue(v) for v in (plan['buy'],plan['sell'])):
+                continue
+            row=dict(asset=plan['asset'],symbol=plan['asset']+'/USDT',buy=plan['buy'],sell=plan['sell'])
+            token=trading_controls.issue('spot_inventory',row)
+            from .inventory_paper import explanation
+            await safe_edit(q.message,escape(explanation(plan)),InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text='Подтвердить PAPER вход',callback_data='enter:'+token)],
+                [InlineKeyboardButton(text='‹ Назад',callback_data='inv:show')]]))
+            return await q.answer()
+        return await q.answer('Подтверждённого маршрута с нужным NET сейчас нет.',show_alert=True)
+    if len(parts)==4 and parts[1]=='set':
+        try:
+            await engine.configure(**{parts[2]:parts[3]})
+        except ValueError:
+            return await q.answer('Недопустимые параметры',show_alert=True)
+    from .inventory_experiment import render,keyboard
+    await safe_edit(q.message,render(engine,secondary.inventory_source),keyboard())
+    await q.answer()
+
+
 async def notify_paper_close(symbol, net, reason):
     if notification_bot is None:
         return
@@ -1392,12 +1461,14 @@ async def notify_dex_open(position, label):
         await notification_bot.send_message(config.admin_id,
             f"🟢 PAPER · позиция открыта\n{label}\n{p['symbol']} · {'LONG' if p['cex_side']=='buy' else 'SHORT'}\n"
             f"Размер: ${p['base_qty']*p['entry_price']:.2f}\nЦена модели: {p['entry_price']:.8g}\n"
-            f"Потенциал NET при схождении: {p['entry_edge']:+.4f} USD\nЭто виртуальная сделка; потенциальный NET ещё не заработан.")
+            f"Потенциал NET при схождении: {p['entry_edge']:+.4f} USD\n"+describe_strategy('dex_paired',p))
     except Exception:
         log.exception("Paper open notification failed")
 
 
 def paper_entry_reason(op):
+    if paired_paper and getattr(secondary,'inventory_paper',None):
+        return 'CONVERGENCE_EDGE_UNPROVEN_RESEARCH_ONLY'
     reason = operator_paper_reason('futures_futures', op)
     if reason:
         return reason
@@ -1436,6 +1507,11 @@ async def scanning():
     global latest
     while True:
         try:
+            if paired_paper and not strategy_runtime.enabled.get('futures_futures') and not paper.positions:
+                latest=[]
+                strategy_runtime.update('futures_futures',[])
+                await asyncio.sleep(config.interval)
+                continue
             apply_operator_paper_limits()
             scanner.notional = trading_controls.profile()['notional_usd']
             scanner.watch_positions = {
@@ -1540,7 +1616,7 @@ async def scanning():
                             f"LONG {escape(p.buy.upper())} ↔ SHORT {escape(p.sell.upper())}\n"
                             f"Одинаковый объём: {p.base_qty:.8g}\n"
                             f"Размер ног: ${p.base_qty*p.entry_buy:.2f} / ${p.base_qty*p.entry_sell:.2f}\n"
-                                "Вход по стаканам. Прибыль ещё не заработана.")
+                                "Вход по стаканам. Прибыль ещё не заработана.\n"+escape(describe_strategy('futures_futures',vars(p))))
                         except Exception:
                             log.exception('Paired Paper notification failed')
             await diary.record_decisions(decisions)
@@ -2178,6 +2254,10 @@ async def main():
             )
 
         ss.on_closed = ss_closed
+        ss.on_open = lambda p: notify_strategy_open('spot_spot',p)
+        sf_cycle.on_open = lambda p: notify_strategy_open('spot_futures',p)
+        if fp:
+            fp.on_open = lambda p: notify_strategy_open('funding_arb',p)
         if fp:
             fp.external_reserved = (
                 lambda: paper.used_capital
@@ -2270,7 +2350,6 @@ async def main():
             for name,service in secondary.runtime.services.items():
                 if name in ('spot_futures','spot_spot','funding_arb','cex_dex','dex_channel','dex_bybit','dex_paired'):
                     service.idle_when_disabled = True
-        await secondary.runtime.start()
         import json
         lab_routes_path=Path(config.runtime_state_path+'.strategy_lab_routes.json')
         if lab_routes_path.exists():
@@ -2294,6 +2373,23 @@ async def main():
                                                     'PUBLIC_CAPTURE_ROUTES_REQUIRED',time.time())
         bot = Bot(token=config.token)
         notification_bot = bot
+        strategy_lab.on_open = lambda p: notify_strategy_open(p['plan']['strategy'],p['plan'])
+        if paired_paper:
+            from .inventory_experiment import build as build_inventory, migrate as migrate_inventory
+            migrate_inventory(config.runtime_state_path,strategy_runtime,strategy_toggles,trading_controls)
+            async def inventory_notification(event,position):
+                plan=position['plan']
+                title={'OPEN':'Модельные исполнения','CLOSE':'Цикл завершён по модели','ALERT':'Задержка восстановления запасов'}[event]
+                text=(f"📦 PAPER · {title}\n{escape(plan['asset'])} · {escape(plan['buy'])} → {escape(plan['sell'])}\n"
+                      f"BASE куплено {float(position['bought']):.8g} / продано {float(position.get('sold',position['matched'])):.8g}\n"
+                      f"Спред плана {float(plan['spread_pct']):.3f}%\n"+escape(position['thesis']))
+                if event=='CLOSE':
+                    text+=f"\nNET цикла модели: {float(position['net']):+.4f} USDT."
+                await bot.send_message(config.admin_id,text,parse_mode='HTML')
+            await build_inventory(secondary,config.db_path,trading_controls,strategy_runtime,
+                                  inventory_notification,lambda:scanner.paused,venue_controller.get,
+                                  network_clients=private_clients)
+        await secondary.runtime.start()
         await live_monitor.start()
         if paired_paper:
             paired_task = asyncio.create_task(paired_monitor())

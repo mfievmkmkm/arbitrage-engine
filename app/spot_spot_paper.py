@@ -67,6 +67,7 @@ class Engine:
         self.external_reserved = lambda: 0
         self.allow_open = lambda x: True
         self.on_closed = None
+        self.on_open = None
         self.state = None
         self.version = 0
         self.lock = asyncio.Lock()
@@ -149,6 +150,7 @@ class Engine:
 
     async def cycle(self, rows, entry_enabled=True):
         async with self.lock:
+            original_ids=set(self.positions)
             state = copy.deepcopy(self.state)
             marks = []
             saved = []
@@ -372,6 +374,10 @@ class Engine:
                 await d.commit()
             self.state = state
             self.version += 1
+            if self.on_open:
+                for key,p in self.positions.items():
+                    if key not in original_ids:
+                        await self.on_open(p)
             if self.on_closed:
                 for p in closed:
                     await self.on_closed(p)

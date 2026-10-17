@@ -49,6 +49,7 @@ class Engine:
         self.external_reserved = lambda: 0
         self.allow_open = lambda x: True
         self.on_closed = None
+        self.on_open = None
 
     @property
     def positions(self):
@@ -99,6 +100,7 @@ class Engine:
 
     async def cycle(self, candidates, entry_enabled=True):
         async with self.lock:
+            original_ids=set(self.positions)
             state = copy.deepcopy(self.state)
             saved = []
             marks = []
@@ -296,6 +298,10 @@ class Engine:
                 self.version += 1
             finally:
                 self.pending = 0
+            if self.on_open:
+                for key,p in self.positions.items():
+                    if key not in original_ids:
+                        await self.on_open(p)
             if self.on_closed:
                 for p in closed:
                     await self.on_closed(p)
