@@ -9,7 +9,6 @@ from decimal import Decimal, ROUND_DOWN
 from .strategy_math import D, ONE, ZERO, plain, common_quantity
 from .inventory_paper import fill, day
 from .inventory_public_source import step
-from .inventory_network_metadata import enrich
 from .transfer_signal_math import limits
 from .dex_virtual_paper_source import Source as QuoteSource
 from .dex_cex_identity import ALIASES
@@ -41,6 +40,7 @@ class Source:
         self.quote.clock=self.clock
 
     def catalog(self):
+        self.routes={}
         client=self.feed.clients.get('bybit');out=[]
         if not client:return []
         for original in self.paired.scanner.catalog.values():
@@ -79,7 +79,11 @@ class Source:
                 self.metadata_retry=self.clock()+30
                 raise ValueError(self.metadata_error) from None
             if not isinstance(rows,dict) or not rows:raise ValueError('Bybit: нет свежих данных сетей')
-            self.metadata=enrich(rows);self.metadata_at=self.clock()
+            wanted={'USDT'} | {r['base'] for r in self.paired.scanner.catalog.values()}
+            active=self.paper.state.get('position')
+            if active and active.get('kind')==KIND:wanted.add(active['plan']['route']['base'])
+            self.metadata={coin:row for coin,row in rows.items() if coin in wanted}
+            self.metadata_at=self.clock()
             return self.metadata
 
     async def networks(self,r):
@@ -99,7 +103,7 @@ class Source:
             if n.get('active') is False or n.get('deposit') is not True or n.get('withdraw') is not True:
                 raise ValueError('Bybit: ввод/вывод '+name+' недоступен')
             percentage=n.get('percentage')
-            if raw.get('withdrawPercentageFee') is not None:percentage=D(raw['withdrawPercentageFee'])!=0
+            if raw.get('withdrawPercentageFee') not in (None,''):percentage=D(raw['withdrawPercentageFee'])!=0
             fee=n.get('fee');mins=n.get('limits') or {}
             wd=(mins.get('withdraw') or {}).get('min',raw.get('withdrawMin'))
             dep=(mins.get('deposit') or {}).get('min',raw.get('depositMin'))
@@ -147,6 +151,9 @@ class Source:
 
     async def book(self,r):
         symbol=r['spot_symbol'];c=self.feed.accounts.client('bybit')
+        market=(self.feed.clients.get('bybit').markets.get(symbol,{}) if self.feed.clients.get('bybit') else {})
+        if market.get('spot') is not True or market.get('active') is not True or market.get('contract') or market.get('base')!=r['base'] or market.get('quote')!='USDT':
+            raise ValueError('Bybit: spot-рынок недоступен')
         if c is None or c.has.get('fetchTradingFee') is not True:raise ValueError('Bybit: нет account-read spot комиссии')
         old=self.fees.get(symbol)
         if not old or not 0<=self.clock()-old[0]<30:
@@ -167,6 +174,9 @@ class Source:
         return await self.quote.price(r,sell_asset,raw)
 
     async def gas(self,r,q,transfer=False,swap=False):
+        market=self.feed.clients['bybit'].markets.get(r['native_spot'],{})
+        if market.get('spot') is not True or market.get('active') is not True or market.get('contract'):
+            raise ValueError('Bybit: нет активного spot native/USDT для gas')
         b=await self.feed.book('bybit',r['native_spot'])
         price=D(b['asks'][0][0]);raw=D(q.get('gas_price_raw'))
         if raw<=0 or not 0<=self.clock()-float(q['ts'])<=15 or not ZERO<=D(self.clock())-b['ts']<=3:raise ValueError('DEX: нет свежего gas/native price')

@@ -300,3 +300,23 @@ def test_slow_tax_warmup_after_funding_waits_for_fresh_quotes(tmp_path):
         prices.price=original;await next_stage(feed,now)
         assert feed.paper.state['position']['status']=='BASE_TRANSFER_PENDING'
     asyncio.run(go())
+
+
+def test_removed_or_inactive_spot_route_cannot_reuse_old_signal(tmp_path):
+    async def go():
+        feed,s,c,prices,now=await setup(tmp_path)
+        assert s.route_for('X/USDT','dex56','bybit')
+        c.markets['X/USDT']['active']=False
+        with pytest.raises(ValueError,match='ROUTE_UNAVAILABLE'):await feed.review('X/USDT','dex56','bybit')
+        with pytest.raises(ValueError,match='spot-рынок'):await s.book(dict(R,spot_symbol='X/USDT'))
+    asyncio.run(go())
+
+
+def test_unrelated_incomplete_network_does_not_poison_exact_route(tmp_path):
+    async def go():
+        feed,s,c,prices,now=await setup(tmp_path)
+        c.currencies['OTHER']=dict(code='OTHER',networks={'ETH':dict(info={'withdrawPercentageFee':''})})
+        e=await s.review('X/USDT','dex56','bybit')
+        assert e['transfer']['network_evidence']['X']['contract']==ASSET
+        assert not e['reasons']
+    asyncio.run(go())
