@@ -76,8 +76,9 @@ class Paper:
                 raise ValueError('Нужны новые котировки')
             if self.state['position']:
                 raise ValueError('Сначала завершите текущую PAPER-позицию')
-            if D(self.state['realized'])<=D('-2.5') or D(self.state['daily'].get(day(self.clock()),'0'))<=D('-1.25'):
-                raise ValueError('Достигнут лимит убытка PAPER: день $1.25, весь тест $2.50')
+            risk=await self.store.control()
+            if D(self.state['realized'])<=-D(risk['total_loss']) or D(self.state['daily'].get(day(self.clock()),'0'))<=-D(risk['daily_loss']):
+                raise ValueError('Достигнут лимит убытка PAPER')
             if not self.state.get('home'):raise ValueError('Сначала выбери исходную биржу PAPER-капитала')
             state=copy.deepcopy(self.state)
             p=dict(id=str(self.version+1),signal=dict(symbol=e['symbol'],buy=e['buy'],sell=e['sell']),

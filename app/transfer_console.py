@@ -4,7 +4,7 @@ from .tg_ui import button
 
 FIELDS={'budget':('Покупка, USD',(10,25,50)), 'min_spread':('Спред от, %',(5,7.5,10)),
         'max_spread':('Спред до, %',(10,15,20)), 'min_net':('NET от, USD',(.25,.5,1)),
-        'stress_drop':('Стресс цены, %',(3,5,10)), 'dex_deposit_fee_pct':('Ввод Bybit, %',(0,.1,.5))}
+        'stress_drop':('Стресс цены, %',(3,5,10)), 'daily_loss':('Дневной стоп, USD',(.5,1,1.25)), 'total_loss':('Стоп теста, USD',(1,2,2.5)), 'dex_deposit_fee_pct':('Ввод Bybit, %',(0,.1,.5))}
 
 
 async def render(feed, data, paused):
@@ -16,6 +16,7 @@ async def render(feed, data, paused):
         text=f'⚙️ <b>{label}</b>\n\nСейчас: <b>{format(current,"g") if current is not None else "не указан"}</b>'
         if field=='dex_deposit_fee_pct':text+='\nДопущение PAPER на 24 часа. Укажи тариф своей площадки.'
         rows=[[button(('✓ ' if p.get(field)==v else '')+f'{v:g}',f'sig:set:{field}:{v}','primary' if p.get(field)==v else None) for v in values],
+              [button('Своё число','sig:custom:'+field,'primary')],
               [button('‹ Назад','sig:settings')]]
     elif data=='sig:settings':
         text='⚙️ <b>Перевод · параметры</b>'

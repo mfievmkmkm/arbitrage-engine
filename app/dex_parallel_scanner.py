@@ -132,6 +132,14 @@ class Scanner:
         self.checked += len(results)
         self.last_reasons = Counter(reason for _, reason in results)
         self.reasons.update(self.last_reasons)
+        if getattr(self.service.paper,'path',None) and self.last_batch_at-getattr(self,'last_audit_at',0)>=5:
+            from .scan_audit import save
+            await save(self.service.paper.path,'paired',dict(ts=self.last_batch_at,checked=self.checked,
+                routes=len(self.catalog),batch_seconds=self.last_batch_seconds,
+                reasons=dict(self.reasons),provider=self.provider_health,
+                latest=[dict(route=self.catalog[k],reason=reason) for k,(_,reason) in zip(selected,results)]))
+            self.last_audit_at=self.last_batch_at
+
         if time.monotonic()-getattr(self, "last_diagnostic_log", 0)>=60:
             import logging
             logging.getLogger("arbitrage").info(

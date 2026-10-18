@@ -122,3 +122,12 @@ def test_console_separates_successful_quotes_from_trade_admission():
     text,_=scanner(NS(clock=lambda:100),NS(scanner=scan,candidates={}))
     assert 'KyberSwap с запуска' in text and 'Комиссии токенов не подтверждены' in text
     assert 'Подходящих проверенных пар сейчас нет' not in text
+
+
+def test_known_filtered_liquidity_error_has_specific_reason_without_raw_body():
+    async def go():
+        p=Provider(NS(),Session(Response(400,{'code':40011,'message':'private untrusted body'})),clock=lambda:100)
+        result=await p.price(1,STABLE,ASSET,'100')
+        assert result['reason']=='KYBER_FILTERED_LIQUIDITY'
+        assert 'private' not in str(result) and not p.responses_ok
+    asyncio.run(go())

@@ -90,6 +90,14 @@ class Provider(MetadataProvider):
                 if response.status != 200:
                     status = response.status
                     reason = 'DEX_HTTP_'+str(status)
+                    if status==400:
+                        # Retain only recognized codes; never persist response text.
+                        try:
+                            error=await response.json()
+                            if isinstance(error,dict) and type(error.get('code')) is int and error['code']==40011:
+                                reason='KYBER_FILTERED_LIQUIDITY'
+                        except (ValueError,aiohttp.ClientError):pass
+
                     delay = 0
                     if status in (401,403):
                         self.access_failures += 1

@@ -59,7 +59,8 @@ class Service(Source):
                 raise ValueError('Режим изменился; нужна новая проверка')
             if not 0<=self.clock()-e['ts']<=3:raise ValueError('Нужна новая проверка цен')
             if self.paper.state.get('position'):raise ValueError('Сначала заверши текущий PAPER-цикл')
-            if D(self.paper.state['realized'])<=D('-2.5') or D(self.paper.state['daily'].get(day(self.clock()),0))<=D('-1.25'):
+            risk=await self.store.control()
+            if D(self.paper.state['realized'])<=-D(risk['total_loss']) or D(self.paper.state['daily'].get(day(self.clock()),0))<=-D(risk['daily_loss']):
                 raise ValueError('Достигнут лимит убытка PAPER')
             state=copy.deepcopy(self.paper.state);src=plan['source']
             budget=D(plan['budget']);reserve=D(plan['gas_reserve']);total=budget+reserve
@@ -173,6 +174,7 @@ class Service(Source):
             if not catalog:return []
             r=catalog[(self.index//2)%len(catalog)];direction=self.index%2;self.index+=1
             a,b=('bybit','dex'+str(r['chain_id'])) if direction==0 else ('dex'+str(r['chain_id']),'bybit')
+            self.last_economics=None
             try:
                 from .dex_request_budget import background
                 token=background.set(True)
@@ -194,8 +196,10 @@ class Service(Source):
                 self.checked+=1;self.last_reason=str(exc)
             if self.last_reason!='READY':
                 key=f'dex-miss:{r["spot_symbol"]}:{a}:{b}:{int(self.clock()//60)}'
-                await self.store.enqueue(key,'miss',dict(reason=self.last_reason,route=r,buy=a,sell=b))
+                await self.store.enqueue(key,'miss',dict(reason=self.last_reason,route=r,buy=a,sell=b,economics=self.last_economics))
                 await self.store.delivered(key)
+            from .scan_audit import save
+            await save(self.store.path,'transfer',dict(ts=self.clock(),checked=self.checked,routes=len(catalog),reason=self.last_reason,economics=self.last_economics))
             if self.checked%20==1:
                 logging.getLogger('arbitrage').info('DEX_TRANSFER_SCAN | checked=%s | routes=%s | reason=%s',self.checked,len(catalog),self.last_reason)
             return []

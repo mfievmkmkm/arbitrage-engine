@@ -44,3 +44,19 @@ def test_bad_payload_omitted_and_empty_table_has_header(tmp_path):
         assert "unsafe" not in z.read("dex_bybit_trades.csv").decode()
         assert z.read("dex_bybit_marks.csv").decode().strip() == "id,net"
     with pytest.raises(ValueError):build_sync(path,tmp_path,row_limit=100000)
+
+
+def test_current_scanner_evidence_is_exported_and_latest_snapshot_replaces(tmp_path):
+    from app.scan_audit import save
+    async def go():
+        path=tmp_path/'db'
+        await save(path,'paired',dict(checked=1,reason='old'))
+        await save(path,'paired',dict(checked=12,reason='KYBER_FILTERED_LIQUIDITY'))
+        await save(path,'transfer',dict(checked=3,spread_pct=-.5))
+        archive=await build(path,tmp_path/'out')
+        with zipfile.ZipFile(archive) as z:
+            rows=list(csv.DictReader(io.StringIO(z.read('dex_scanner_state.csv').decode())))
+            scopes={r['scope']:json.loads(r['payload']) for r in rows}
+            assert len(rows)==2 and scopes['paired']['checked']==12
+            assert scopes['transfer']['spread_pct']==-.5
+    asyncio.run(go())

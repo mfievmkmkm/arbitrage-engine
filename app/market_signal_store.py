@@ -57,11 +57,11 @@ class Store:
     async def control(self):
         async with aiosqlite.connect(self.path) as db:
             row=await (await db.execute('SELECT payload FROM signal_transfer_control WHERE id=1')).fetchone()
-        return json.loads(row[0])
+        return {'daily_loss':1.25,'total_loss':2.5,**json.loads(row[0])}
 
     async def set_control(self,key,value):
         from .strategy_math import D
-        if key not in ('mode','budget','min_spread','max_spread','min_net','stress_drop','dex_deposit_fee_pct'):
+        if key not in ('mode','budget','min_spread','max_spread','min_net','stress_drop','dex_deposit_fee_pct','daily_loss','total_loss'):
             raise ValueError('Неизвестная настройка')
         async with aiosqlite.connect(self.path) as db:
             await db.execute('BEGIN IMMEDIATE')
@@ -73,8 +73,8 @@ class Store:
                 v=D(value)
                 if not (('budget'==key and 5<=v<=50) or ('min_spread'==key and 5<=v<=20) or
                         ('max_spread'==key and 5<=v<=30) or ('min_net'==key and D('.25')<=v<=5) or
-                        ('stress_drop'==key and 1<=v<=10) or ('dex_deposit_fee_pct'==key and 0<=v<=1)):
-                    raise ValueError('Значение вне диапазона')
+                        ('stress_drop'==key and 1<=v<=10) or ('daily_loss'==key and D('.1')<=v<=D('1.25')) or ('total_loss'==key and D('.1')<=v<=D('2.5')) or ('dex_deposit_fee_pct'==key and 0<=v<=1)):
+                    raise ValueError({'daily_loss':'Дневной стоп: от 0,1 до 1,25 USD','total_loss':'Стоп теста: от 0,1 до 2,5 USD','budget':'Покупка: от 5 до 50 USD','min_spread':'Спред от: от 5 до 20%','max_spread':'Спред до: от 5 до 30%','min_net':'NET: от 0,25 до 5 USD','stress_drop':'Стресс: от 1 до 10%','dex_deposit_fee_pct':'Комиссия ввода: от 0 до 1%'}[key])
                 p[key]=float(v)
                 if key=='dex_deposit_fee_pct':p['dex_deposit_fee_set_at']=self.clock()
             if p['min_spread']>p['max_spread']:raise ValueError('Минимальный спред больше максимума')

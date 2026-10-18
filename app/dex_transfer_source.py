@@ -102,8 +102,11 @@ class Source:
             n=matches[0];raw=n.get('info') or {}
             if n.get('active') is False or n.get('deposit') is not True or n.get('withdraw') is not True:
                 raise ValueError('Bybit: ввод/вывод '+name+' недоступен')
+            def number(value):
+                try:return D(value)
+                except ValueError:raise ValueError('Bybit: неверное числовое поле сети '+name) from None
             percentage=n.get('percentage')
-            if raw.get('withdrawPercentageFee') not in (None,''):percentage=D(raw['withdrawPercentageFee'])!=0
+            if raw.get('withdrawPercentageFee') not in (None,''):percentage=number(raw['withdrawPercentageFee'])!=0
             fee=n.get('fee');mins=n.get('limits') or {}
             wd=(mins.get('withdraw') or {}).get('min',raw.get('withdrawMin'))
             dep=(mins.get('deposit') or {}).get('min',raw.get('depositMin'))
@@ -114,7 +117,7 @@ class Source:
                 precision=D(10)**-accuracy
             if percentage is not False or any(x is None for x in (fee,wd,dep,precision)):
                 raise ValueError('Bybit: неизвестны комиссия, точность или минимумы '+name)
-            if min(D(fee),D(wd),D(dep))<0 or D(precision)<=0:raise ValueError('Bybit: неверные параметры сети')
+            if min(number(fee),number(wd),number(dep))<0 or number(precision)<=0:raise ValueError('Bybit: неверные параметры сети')
             deposit=n.get('deposit_fee');dep_pct=n.get('deposit_fee_percentage')
             source='ACCOUNT_NETWORK_API'
             if deposit is None or dep_pct is None:
@@ -234,7 +237,7 @@ class Source:
         control=await self.store.control();networks=await self.networks(r)
         if 'bybit' not in self.feed.trade_venues:raise ValueError('Подключи Bybit spot API')
         budget=D(control['budget']);state=self.paper.state
-        if not reserved and (D(state['realized'])<=D('-2.5') or D(state['daily'].get(day(self.clock()),0))<=D('-1.25')):
+        if not reserved and (D(state['realized'])<=-D(control['total_loss']) or D(state['daily'].get(day(self.clock()),0))<=-D(control['daily_loss'])):
             raise ValueError('Достигнут лимит убытка PAPER')
         source=reserved['source'] if reserved else self.paper.funding_source(buy,budget)
         if source not in ('bybit','dex'+str(r['chain_id'])):raise ValueError('Выбери старт PAPER на Bybit; нет USDT для этой сети')
@@ -258,6 +261,7 @@ class Source:
         if not D(control['min_spread'])<=spread<=D(control['max_spread']):reasons.append('Спред вне заданных границ')
         if stress<D(control['min_net']):reasons.append('Стресс-NET после переводов и gas ниже минимума')
         if any(not 0<=self.clock()-float(x['ts'])<=3 for x in (entry,sale)):reasons.append('Нужны новые цены входа')
+        self.last_economics=dict(symbol=symbol,buy=buy,sell=sell,spread_pct=float(spread),net=float(net),stress_net=float(stress),ts=self.clock())
         reserve=max(D('.10'),gas*2)
         if not reserved and D(state['balances'].get(source,'0'))<budget+reserve:reasons.append('Не хватает виртуального USDT с резервом gas')
         p=plain(dict(kind=KIND,route=r,source=source,budget=budget,gas_reserve=reserve,

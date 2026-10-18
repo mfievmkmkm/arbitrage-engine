@@ -201,6 +201,80 @@ secondary = None
 from .wallet_watch import Store as WalletWatchStore
 wallet_watch_store = WalletWatchStore(config.runtime_state_path + '.wallet_watch.json')
 wallet_watch_pending = {}
+numeric_pending = {}
+
+
+@dp.callback_query.middleware()
+async def clear_numeric_prompt(handler, event, data):
+    # Any navigation invalidates the previous input, including Back and modes.
+    numeric_pending.pop(event.from_user.id, None)
+    return await handler(event, data)
+
+
+async def numeric_prompt(q, kind, key):
+    from .trading_controls import LIMITS
+    from .trading_controls_view import LABELS
+    from .transfer_console import FIELDS
+    transfer_limits={'budget':(5,50),'min_spread':(5,20),'max_spread':(5,30),
+                     'min_net':(.25,5),'stress_drop':(1,10),'dex_deposit_fee_pct':(0,1),'daily_loss':(.1,1.25),'total_loss':(.1,2.5)}
+    limits=transfer_limits if kind=='sig' else LIMITS
+    if key not in limits:raise ValueError('Неизвестный параметр')
+    low,high=limits[key];label=FIELDS[key][0] if kind=='sig' else LABELS[key]
+    numeric_pending[q.from_user.id]=dict(kind=kind,key=key,chat=q.message.chat.id,
+        message=q.message.message_id,expires=time.time()+120,
+        environment=trading_controls.environment,revision=trading_controls.state['revision'])
+    await q.answer()
+    await safe_edit(q.message,f'⚙️ <b>{label}</b>\n\nПришли число от {low:g} до {high:g}.',
+        InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='‹ Назад',callback_data=f'{kind}:field:{key}')]]))
+
+
+@dp.message(lambda m: bool(m.from_user and m.from_user.id in numeric_pending))
+async def numeric_setting_message(m: Message):
+    if not allowed(m.from_user.id):return
+    pending=numeric_pending.get(m.from_user.id)
+    if not pending or pending['chat']!=m.chat.id:return
+    kind,key=pending['kind'],pending['key']
+    if m.text and m.text.startswith('/'):
+        numeric_pending.pop(m.from_user.id,None)
+        from aiogram.dispatcher.event.bases import SkipHandler
+        raise SkipHandler
+    back=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='‹ Назад',callback_data=f'{kind}:field:{key}')]])
+    try:
+        if time.time()>pending['expires']:
+            numeric_pending.pop(m.from_user.id,None)
+            raise ValueError('Время ввода истекло. Открой параметр заново')
+        from .numeric_settings import parse
+        value=parse(m.text,integer=key=='max_positions')
+        if kind=='sig':
+            feed=getattr(secondary,'market_signals',None)
+            if feed is None:raise ValueError('Модуль недоступен')
+            await feed.store.set_control(key,value)
+            from .transfer_console import render
+            text,keyboard=await render(feed,'sig:field:'+key,scanner.paused)
+        else:
+            if (trading_controls.environment,trading_controls.state['revision'])!=(pending['environment'],pending['revision']):
+                numeric_pending.pop(m.from_user.id,None)
+                raise ValueError('Настройки изменились. Открой параметр заново')
+            from .trading_controls import LIMITS
+            low,high=LIMITS[key]
+            if not low<=value<=high:raise ValueError(f'Допустимо от {low:g} до {high:g}')
+            trading_controls.update(**{key:value})
+            apply_operator_paper_limits()
+            while trading_controls.events:
+                event=trading_controls.events[0]
+                await diary.record_decisions([dict(ts=event['ts'],strategy='operator_control',symbol='*',
+                    buy='',sell='',action='CONFIG_CHANGE',reason='OPERATOR_UPDATE',before=event['before'],after=event['after'])])
+                trading_controls.events.pop(0)
+            from .trading_controls_view import render
+            text,keyboard=render(trading_controls,config.live_enabled and config.live_entry_enabled,selected_key=key)
+        numeric_pending.pop(m.from_user.id,None)
+    except ValueError as exc:
+        text='⚙️ <b>Значение не сохранено</b>\n\n'+escape(str(exc)[:180])
+        keyboard=back
+    await m.bot.edit_message_text(text,chat_id=pending['chat'],message_id=pending['message'],reply_markup=keyboard,parse_mode='HTML')
+    try:await m.delete()
+    except Exception:pass
+
 live_monitor = None
 live_exit_coordinator = None
 live_entry_coordinator = None
@@ -1251,6 +1325,8 @@ async def trading_control_page(q: CallbackQuery):
     from .trading_controls_view import render
     try:
         parts = q.data.split(':')
+        if parts[1] == 'custom':
+            return await numeric_prompt(q,'ctl',parts[2])
         if parts[1] == 'dex':
             dex = getattr(secondary, 'dex_paired', None)
             if not dex or trading_controls.environment != 'paper' or trading_controls.profile()['mode'] != 'manual':
@@ -1634,6 +1710,8 @@ async def market_signals_action(q: CallbackQuery):
     if feed is None:
         return await q.answer('Сканер сигналов отключён: MARKET_SIGNALS_ENABLED',show_alert=True)
     try:
+        if q.data.startswith('sig:custom:'):
+            return await numeric_prompt(q,'sig',q.data.split(':',2)[2])
         if q.data.startswith('sig:position:'):
             _,_,ident,action=q.data.split(':',3)
             p=feed.paper.positions.get(ident)

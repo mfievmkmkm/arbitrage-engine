@@ -320,3 +320,18 @@ def test_unrelated_incomplete_network_does_not_poison_exact_route(tmp_path):
         assert e['transfer']['network_evidence']['X']['contract']==ASSET
         assert not e['reasons']
     asyncio.run(go())
+
+
+def test_operator_can_tighten_transfer_loss_stop_without_erasing_history(tmp_path):
+    async def go():
+        feed,service,c,provider,now=await setup(tmp_path)
+        await feed.store.set_control('daily_loss','.3')
+        state=copy.deepcopy(feed.paper.state);state['daily']['1970-01-01']='-.31'
+        from app.inventory_paper import day
+        state['daily'][day(now[0])]='-.31'
+        await feed.paper.save(state,'TEST_LOSS',{})
+        with pytest.raises(ValueError,match='лимит убытка'):
+            await service.review('X/USDT','dex56','bybit')
+        assert feed.paper.state['daily'][day(now[0])]=='-.31'
+        with pytest.raises(ValueError):await feed.store.set_control('daily_loss','99')
+    asyncio.run(go())

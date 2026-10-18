@@ -483,7 +483,10 @@ class Scanner:
                 'Котировки: '+escape(', '.join(ok) or 'ожидаем')+'\n'
                 f'Обновление: {state}')
         if hasattr(self,'dex_transfer'):
-            text+='\nBybit ↔ DEX: '+escape(self.dex_transfer.last_reason[:150])
+            dx=self.dex_transfer
+            text+=f'\n\nBybit ↔ DEX · проверок {dx.checked}\n'+escape(dx.last_reason[:150])
+            e=getattr(dx,'last_economics',None)
+            if e:text+=f'\n{escape(e["symbol"])} · спред {e["spread_pct"]:+.2f}% · стресс-NET ${e["stress_net"]:+.3f}'
         elif len(self.trade_venues)<2:
             text += '\n\nДля сделок нужны две подключённые spot-биржи.'
         return text

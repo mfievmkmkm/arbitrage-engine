@@ -15,6 +15,7 @@ def render(controls,live_configured=False,show_risk=False,selected_key=None):
     if selected_key in CHOICES:
         text=f'🛡 <b>{LABELS[selected_key]}</b> · {env}\n\nСейчас: <b>{p[selected_key]:g}</b>'
         rows=[[button(('✓ ' if p[selected_key]==v else '')+f'{v:g}',f'ctl:set:{selected_key}:{v}','primary' if p[selected_key]==v else None) for v in CHOICES[selected_key]],
+              [button('Своё число','ctl:custom:'+selected_key,'primary')],
               [button('‹ Назад','ctl:risk')]]
     elif show_risk:
         text=f'🛡 <b>Риск · {env}</b>\n\nВыбери параметр'

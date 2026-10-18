@@ -79,8 +79,14 @@ def scanner(engine,service,manual=True):
         text+=f'\n\n⏳ {provider}: лимит запросов. Повтор после паузы провайдера.'
     elif not candidates and any(count and (code.startswith('DEX_TAX_') or code.startswith('DEX_VIRTUAL_TAX')) for code,count in reasons.items()):
         text+='\n\nКомиссии токенов не подтверждены — входов нет.'
+    elif not candidates and reasons.get('KYBER_FILTERED_LIQUIDITY',0)==failures and failures:
+        text+='\n\nНет прямого пула с проверяемыми комиссиями.'
     elif not candidates:
         text+='\n\nПодходящих проверенных пар сейчас нет.'
+    if not candidates and reasons:
+        names={'KYBER_FILTERED_LIQUIDITY':'нет прямого пула','PAIRED_PARTIAL_NET_LOW':'низкий NET',
+               'DEX_VIRTUAL_REVERSE_PREFLIGHT_NET_STOP':'убыток при закрытии','RECOVERY_BOOK_STALE':'устарел стакан'}
+        text+='\nПоследний пакет: '+escape(', '.join(f'{names.get(k,k)}: {v}' for k,v in sorted(reasons.items(),key=lambda x:-x[1])[:3]))
     if health.get('blocked') and health.get('reason') in ('DEX_HTTP_401','DEX_HTTP_403'):
         rows.append([button(f'Проверить доступ {provider}','pair:probe')])
     rows.append([button('↻ Обновить','pair:scan')])
