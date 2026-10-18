@@ -1570,6 +1570,17 @@ async def paired_control_action(q: CallbackQuery):
     if not allowed(q.from_user.id):
         return await q.answer('Нет доступа',show_alert=True)
     engine=getattr(secondary,'dex_paired',None)
+    if q.data=='pair:probe':
+        service=secondary.runtime.services.get('dex_paired') if secondary else None
+        scan=getattr(service,'scanner',None)
+        evm=getattr(getattr(getattr(engine,'source',None),'provider',None),'evm',None)
+        if (scan is None or evm is None or scanner.paused
+                or not strategy_runtime.enabled.get('dex_paired',False)):
+            return await q.answer('Сначала включи сканер и сними паузу',show_alert=True)
+        if not evm.request_access_recheck():
+            return await q.answer('Проверка уже идёт или прошло меньше 30 секунд',show_alert=True)
+        scan.wake.set()
+        return await q.answer('Повторная проверка доступа поставлена в очередь')
     if q.data=='pair:scan':
         if engine is None:
             return await q.answer('Сканер недоступен',show_alert=True)

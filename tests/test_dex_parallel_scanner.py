@@ -162,3 +162,21 @@ def test_catalog_uses_verified_contract_metadata_and_ignores_symbol_only_markets
         assert r['base']=='X' and r['asset']==ROUTE['asset'].lower()
         assert r['mode']=='paired' and r['native_symbol']=='ETH/USDT:USDT'
     asyncio.run(run())
+
+
+def test_known_provider_block_skips_books_fees_and_counters_but_keeps_positions():
+    from app.zerox_research import Provider
+    async def run():
+        p=Provider('test-only',clock=lambda:100)
+        p.access_block_until=1000;p.access_status=403
+        def forbidden():raise AssertionError('No scan IO while API is blocked')
+        source=NS(provider=NS(evm=p))
+        positions={'1':dict(status='OPEN')}
+        service=NS(paper=NS(source=source,positions=positions),sync=forbidden,candidates={'old':{}})
+        scan=Scanner(service)
+        await scan.cycle()
+        assert scan.checked==0 and scan.last_batch_at is None
+        assert scan.interval==30 and scan.provider_health['reason']=='DEX_HTTP_403'
+        assert not service.candidates and service.paper.positions==positions
+        assert p.requests_sent==0
+    asyncio.run(run())

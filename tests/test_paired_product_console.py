@@ -89,3 +89,17 @@ def test_scanner_does_not_disguise_provider_denial_as_no_market_opportunities():
     scan.last_reasons=Counter(PAIRED_PARTIAL_NET_LOW=3)
     text,_=scanner(engine,service)
     assert 'Подходящих проверенных пар сейчас нет' in text
+
+
+def test_scanner_shows_provider_pause_and_manual_recheck_button():
+    from app.paired_console import scanner
+    engine=NS(clock=lambda:100)
+    scan=NS(last_batch_seconds=None,last_batch_at=None,last_sweep_seconds=None,
+            catalog={},workers=3,checked=0,last_reasons={},last_cycle_at=95,
+            provider_health=dict(blocked=True,reason='DEX_HTTP_403',retry_after_seconds=60,
+                                 requests_sent=2,responses_ok=0))
+    text,kb=scanner(engine,NS(scanner=scan,candidates={}))
+    assert 'HTTP 403' in text and 'через 55 сек.' in text
+    assert 'запросов 2 · котировок 0' in text
+    assert 'Подходящих проверенных пар сейчас нет' not in text
+    assert 'pair:probe' in {b.callback_data for row in kb.inline_keyboard for b in row}

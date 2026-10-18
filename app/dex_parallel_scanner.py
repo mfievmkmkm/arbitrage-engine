@@ -24,6 +24,7 @@ class Scanner:
         self.last_batch_seconds = None
         self.last_batch_at = None
         self.last_reasons = Counter()
+        self.provider_health = {}
         self.started = time.monotonic()
         self.last_sweep_seconds = None
         self.sweep_seen = set()
@@ -99,6 +100,13 @@ class Scanner:
             background.reset(token)
 
     async def cycle(self):
+        evm=getattr(self.service.paper.source.provider,'evm',None)
+        self.provider_health=evm.health() if hasattr(evm,'health') else {}
+        if self.provider_health.get('blocked'):
+            self.service.candidates.clear()
+            self.interval=min(30,max(1,self.provider_health['retry_after_seconds']))
+            return []
+        self.interval=.25
         self.service.sync()
         for r in list(self.service.routes):
             if r['cex_venue']=='bybit':
@@ -120,6 +128,7 @@ class Scanner:
         results = await asyncio.gather(*(self.check(self.catalog[k]) for k in selected))
         self.last_batch_seconds = time.monotonic()-started
         self.last_batch_at = self.service.paper.clock()
+        self.provider_health=evm.health() if hasattr(evm,'health') else {}
         self.checked += len(results)
         self.last_reasons = Counter(reason for _, reason in results)
         self.reasons.update(self.last_reasons)

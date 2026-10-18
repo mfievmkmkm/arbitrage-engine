@@ -44,10 +44,13 @@ def scanner(engine,service,manual=True):
     candidates.sort(key=lambda c:c['position']['paired_policy']['partial_net'],reverse=True)
     scan=getattr(service,'scanner',None)
     duration=getattr(scan,'last_batch_seconds',None)
+    health=getattr(scan,'provider_health',{}) if scan else {}
     text='🔎 <b>Сканер · Bybit ↔ DEX</b>\n\n'
     if scan:
         text+=f'Пар: {len(scan.catalog)} · потоков: {scan.workers}\n'
         text+=f'Попыток проверки: {scan.checked}\n'
+        if health:
+            text+=f'0x с запуска: запросов {health["requests_sent"]} · котировок {health["responses_ok"]}\n'
         if duration is not None:
             age=max(0,now-scan.last_batch_at)
             text+=f'Пакет: {duration:.2f} сек. · {age:.0f} сек. назад\n'
@@ -65,13 +68,18 @@ def scanner(engine,service,manual=True):
     reasons=getattr(scan,'last_reasons',{}) if scan else {}
     failures=sum(reasons.values())
     denied=sum(reasons.get(k,0) for k in ('DEX_HTTP_401','DEX_HTTP_403'))
-    if failures and denied==failures:
+    if health.get('blocked') and health.get('reason') in ('DEX_HTTP_401','DEX_HTTP_403'):
+        seconds=max(0,health.get('retry_after_seconds',0)-(now-getattr(scan,'last_cycle_at',now)))
+        text+=f'\n\n⛔ Доступ 0x приостановлен · HTTP {health["reason"][-3:]}.\nПовтор проверки через {max(1,int(seconds))} сек.'
+    elif failures and denied==failures:
         code='403' if reasons.get('DEX_HTTP_403') else '401'
         text+=f'\n\n⛔ 0x: нет доступа к котировкам · HTTP {code}.\nНужна проверка API-ключа и разрешений. Поиск не подтверждён.'
     elif failures and reasons.get('DEX_HTTP_429',0)==failures:
         text+='\n\n⏳ 0x: лимит запросов. Повтор после паузы провайдера.'
     elif not candidates:
         text+='\n\nПодходящих проверенных пар сейчас нет.'
+    if health.get('blocked') and health.get('reason') in ('DEX_HTTP_401','DEX_HTTP_403'):
+        rows.append([button('Проверить доступ 0x','pair:probe')])
     rows.append([button('↻ Обновить','pair:scan')])
     if manual:rows.append([button('Список пар','ctl:dex')])
     rows.append([button('‹ Назад','pair:show')])
