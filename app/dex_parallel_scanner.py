@@ -135,8 +135,9 @@ class Scanner:
         if time.monotonic()-getattr(self, "last_diagnostic_log", 0)>=60:
             import logging
             logging.getLogger("arbitrage").info(
-                "DEX_SCAN | routes=%s | checked=%s | batch_ms=%.0f | reasons=%s | access_code=%s",
-                len(self.catalog), self.checked, self.last_batch_seconds*1000, dict(self.last_reasons),
+                "DEX_SCAN | routes=%s | checked=%s | batch_ms=%.0f | reasons=%s | provider=%s | quotes=%s | access_code=%s",
+                len(self.catalog), self.checked, self.last_batch_seconds*1000, dict(self.last_reasons), self.provider_health.get('provider','0x'),
+                self.provider_health.get('responses_ok',0),
                 getattr(getattr(self.service.paper.source.provider, 'evm', None), 'access_error_code', None))
             self.last_diagnostic_log = time.monotonic()
         self.sweep_seen.update(selected)

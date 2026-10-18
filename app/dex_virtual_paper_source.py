@@ -169,7 +169,8 @@ class Source(HistorySource):
         book = normalize(raw, r["native_symbol"], raw.get('requested_at', start), self.clock(),
                          1.5, raw.get('data_source', 'REST'))
         price = float(number(book["asks"][0][0], "DEX_VIRTUAL_NATIVE_PRICE"))
-        usd = float(network / Decimal(10 ** r["native_decimals"])) * price
+        extra = number(q.get("network_fee_usd_extra", 0), "DEX_VIRTUAL_EXTRA_GAS_UNKNOWN", False)
+        usd = float(network / Decimal(10 ** r["native_decimals"])) * price + float(extra)
         if not math.isfinite(usd) or usd > 0.25:
             raise ValueError("DEX_VIRTUAL_GAS_BUDGET_LIMIT")
         return usd, price, book

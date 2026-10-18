@@ -2,6 +2,8 @@
 import json
 import math
 import asyncio
+import copy
+import os
 from .dex_virtual_paper_source import Source, route_key
 from .dex_cex_identity import Gate
 from .cex_dex_paper import Engine, Cycle
@@ -20,9 +22,23 @@ class PairedSource(Source):
     def __init__(self, original, routes):
         super().__init__(original.provider, routes, original.public, original.fs,
                          original.private, original.clock, max_notional=300)
+        self.price_providers = getattr(original, "price_providers", {})
         self.focus = self.signals_only = False
         self.native_paired_inventory = True
         self.identity_gate = Gate(self.public, self.private, self.clock)
+
+    async def exit(self, p):
+        # Provider identity survives a restart/configuration change. A legacy
+        # position is never silently marked against a new quote provider.
+        name = p.get("paired_quote_provider", (p.get("entry_dex") or {}).get("provider", "0x"))
+        if self.price_providers:
+            provider = self.price_providers.get(name)
+            if provider is None:
+                return dict(ok=False, reason="PAIRED_POSITION_PROVIDER_UNAVAILABLE")
+            view = copy.copy(self)
+            view.provider = provider
+            return await Source.exit(view, p)
+        return await Source.exit(self, p)
 
     async def entry(self, route):
         try:
@@ -43,6 +59,7 @@ class PairedSource(Source):
         if not result.get('ok'):
             return result
         p = result['position']
+        p["paired_quote_provider"] = (p.get("entry_dex") or {}).get("provider", "0x")
         # The DEX asset cannot be wished away: residual rounding is recorded.
         raw = p['base_qty'] * p['entry_price'] - p['entry_cash']
         costs = max(raw - p['entry_edge'], -p['entry_immediate_net'])
@@ -157,6 +174,20 @@ async def build(bundle, runtime, db_path, notify, allowed, notify_open=None):
     # Seed a genuine paired route even when the legacy watchlist is Solana-only.
     routes = [dict(default_routes('paired', 100)[0], max_notional_usd=110)]
     source = PairedSource(original, routes)
+    source.price_providers = {"0x": original.provider}
+    selected = os.getenv("PAIRED_DEX_QUOTE_PROVIDER", "0x").lower()
+    if selected not in ("0x", "kyberswap"):
+        raise ValueError("PAIRED_QUOTE_PROVIDER_INVALID")
+    if selected == "kyberswap" and not hasattr(original.provider, "evm"):
+        raise ValueError("PAIRED_QUOTE_ROUTER_UNAVAILABLE")
+    if hasattr(original.provider, "evm"):
+        from .kyber_research import Provider as KyberProvider
+        from .jupiter_research import Router
+        bundle.kyber_provider = KyberProvider(original.provider.evm)
+        router = Router(bundle.kyber_provider, original.provider.solana)
+        if selected == "kyberswap":
+            source.provider = router
+        source.price_providers["KyberSwap"] = router
     source.entry_venues={'bybit'}
     engine = Engine(db_path, source, capital=250, virtual=True, namespace='paired',
                     clock=source.clock, min_edge=.25, max_seconds=1200)

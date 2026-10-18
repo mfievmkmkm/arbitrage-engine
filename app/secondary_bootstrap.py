@@ -36,6 +36,7 @@ class Bundle:
         self.owns_clients = owns_clients
         self.runtime = runtime
         self.sf_paper = sf_paper
+        self.kyber_provider = None
         self.dex_provider = None
         self.dex_sim_provider = None
         self.virtual_router = None
@@ -63,6 +64,8 @@ class Bundle:
             await close(self.clients)
         if self.book_recorder:
             await self.book_recorder.close()
+        if self.kyber_provider:
+            await self.kyber_provider.close()
         if self.dex_provider:
             await self.dex_provider.close()
         if self.dex_sim_provider:
@@ -299,6 +302,8 @@ async def build_bundle(
             )
         return bundle
     except BaseException:
+        if bundle and bundle.kyber_provider:
+            await bundle.kyber_provider.close()
         if bundle and bundle.dex_provider:
             await bundle.dex_provider.close()
         if bundle and bundle.dex_sim_provider:
