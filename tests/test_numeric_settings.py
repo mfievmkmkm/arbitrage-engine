@@ -35,7 +35,7 @@ def test_manual_input_persists_without_duplicating_messages_and_back_revokes(tmp
         assert (await store.control())['min_spread']==7.35
         assert edits[-1][1]['message_id']==50 and deletes and 1 not in main.numeric_pending
         main.numeric_pending[1]=dict(kind='sig',key='min_spread',chat=10,message=50,expires=main.time.time()+120)
-        msg.text='2'
+        msg.text='1'
         await main.numeric_setting_message(msg)
         assert (await store.control())['min_spread']==7.35 and 1 in main.numeric_pending
         called=[]

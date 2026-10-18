@@ -2,7 +2,7 @@
 from aiogram.types import InlineKeyboardMarkup
 from .tg_ui import button
 
-FIELDS={'budget':('Покупка, USD',(10,25,50)), 'min_spread':('Спред от, %',(5,7.5,10)),
+FIELDS={'budget':('Покупка, USD',(25,50,100)), 'min_spread':('Спред от, %',(2,5,10)),
         'max_spread':('Спред до, %',(10,15,20)), 'min_net':('NET от, USD',(.25,.5,1)),
         'stress_drop':('Стресс цены, %',(3,5,10)), 'daily_loss':('Дневной стоп, USD',(.5,1,1.25)), 'total_loss':('Стоп теста, USD',(1,2,2.5)), 'dex_deposit_fee_pct':('Ввод Bybit, %',(0,.1,.5))}
 

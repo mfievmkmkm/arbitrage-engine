@@ -215,7 +215,7 @@ async def numeric_prompt(q, kind, key):
     from .trading_controls import LIMITS
     from .trading_controls_view import LABELS
     from .transfer_console import FIELDS
-    transfer_limits={'budget':(5,50),'min_spread':(5,20),'max_spread':(5,30),
+    transfer_limits={'budget':(5,100),'min_spread':(2,20),'max_spread':(2,30),
                      'min_net':(.25,5),'stress_drop':(1,10),'dex_deposit_fee_pct':(0,1),'daily_loss':(.1,1.25),'total_loss':(.1,2.5)}
     limits=transfer_limits if kind=='sig' else LIMITS
     if key not in limits:raise ValueError('Неизвестный параметр')

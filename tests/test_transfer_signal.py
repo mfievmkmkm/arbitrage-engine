@@ -232,3 +232,19 @@ def test_operator_can_cancel_only_before_buy_after_funding(tmp_path):
         assert D(paper.state['balances']['buy'])==25
         assert paper.state['last_position']['status']=='CANCELLED_BEFORE_BUY'
     asyncio.run(go())
+
+
+def test_requested_transfer_size_and_spread_bounds_survive_restart(tmp_path):
+    async def go():
+        from app.market_signal_store import Store
+        store=Store(tmp_path/'bounds.db');await store.init()
+        await store.set_control('budget','100')
+        await store.set_control('min_spread','2')
+        restored=Store(tmp_path/'bounds.db')
+        control=await restored.control()
+        assert control['budget']==100 and control['min_spread']==2
+        assert control['stress_drop']==3 and control['min_net']==.25
+        for key,value in [('budget','100.01'),('min_spread','1.99')]:
+            with pytest.raises(ValueError):await restored.set_control(key,value)
+        assert (await restored.control())['budget']==100
+    asyncio.run(go())
