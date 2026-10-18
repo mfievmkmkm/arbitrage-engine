@@ -2,7 +2,7 @@
 
 Contract: https://api-docs.kyberswap.com/aggregator-api.html
 Public admission stays below 3 requests/second, shared by scans and exits.
-Tax evidence is deliberately unknown: routes do not certify token taxes.
+Optional pool-scoped simulations supply PAPER tax evidence, never execution proof.
 """
 import asyncio
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
@@ -26,10 +26,26 @@ def decimal(value, positive=False):
 class Provider(MetadataProvider):
     name = 'KyberSwap'
 
-    def __init__(self, metadata, session=None, clock=None):
+    def __init__(self, metadata, session=None, clock=None, tax_reader=None):
         super().__init__(None, session, **({'clock':clock} if clock else {}))
         self.metadata = metadata
+        self.tax_reader = tax_reader
         self.budget = Budget(spacing=.4, concurrency=4)
+
+    async def close(self):
+        if self.tax_reader:
+            await self.tax_reader.close()
+        await super().close()
+
+    async def price(self, *args, **kwargs):
+        q = await super().price(*args, **kwargs)
+        if q.get("ok") and self.tax_reader:
+            try:
+                q["token_metadata"] = await self.tax_reader.route(q)
+                q["tax_evidence"] = "POOL_SIMULATION_PAPER_ONLY"
+            except ValueError as exc:
+                q["tax_reason"] = str(exc)
+        return q
 
     async def token(self, network, address):
         return await self.metadata.token(network, address)
@@ -41,6 +57,8 @@ class Provider(MetadataProvider):
         try:
             if type(chain_id) is not int or chain_id not in CHAINS:
                 raise ValueError('KYBER_CHAIN_UNSUPPORTED')
+            if self.tax_reader and chain_id not in (1,56,8453):
+                raise ValueError('DEX_TAX_CHAIN_UNSUPPORTED')
             if not all(isinstance(t,str) and ADDRESS.fullmatch(t) for t in (sell_token,buy_token)) or sell_token.lower()==buy_token.lower():
                 raise ValueError('TOKEN_ADDRESSES_INVALID')
             if not isinstance(sell_amount,str) or not sell_amount.isdigit() or int(sell_amount)<=0:
@@ -57,9 +75,17 @@ class Provider(MetadataProvider):
             started = self.clock()
             self.requests_sent += 1
             self.last_request_at = started
+            params=dict(tokenIn=sell_token,tokenOut=buy_token,amountIn=sell_amount,gasInclude='true')
+            # Supported simulation protocols only when PAPER tax checks are active.
+            if self.tax_reader and chain_id in (1,8453):
+                params['includedSources']='uniswap,uniswapv3'
+            elif self.tax_reader and chain_id==56:
+                params['includedSources']='pancake,pancake-v3'
+            if self.tax_reader:
+                params.update(onlyDirectPools='true', onlySinglePath='true')
             async with self.session.get(
                 f'https://aggregator-api.kyberswap.com/{CHAINS[chain_id]}/api/v1/routes',
-                params=dict(tokenIn=sell_token,tokenOut=buy_token,amountIn=sell_amount,gasInclude='true'),
+                params=params,
                 headers={'X-Client-Id':'arbitrage-engine-paper'}) as response:
                 if response.status != 200:
                     status = response.status

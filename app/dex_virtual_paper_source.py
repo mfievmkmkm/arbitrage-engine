@@ -142,6 +142,8 @@ class Source(HistorySource):
         q = dict(q, virtual_min_buy_raw=str(minimum), live_allowed=False,
                  mode="DEX_VIRTUAL_INDICATIVE_MODEL", execution_verified=False)
         if r.get("mode", "paired") == "paired":
+            if q.get("tax_reason"):
+                raise ValueError(q["tax_reason"])
             metadata = q.get("token_metadata") or {}
             for side in ("sellToken", "buyToken"):
                 for field in ("buyTaxBps", "sellTaxBps", "transferTaxBps"):

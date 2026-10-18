@@ -183,7 +183,8 @@ async def build(bundle, runtime, db_path, notify, allowed, notify_open=None):
     if hasattr(original.provider, "evm"):
         from .kyber_research import Provider as KyberProvider
         from .jupiter_research import Router
-        bundle.kyber_provider = KyberProvider(original.provider.evm)
+        from .dex_tax_evidence import Reader as TaxReader
+        bundle.kyber_provider = KyberProvider(original.provider.evm, tax_reader=TaxReader())
         router = Router(bundle.kyber_provider, original.provider.solana)
         if selected == "kyberswap":
             source.provider = router

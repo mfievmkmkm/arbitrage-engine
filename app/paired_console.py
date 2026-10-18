@@ -77,8 +77,8 @@ def scanner(engine,service,manual=True):
         text+=f'\n\n⛔ {provider}: нет доступа к котировкам · HTTP {code}.\nНужна проверка API-ключа и разрешений. Поиск не подтверждён.'
     elif failures and reasons.get('DEX_HTTP_429',0)==failures:
         text+=f'\n\n⏳ {provider}: лимит запросов. Повтор после паузы провайдера.'
-    elif not candidates and any(reasons.get(code) for code in ('DEX_VIRTUAL_TAX', 'DEX_VIRTUAL_TAX_INVALID')):
-        text+='\n\nКотировки получены. Комиссии токенов не подтверждены — входов нет.'
+    elif not candidates and any(count and (code.startswith('DEX_TAX_') or code.startswith('DEX_VIRTUAL_TAX')) for code,count in reasons.items()):
+        text+='\n\nКомиссии токенов не подтверждены — входов нет.'
     elif not candidates:
         text+='\n\nПодходящих проверенных пар сейчас нет.'
     if health.get('blocked') and health.get('reason') in ('DEX_HTTP_401','DEX_HTTP_403'):

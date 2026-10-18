@@ -471,15 +471,15 @@ class Scanner:
 
     def status(self):
         ok=[v for v in self.clients if self.health.get(v)=='OK' and v in self.tickers and 0<=self.clock()-self.tickers[v][0]<=90]
-        failed=[v+': '+s for v,s in self.health.items() if v not in ok and not v.startswith('route:')]
-        return ('📡 <b>Сигналы · PAPER перевод</b>\n'
-                'Отдельный виртуальный депозит $250 · настройки размера и спреда ниже\n'
-                f'Обнаружено адаптеров {len(self.names)} · загружено {len(self.clients)} · свежие тикеры {len(ok)}\n'
+        age = self.clock()-self.last_scan if self.last_scan else None
+        state = f'{max(0,int(age))} сек. назад' if age is not None else 'запускается'
+        text = ('📡 <b>Покупка → перевод → продажа</b>\n\n'
+                'PAPER · виртуальный депозит $250\n'
                 'Котировки: '+escape(', '.join(ok) or 'ожидаем')+'\n'
-                'Ожидают/недоступны: '+escape('; '.join(failed)[:1200] or 'нет')+'\n'
-                f'Ещё не проверено: {len(set(self.names)-set(self.health))}\n'
-                'Покрытие: активный USDT-спот CEX, публичные API CCXT с тикерами и стаканами. Уже загруженные площадки основного бота используются повторно; дополнительно активна максимум одна биржа, остальные ротируются примерно раз в 20 секунд. Поиск неполный. DEX и фьючерсы не смешиваются со спотом. Охват не означает доступность биржи вашему аккаунту.\n'
-                'Сигналы по всем доступным площадкам; PAPER-циклы только на площадках с настроенными spot API. Реальных ордеров и выводов нет.')
+                f'Обновление: {state}')
+        if len(self.trade_venues)<2:
+            text += '\n\nДля сделок нужны две подключённые spot-биржи.'
+        return text
 
     async def close(self):
         tasks=([self.loader] if self.loader else [])+list(self.workers.values())

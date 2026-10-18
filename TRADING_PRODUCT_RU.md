@@ -310,3 +310,33 @@ USDT вернула пустой transfer_tax и не дала полного п
 история и убытки сохраняются. Ни build POST, ни транзакций, ни новых LIVE-допусков.
 Источник API: https://api-docs.kyberswap.com/aggregator-api.html
 Лимиты: https://github.com/KyberNetwork/kyberswap-documentation/blob/main/developer-guide/start-here/rate-limits-and-client-id.md
+
+## Проверка token taxes и предреальная приёмка · 18 октября, 21:47+
+
+Дополнение заменяет общий барьер UNKNOWN для поддержанных Kyber PAPER-пулов:
+Honeypot.is IsHoneypot вызывается read-only с явными chainID/address/pair.
+Сверяются chain, token, pairAddress, состав и адрес пула; нужны успешная
+симуляция, явный isHoneypot=false, риск ниже20, отсутствие flags и ограничений
+maxBuy/maxSell. Все три налога обязательны, проценты переводятся в bps.
+Ненулевой налог не поддержан моделью и блокирует вход; пропуск не равен нулю.
+
+Первый допуск только Ethereum/BSC/Base, прямой single-path V2/V3 маршрут
+Uniswap/PancakeSwap. Kyber получает includedSources, onlyDirectPools и
+onlySinglePath. Неподдержанные сети, промежуточные токены, hooks/RFQ и другие
+пулы не получают выдуманного разрешения. Кэш максимум60сек от начала запроса,
+ключ chain+token+pool+otherToken; отрицательный кэш15сек, single-flight,
+ограниченная память, общая очередь1.1сек и приоритет сопровождения, backoff
+на 401/403/429/5xx. Устаревшая котировка после ожидания проверки не допускается.
+
+Наблюдение сохраняется в entry_dex.token_metadata с источником, сетью, токеном,
+пулом и observed_at. POOL_SIMULATION_PAPER_ONLY не является подтверждением
+исполнения нашего размера/кошелька/блока. LIVE остаётся заблокирован; отдельные
+wallet/CEX/transfer acceptance необходимы. Источники:
+https://docs.honeypot.is/ishoneypot и https://docs.honeypot.is/chains.
+
+Экран последовательного сканера сокращён: виртуальный депозит, активные
+котировки и время обновления. При одной торговой площадке явно нужны две
+подключённые spot-биржи. Технический список адаптеров убран из торгового экрана.
+Порядок ручной/PAPER-авто проверки и реальные недостающие допуски перечислены
+в PRELIVE_CHECK_RU.md. Программные тесты и синтетический положительный цикл не
+подмешиваются в статистику реального рыночного PAPER.
