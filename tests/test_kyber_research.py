@@ -117,7 +117,7 @@ def test_l1_cost_is_added_and_can_exceed_risk_cap():
 def test_console_separates_successful_quotes_from_trade_admission():
     from app.paired_console import scanner
     scan=NS(last_batch_seconds=.5,last_batch_at=100,last_sweep_seconds=4,
-            catalog={1:{}},workers=3,checked=3,last_reasons={'DEX_VIRTUAL_TAX':3},
+            catalog={1:{}},workers=3,checked=3,last_reasons={'DEX_VIRTUAL_TAX_INVALID':3},
             provider_health=dict(provider='KyberSwap',requests_sent=3,responses_ok=3))
     text,_=scanner(NS(clock=lambda:100),NS(scanner=scan,candidates={}))
     assert 'KyberSwap с запуска' in text and 'Комиссии токенов не подтверждены' in text
