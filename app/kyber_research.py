@@ -140,7 +140,7 @@ class Provider(MetadataProvider):
             return dict(ok=True,provider=self.name,chain_id=chain_id,
                         sell_token=sell_token,buy_token=buy_token,sell_amount_raw=sell_amount,
                         buy_amount_raw=out,network_fee_raw=str(gas.to_integral_value(rounding=ROUND_CEILING)),
-                        network_fee_usd_extra=str(l1),token_metadata=None,
+                        network_fee_usd_extra=str(l1),gas_price_raw=str(decimal(q.get('gasPrice'),True)),token_metadata=None,
                         tax_evidence='UNKNOWN',route=q['route'],block_number=None,
                         route_timestamp=stamp,ts=started,mode='RESEARCH_INDICATIVE',
                         paper_allowed=False,live_allowed=False)

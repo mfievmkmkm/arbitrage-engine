@@ -318,6 +318,9 @@ class Scanner:
         return e
 
     async def review(self,symbol,buy,sell,read_accounts=False):
+        if buy.startswith("dex") or sell.startswith("dex"):
+            if not hasattr(self,"dex_transfer"):raise ValueError("DEX-перевод недоступен")
+            return await self.dex_transfer.review(symbol,buy,sell,read_accounts)
         if buy not in self.clients or sell not in self.clients:
             raise ValueError('Биржа сейчас недоступна')
         e=await self.evaluate(symbol,buy,sell)
@@ -346,6 +349,8 @@ class Scanner:
         return e
 
     def format(self,e,include_code=True):
+        if (e.get('transfer') or {}).get('kind')=='DEX_SEQUENTIAL_V1':
+            return self.dex_transfer.format(e,include_code)
         p=e.get('transfer')
         lines=[f'🔁 <b>{escape(e["symbol"])} · PAPER</b>',
                escape(e['buy'].upper())+' → '+escape(e['sell'].upper())]
@@ -477,7 +482,9 @@ class Scanner:
                 'PAPER · виртуальный депозит $250\n'
                 'Котировки: '+escape(', '.join(ok) or 'ожидаем')+'\n'
                 f'Обновление: {state}')
-        if len(self.trade_venues)<2:
+        if hasattr(self,'dex_transfer'):
+            text+='\nBybit ↔ DEX: '+escape(self.dex_transfer.last_reason[:150])
+        elif len(self.trade_venues)<2:
             text += '\n\nДля сделок нужны две подключённые spot-биржи.'
         return text
 

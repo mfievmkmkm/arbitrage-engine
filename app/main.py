@@ -1685,6 +1685,7 @@ async def market_signals_action(q: CallbackQuery):
             route=await feed.store.claim(q.data.split(':',2)[2])
             if not (feed.entry_enabled and not scanner.paused):raise ValueError('Сканер на паузе')
             e=await feed.review(**route)
+            if e.get('mode')!='manual':raise ValueError('Режим изменился: ручное подтверждение недоступно')
             if not e['trade_configured'] or e['reasons'] or e['transfer'] is None:
                 raise ValueError('Новые данные не прошли проверку; позиция не открыта')
             await feed.paper.open(dict(signal=e,transfer=e['transfer']))
@@ -2767,6 +2768,11 @@ async def main():
                         raise
             feed.remove_position_card=remove_position_card
             feed.channel_review=Reviewer(secondary)
+            if getattr(secondary,'dex_paired',None) and getattr(secondary,'kyber_provider',None):
+                from .dex_transfer_paper import Service as DexTransfer
+                dex_transfer=DexTransfer(feed,secondary.runtime.services['dex_paired'])
+                dex_transfer.paused=lambda:scanner.paused
+                secondary.runtime.add('dex_transfer',dex_transfer)
             secondary.market_signals=feed
             secondary.runtime.add('market_signals',feed)
             from .dex_public_channel_reader import Reader as PublicChannelReader

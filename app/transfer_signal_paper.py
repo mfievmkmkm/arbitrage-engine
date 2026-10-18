@@ -65,6 +65,9 @@ class Paper:
         self.state=state;self.version+=1
 
     async def open(self,review):
+        if (review.get("transfer") or {}).get("kind")=="DEX_SEQUENTIAL_V1":
+            if not hasattr(self,"dex_transfer"):raise ValueError("DEX-перевод недоступен")
+            return await self.dex_transfer.open(review)
         async with self.lock:
             e=review['signal'];plan=review['transfer']
             if plan is None or plan['reasons']:
@@ -101,6 +104,10 @@ class Paper:
         async with self.lock:
             p0=self.state.get('position')
             if not p0 or self.clock()<p0['due']:return
+            if p0.get('kind')=='DEX_SEQUENTIAL_V1':
+                handler=getattr(self,'dex_transfer',None)
+                if handler is None:return  # Preserve unknown exposure on missing module.
+                return await handler.monitor_unlocked()
             state=copy.deepcopy(self.state);p=state['position'];s=p['signal'];plan=p['plan']
             try:
                 if p['status']=='USDT_TO_BUY_IN_TRANSIT':
@@ -201,6 +208,9 @@ class Paper:
         async with self.lock:
             state=copy.deepcopy(self.state);p=state.get('position')
             if not p or p['id']!=ident:raise ValueError('Активная позиция изменилась')
+            if action=='cancel_buy' and p.get('kind')=='DEX_SEQUENTIAL_V1':
+                if not hasattr(self,'dex_transfer'):raise ValueError('DEX-перевод недоступен')
+                return await self.dex_transfer.cancel_unlocked(state,p)
             if action=='cancel_buy' and p['status']=='BUY_PENDING':
                 fee=D(p['funding_fee']);loss=-fee
                 state['realized']=str(D(state['realized'])+loss)
@@ -224,8 +234,11 @@ class Paper:
     def card(self,p):
         from html import escape
         s=p['signal'];model=p['plan'];status=p['status']
+        from .dex_transfer_source import venue_label
         stages={'USDT_TO_BUY_IN_TRANSIT':'USDT переводится к месту покупки',
-                'BUY_PENDING':'USDT зачислен, покупка ожидает свежей проверки',
+                'BUY_PENDING':'Покупка ожидает свежей проверки',
+                'BASE_TRANSFER_PENDING':'Монета куплена, перевод ожидает проверки сети',
+                'RETURN_PENDING':'Продано, возврат USDT ожидает проверки',
                 'BASE_IN_TRANSIT':'Монета переводится к месту продажи',
                 'SELL_PENDING':'Продажа по доступному свежему стакану',
                 'QUOTE_IN_TRANSIT':'USDT возвращается после продажи',
@@ -233,7 +246,7 @@ class Paper:
                 'ABORTED_AFTER_FUNDING':'Покупка отменена',
                 'CANCELLED_BEFORE_BUY':'Покупка отменена оператором'}
         text=(f"🔁 <b>{escape(s['symbol'])} · PAPER</b> · #{escape(p['id'])}\n"
-              f"{escape(s['buy'].upper())} → {escape(s['sell'].upper())}\n\n"
+              f"{escape(venue_label(s['buy']))} → {escape(venue_label(s['sell']))}\n\n"
               f"<b>{escape(stages.get(status,status))}</b>\n"
               f"Покупка ${float(model['spent']):.2f}\n"
               f"Осталось {float(p['remaining']):.8g} · продано {float(p['sold']):.8g}\n"

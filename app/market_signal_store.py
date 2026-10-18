@@ -61,7 +61,7 @@ class Store:
 
     async def set_control(self,key,value):
         from .strategy_math import D
-        if key not in ('mode','budget','min_spread','max_spread','min_net','stress_drop'):
+        if key not in ('mode','budget','min_spread','max_spread','min_net','stress_drop','dex_deposit_fee_pct'):
             raise ValueError('Неизвестная настройка')
         async with aiosqlite.connect(self.path) as db:
             await db.execute('BEGIN IMMEDIATE')
@@ -73,9 +73,10 @@ class Store:
                 v=D(value)
                 if not (('budget'==key and 5<=v<=50) or ('min_spread'==key and 5<=v<=20) or
                         ('max_spread'==key and 5<=v<=30) or ('min_net'==key and D('.25')<=v<=5) or
-                        ('stress_drop'==key and 1<=v<=10)):
+                        ('stress_drop'==key and 1<=v<=10) or ('dex_deposit_fee_pct'==key and 0<=v<=1)):
                     raise ValueError('Значение вне диапазона')
                 p[key]=float(v)
+                if key=='dex_deposit_fee_pct':p['dex_deposit_fee_set_at']=self.clock()
             if p['min_spread']>p['max_spread']:raise ValueError('Минимальный спред больше максимума')
             await db.execute('UPDATE signal_transfer_control SET payload=? WHERE id=1',(json.dumps(p),))
             await db.commit()

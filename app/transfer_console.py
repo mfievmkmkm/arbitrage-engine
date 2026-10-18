@@ -4,7 +4,7 @@ from .tg_ui import button
 
 FIELDS={'budget':('Покупка, USD',(10,25,50)), 'min_spread':('Спред от, %',(5,7.5,10)),
         'max_spread':('Спред до, %',(10,15,20)), 'min_net':('NET от, USD',(.25,.5,1)),
-        'stress_drop':('Стресс цены, %',(3,5,10))}
+        'stress_drop':('Стресс цены, %',(3,5,10)), 'dex_deposit_fee_pct':('Ввод Bybit, %',(0,.1,.5))}
 
 
 async def render(feed, data, paused):
@@ -12,12 +12,14 @@ async def render(feed, data, paused):
     field=data.split(':')[2] if data.startswith(('sig:field:','sig:set:')) else None
     if field in FIELDS:
         label,values=FIELDS[field]
-        text=f'⚙️ <b>{label}</b>\n\nСейчас: <b>{p[field]:g}</b>'
-        rows=[[button(('✓ ' if p[field]==v else '')+f'{v:g}',f'sig:set:{field}:{v}','primary' if p[field]==v else None) for v in values],
+        current=p.get(field)
+        text=f'⚙️ <b>{label}</b>\n\nСейчас: <b>{format(current,"g") if current is not None else "не указан"}</b>'
+        if field=='dex_deposit_fee_pct':text+='\nДопущение PAPER на 24 часа. Укажи тариф своей площадки.'
+        rows=[[button(('✓ ' if p.get(field)==v else '')+f'{v:g}',f'sig:set:{field}:{v}','primary' if p.get(field)==v else None) for v in values],
               [button('‹ Назад','sig:settings')]]
     elif data=='sig:settings':
         text='⚙️ <b>Перевод · параметры</b>'
-        rows=[[button(f'{label}: {p[key]:g}','sig:field:'+key)] for key,(label,_) in FIELDS.items()]
+        rows=[[button(label+': '+(format(p[key],'g') if p.get(key) is not None else 'не указан'),'sig:field:'+key)] for key,(label,_) in FIELDS.items()]
         rows.append([button('‹ Назад','sig:show')])
     elif data=='sig:details':
         text=feed.status()
@@ -29,7 +31,7 @@ async def render(feed, data, paused):
               f'Спред {p["min_spread"]:g}–{p["max_spread"]:g}% · NET от ${p["min_net"]:g}\n'
               f'Открыто: {int(bool(s.get("position")))}\n\n'
               'Продажа после зачисления. Цена может измениться.\n'
-              'DEX-перевод пока недоступен.')
+              +('Bybit Spot ↔ DEX включён.' if hasattr(feed,'dex_transfer') else 'DEX-перевод недоступен.'))
         if paused:text+='\n⏸ Входы на паузе'
         rows=[[button('⏸ Выключить' if enabled else '▶ Включить','sig:toggle','danger' if enabled else 'success')],
               [button(('✓ ' if p['mode']==m else '')+label,'sig:mode:'+m,'primary' if p['mode']==m else None)
