@@ -35,7 +35,7 @@ class Scanner:
         key = route_key(route)
         if key not in self.catalog and len(self.catalog) >= 256:
             raise ValueError('DEX_SCAN_CATALOG_LIMIT_256')
-        if any(r['chain_id']==route['chain_id'] and r['base']==route['base']
+        if any(r['cex_venue']==route['cex_venue'] and r['chain_id']==route['chain_id'] and r['base']==route['base']
                and r['asset'].lower()!=route['asset'].lower() for r in self.catalog.values()):
             raise ValueError('DEX_SCAN_CONTRACT_CONFLICT')
         self.catalog[key] = dict(route)
@@ -75,13 +75,15 @@ class Scanner:
             route.update(notional_usd=min(100, limit/1.1), max_notional_usd=limit)
         source = PairedSource(original, [route])
         source.identity_gate = original.identity_gate
-        source.entry_venues = {'bybit'}
+        source.entry_venues = {'bybit','mexc'}
         source.blocked_until = original.blocked_until
         token = background.set(True)
         try:
             result = await asyncio.wait_for(source.entry(route), self.timeout)
             candidate = getattr(source, 'last_candidate', None)
-            if result.get('ok') and candidate and candidate['position'].get('fee_source')=='ACCOUNT_READ_ONLY':
+            fee_source=candidate['position'].get('fee_source') if candidate else None
+            fee_ok=fee_source=='ACCOUNT_READ_ONLY' or (route['cex_venue']=='mexc' and fee_source=='MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER')
+            if result.get('ok') and candidate and fee_ok:
                 if not 0 <= original.clock()-candidate['position']['opened_at'] <= 30:
                     result = dict(ok=False, reason='DEX_SCAN_CANDIDATE_STALE')
                 else:
@@ -109,7 +111,7 @@ class Scanner:
         self.interval=.25
         self.service.sync()
         for r in list(self.service.routes):
-            if r['cex_venue']=='bybit':
+            if r['cex_venue'] in ('bybit','mexc'):
                 self.add(r)
         keys = list(self.catalog)
         selected = []

@@ -1,4 +1,4 @@
-"""Rotate exact Bybit network contracts into the read-only EVM scan catalog."""
+"""Rotate exact CEX network contracts into the read-only EVM scan catalog."""
 import asyncio
 from .dex_cex_identity import ALIASES, matching_contract
 from .dex_network_registry import stable_config
@@ -14,7 +14,7 @@ class Catalog:
     def __init__(self, scanner):
         self.scanner = scanner
         self.entry_enabled = True
-        self.index = 0
+        self.index = {'bybit':0,'mexc':0}
         self.discovered = 0
         self.rejected = 0
         self.last_reason = None
@@ -22,20 +22,27 @@ class Catalog:
     async def cycle(self):
         from .dex_paired_experiment import NATIVE
         source = self.scanner.service.paper.source
-        seeds = [r for r in source.routes if r['cex_venue']=='bybit']
+        for venue in ('bybit','mexc'):
+            await self.scan_venue(source,venue,NATIVE)
+        return []
+
+    async def scan_venue(self,source,venue,NATIVE):
+        seeds = [r for r in source.routes if r['cex_venue']==venue]
         if not seeds:
-            return []
+            legacy=getattr(self.scanner.service,'legacy',{}).get('dex_channel' if venue=='mexc' else 'dex_bybit')
+            if legacy:seeds=[r for r in legacy.source.routes if r['cex_venue']==venue]
+        if not seeds:return
         gate = source.identity_gate
         # Loads/refreshes scoped metadata even if the seed's identity is missing.
         try:
             await gate.verify(seeds[0])
         except ValueError:
             pass
-        cached = gate.cache.get('bybit')
+        cached = gate.cache.get(venue)
         if not cached or not cached[2]:
             self.last_reason = 'DEX_CEX_METADATA_UNAVAILABLE'
-            return []
-        client = source.public.get('bybit')
+            return
+        client = source.public.get(venue)
         possibilities = []
         for base, currency in sorted(cached[1].items()):
             if not client or len(eligible_markets(client, base))!=1:
@@ -70,13 +77,13 @@ class Catalog:
                 possibilities.append((base, chain, asset.lower()))
         possibilities = list(dict.fromkeys(possibilities))
         self.discovered = len(possibilities)
-        known = {(r['base'], r['chain_id'], r['asset'].lower()) for r in self.scanner.catalog.values()}
+        known = {(r['cex_venue'],r['base'], r['chain_id'], r['asset'].lower()) for r in self.scanner.catalog.values()}
         token = background.set(True)
         try:
             for _ in range(min(4, len(possibilities))):
-                base, chain, asset = possibilities[self.index % len(possibilities)]
-                self.index += 1
-                if (base,chain,asset) in known or len(self.scanner.catalog)>=256:
+                base, chain, asset = possibilities[self.index[venue] % len(possibilities)]
+                self.index[venue] += 1
+                if (venue,base,chain,asset) in known or len(self.scanner.catalog)>=256:
                     continue
                 try:
                     network, stable_address = stable_config(chain)
@@ -88,13 +95,13 @@ class Catalog:
                     route = dict(chain_id=chain, asset=asset, stable=stable_address,
                                  base=base, stable_symbol=stable['symbol'].upper(),
                                  asset_decimals=data['decimals'], stable_decimals=stable['decimals'],
-                                 cex_venue='bybit', cex_symbol=eligible_markets(client,base)[0],
+                                 cex_venue=venue, cex_symbol=eligible_markets(client,base)[0],
                                  native_symbol=NATIVE[chain]+'/USDT:USDT', native_decimals=18,
                                  mode='paired', notional_usd=100, max_notional_usd=110,
-                                 label=f'{base} · Bybit · {network}',
+                                 label=f'{base} · {venue.upper()} · {network}',
                                  identity_source='EXCHANGE_NETWORK_CONTRACT_AND_TOKEN_METADATA')
                     self.scanner.add(route)
-                    known.add((base,chain,asset))
+                    known.add((venue,base,chain,asset))
                     self.last_reason = None
                 except asyncio.CancelledError:
                     raise
@@ -103,4 +110,3 @@ class Catalog:
                     self.last_reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
         finally:
             background.reset(token)
-        return []

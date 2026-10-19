@@ -158,6 +158,10 @@ class Source(HistorySource):
             if f.get("symbol") != r["cex_symbol"]:
                 raise ValueError("DEX_VIRTUAL_FEE_SCOPE_MISMATCH")
             return float(rate(f.get("taker"))), "ACCOUNT_READ_ONLY"
+        if r['cex_venue']=='mexc' and r.get('mode')=='paired':
+            # Published API futures taker schedule since 2026-06-01;
+            # an account-specific read must replace this before LIVE.
+            return .0008, 'MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER'
         m = market(self.public[r["cex_venue"]], r["cex_symbol"])
         return float(rate(m.get("taker"))), "PUBLIC_RATE_ASSUMPTION"
 

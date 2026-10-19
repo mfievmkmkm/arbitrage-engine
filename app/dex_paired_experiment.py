@@ -189,7 +189,7 @@ async def build(bundle, runtime, db_path, notify, allowed, notify_open=None):
         if selected == "kyberswap":
             source.provider = router
         source.price_providers["KyberSwap"] = router
-    source.entry_venues={'bybit'}
+    source.entry_venues={'bybit','mexc'}
     engine = Engine(db_path, source, capital=250, virtual=True, namespace='paired',
                     clock=source.clock, min_edge=.25, max_seconds=1200)
     await engine.init()

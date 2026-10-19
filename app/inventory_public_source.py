@@ -153,7 +153,7 @@ class Source:
             raise Invalid('INVENTORY_CROSSED_OR_EMPTY_BOOK')
         return plain(dict(venue=venue,asset=asset,ts=D(book['timestamp'])/1000,ask=book['asks'][0][0],bid=book['bids'][0][0],
             asks=book['asks'],bids=book['bids'],step=step(client,m),min_qty=nonnegative(minimum),min_notional=nonnegative(cost),
-            fee_rate=max(nonnegative(m['taker']),D('.002')),fee_evidence='CONSERVATIVE_QUOTE_FEE_PAPER_ASSUMPTION',source=book['data_source']))
+            fee_rate=nonnegative(m['taker']),fee_evidence='PUBLIC_MARKET_FEE_PAPER_ASSUMPTION',source=book['data_source']))
 
     async def snapshot(self,asset,buy,sell):
         a,b=await asyncio.gather(self.book(buy,asset),self.book(sell,asset))

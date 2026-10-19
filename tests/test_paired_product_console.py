@@ -21,7 +21,8 @@ def test_product_gate_preserves_legacy_blocks_and_requires_opt_in_and_account_fe
     assert main.operator_paper_reason('dex_paired', row) == 'PAIRED_PRODUCT_OPT_IN_REQUIRED'
     runtime.enabled['product_dex_paired'] = True
     assert main.operator_paper_reason('dex_paired', row) is None
-    assert main.operator_paper_reason('dex_paired', dict(row, cex_venue='mexc')) == 'PAIRED_PRODUCT_VENUE_DISABLED'
+    assert main.operator_paper_reason('dex_paired', dict(row, cex_venue='mexc', fee_source='MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER')) is None
+    assert main.operator_paper_reason('dex_paired', dict(row, cex_venue='mexc', fee_source='PUBLIC_RATE_ASSUMPTION')) == 'PAIRED_PRODUCT_ACCOUNT_FEE_REQUIRED'
     assert main.operator_paper_reason('dex_paired', dict(row, fee_source='PUBLIC_RATE_ASSUMPTION')) == 'PAIRED_PRODUCT_ACCOUNT_FEE_REQUIRED'
     assert main.operator_paper_reason('futures_futures', row) == 'RESEARCH_ONLY_USE_STRATEGY_LAB'
     controls.update(mode='manual')

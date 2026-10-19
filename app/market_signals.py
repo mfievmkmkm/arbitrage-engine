@@ -55,7 +55,7 @@ def discover():
 
 def priced(book, client, m):
     return dict(asks=book['asks'], bids=book['bids'], ts=D(book['timestamp'])/1000,
-                step=step(client,m), fee_rate=max(D(str(m['taker'])),D('.002')))
+                step=step(client,m), fee_rate=D(str(m['taker'])))
 
 
 def economics(a, b, budget=25, capital=250):
@@ -343,7 +343,7 @@ class Scanner:
                     e['reasons'].append(source+': не подтверждён свободный spot USDT для маршрута')
                 for venue in (buy,sell):
                     actual=account['accounts'].get(venue)
-                    if actual and D(actual['taker'])>max(D('.002'),D(self.clients[venue].markets[symbol]['taker'])):
+                    if actual and D(actual['taker'])>D(self.clients[venue].markets[symbol]['taker']):
                         e['reasons'].append(venue+': тарифная комиссия выше комиссии модели; пересчёт нужен до входа')
             e['reasons'].extend(account['reasons'])
         return e

@@ -8,7 +8,7 @@ def render(engine, enabled, controls, paused):
     active=enabled.get('product_dex_paired',False) and enabled.get('dex_paired',False)
     mode={'manual':'Вручную','auto':'Авто','observe':'Наблюдение'}[p['mode']]
     text=(f'📉 <b>Сжатие · PAPER</b>\n\n'
-          f'DEX BUY ↔ Bybit SHORT\n'
+          f'DEX BUY ↔ Bybit/MEXC SHORT\n'
           f'{mode} · входы {"включены" if active else "выключены"}\n\n'
           f'На сторону: <b>${p["notional_usd"]:g}</b>\n'
           f'NET от ${p["min_net_usd"]:g} · стоп ${p["stop_loss_usd"]:g}\n'
@@ -38,15 +38,15 @@ def scanner(engine,service,manual=True):
     from .dex_virtual_paper_source import route_key
     now=engine.clock()
     candidates=[c for c in getattr(service,'candidates',{}).values()
-                if c['position'].get('cex_venue')=='bybit'
-                and c['position'].get('fee_source')=='ACCOUNT_READ_ONLY'
+                if c['position'].get('cex_venue') in ('bybit','mexc')
+                and c['position'].get('fee_source') in ('ACCOUNT_READ_ONLY','MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER')
                 and 0<=now-c['position']['opened_at']<=30]
     candidates.sort(key=lambda c:c['position']['paired_policy']['partial_net'],reverse=True)
     scan=getattr(service,'scanner',None)
     duration=getattr(scan,'last_batch_seconds',None)
     health=getattr(scan,'provider_health',{}) if scan else {}
     provider=escape(health.get('provider', '0x'))
-    text='🔎 <b>Сканер · Bybit ↔ DEX</b>\n\n'
+    text='🔎 <b>Сканер · Bybit/MEXC ↔ DEX</b>\n\n'
     if scan:
         text+=f'Пар: {len(scan.catalog)} · потоков: {scan.workers}\n'
         text+=f'Попыток проверки: {scan.checked}\n'
@@ -63,7 +63,7 @@ def scanner(engine,service,manual=True):
     rows=[]
     for i,c in enumerate(candidates[:3],1):
         p=c['position'];key=hashlib.sha256(json.dumps(route_key(c['route'])).encode()).hexdigest()[:16]
-        text+=f'\n\n<b>{i}. {escape(p["symbol"])}</b>\nСценарный NET ${p["paired_policy"]["partial_net"]:+.3f}'
+        text+=f'\n\n<b>{i}. {escape(p["symbol"])} · {escape(p["cex_venue"].upper())}</b>\nСценарный NET ${p["paired_policy"]["partial_net"]:+.3f}'
         if manual:
             rows.append([button(f'Проверить {p["symbol"]}','dcard:'+key,'primary')])
     reasons=getattr(scan,'last_reasons',{}) if scan else {}

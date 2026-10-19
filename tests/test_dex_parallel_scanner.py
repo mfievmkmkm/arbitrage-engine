@@ -8,6 +8,17 @@ from test_dex_outage_regressions import paired_source_with_rate
 from app.dex_paired_experiment import PairedSource
 
 
+def test_mexc_paper_futures_fee_uses_published_api_schedule_without_key():
+    from app.dex_virtual_paper_source import Source
+    async def run():
+        source=Source.__new__(Source)
+        source.private={}
+        fee,evidence=await source.fee(dict(cex_venue='mexc',mode='paired'))
+        assert fee==.0008
+        assert evidence=='MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER'
+    asyncio.run(run())
+
+
 def test_parallel_read_only_checks_keep_equal_inventory_and_account_fee(monkeypatch):
     async def run():
         source, route, public, provider, now, calls = paired_source_with_rate()

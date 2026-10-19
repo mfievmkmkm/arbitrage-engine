@@ -324,9 +324,11 @@ def operator_paper_reason(strategy, row):
     if paired_paper and getattr(secondary,'inventory_paper',None) and strategy == 'dex_paired':
         if not strategy_runtime.enabled.get('product_dex_paired',False):
             return 'PAIRED_PRODUCT_OPT_IN_REQUIRED'
-        if row.get('cex_venue') != 'bybit':
+        if row.get('cex_venue') not in ('bybit','mexc'):
             return 'PAIRED_PRODUCT_VENUE_DISABLED'
-        if row.get('fee_source') != 'ACCOUNT_READ_ONLY':
+        if row.get('fee_source') != 'ACCOUNT_READ_ONLY' and not (
+            row.get('cex_venue')=='mexc' and row.get('fee_source')=='MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER'
+        ):
             return 'PAIRED_PRODUCT_ACCOUNT_FEE_REQUIRED'
     if paired_paper and getattr(secondary,'inventory_paper',None) and strategy != 'dex_paired':
         return 'RESEARCH_ONLY_USE_STRATEGY_LAB'
