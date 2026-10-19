@@ -111,6 +111,7 @@ class Scanner:
         self.position_card=None
         self.actionable_only=False
         self.remove_position_card=None
+        self._gate_logged=False
 
     async def init(self):
         await self.store.init()
@@ -469,7 +470,13 @@ class Scanner:
             if self.position_card:
                 await self.paper.sync_cards(self.position_card,self.remove_position_card)
             await self.paper.flush(self.notify,quiet_lifecycle=self.position_card is not None)
-            if not await self.store.enabled():
+            enabled=await self.store.enabled()
+            if not self._gate_logged:
+                import logging
+                logging.getLogger('arbitrage').info('PAPER_CEX_SPOT | enabled=%s | entry_enabled=%s | venues=%s',
+                                                    enabled,self.entry_enabled,self.names[:3])
+                self._gate_logged=True
+            if not enabled:
                 return []
             if not self.entry_enabled:
                 return []
