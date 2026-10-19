@@ -28,6 +28,15 @@ def test_equal_base_fees_and_total_capital():
         economics(book(100,quantity=.1),book(107))
 
 
+def test_public_spot_fee_is_not_raised_to_two_tenths_percent():
+    from app.market_signals import priced
+    client=NS(precisionMode=4)
+    market=dict(symbol='X/USDT',precision={'amount':.001},taker=.0005)
+    # The market rate remains a PAPER assumption until account-read evidence.
+    result=priced(dict(asks=[['1', '100']],bids=[['.99', '100']],timestamp=100000),client,market)
+    assert result['fee_rate']==D('.0005')
+
+
 def test_discovery_excludes_dex_and_includes_supported_spot_adapters():
     venues=discover()
     assert {'gate','mexc','bybit','binance','okx'}<=set(venues)

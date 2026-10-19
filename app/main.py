@@ -2825,7 +2825,7 @@ async def main():
             trade_venues={'gate' if v=='gateio' else v for v in configured() if v in spot_private_clients}
             feed=MarketSignals(config.db_path,market_signal_notification,
                                trade_venues=trade_venues,account_clients=spot_private_clients,
-                               shared_clients=getattr(secondary,'clients',{}))
+                               shared_clients=getattr(secondary,'clients',{}),paper_venues={'mexc'})
             await feed.init()
             feed.actionable_only=True
             async def position_card(p,text,message_id):

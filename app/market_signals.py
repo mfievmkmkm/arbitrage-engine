@@ -81,12 +81,13 @@ def economics(a, b, budget=25, capital=250):
 class Scanner:
     interval = 15
 
-    def __init__(self, path, notify, clock=time.time, venues=None,trade_venues=(),account_clients=None,shared_clients=None):
+    def __init__(self, path, notify, clock=time.time, venues=None,trade_venues=(),account_clients=None,shared_clients=None,paper_venues=()):
         self.clock, self.notify = clock, notify
         self.store = Store(path,clock)
         self.trade_venues = set(trade_venues)
+        self.paper_venues = self.trade_venues | set(paper_venues)
         self.shared_clients=dict(shared_clients or {})
-        self.names = list(dict.fromkeys((*sorted(self.trade_venues),*self.shared_clients,
+        self.names = list(dict.fromkeys((*sorted(self.paper_venues),*self.shared_clients,
                                          *(venues if venues is not None else discover()))))
         self.clients, self.health, self.tickers, self.currency_cache = dict(self.shared_clients), {}, {}, {}
         self.pool_lock=asyncio.Lock();self.max_active_venues=1
@@ -127,7 +128,11 @@ class Scanner:
                 if not any(spot(m) for m in client.markets.values()):
                     raise ValueError('Нет активного USDT-спота')
                 if len(self.loaded_order)>=self.max_active_venues:
-                    evict=next((v for v in self.loaded_order if v not in self.trade_venues),self.loaded_order[0])
+                    evict=next((v for v in self.loaded_order if v not in self.paper_venues),None)
+                    if evict is None:
+                        self.health[name]='Нет свободного слота для дополнительной биржи'
+                        await client.close()
+                        return
                     worker=self.workers.pop(evict,None)
                     if worker:
                         worker.cancel();await asyncio.gather(worker,return_exceptions=True)
@@ -182,7 +187,7 @@ class Scanner:
             self.health[name] = type(exc).__name__
             self.retry[name] = self.clock()+120
 
-    def candidates(self):
+    def candidates(self,min_spread=5):
         symbols = {}
         for venue,(ts,rows) in self.tickers.items():
             if not 0 <= self.clock()-ts <= 90:
@@ -196,7 +201,7 @@ class Scanner:
             for a,ta in buys:
                 for b,tb in sells:
                     gap=(tb['bid']/ta['ask']-1)*100
-                    if a!=b and math.isfinite(gap) and gap>=5:
+                    if a!=b and math.isfinite(gap) and gap>=min_spread:
                         out.append((gap,symbol,a,b))
         return sorted(out,reverse=True)
 
@@ -261,7 +266,7 @@ class Scanner:
             routes=await self.route(base,a,b)
         except Exception as exc:
             reasons.append(str(exc) if isinstance(exc,ValueError) else type(exc).__name__)
-        configured=a in self.trade_venues and b in self.trade_venues
+        configured=a in self.paper_venues and b in self.paper_venues
         funding=None;source=None
         if configured:
             source=self.paper.funding_source(a,D(control['budget']))
@@ -325,9 +330,14 @@ class Scanner:
             raise ValueError('Биржа сейчас недоступна')
         e=await self.evaluate(symbol,buy,sell)
         if e is None:
-            raise ValueError('Новые стаканы не подтверждают спред от 5%')
+            raise ValueError('Новые стаканы не подтверждают заданный минимальный спред')
         if read_accounts:
-            account=await self.accounts.check(symbol,buy,sell)
+            if all(self.accounts.client(v) is not None for v in (buy,sell)):
+                account=await self.accounts.check(symbol,buy,sell)
+            else:
+                # Public MEXC quotes are enough for PAPER, never for LIVE.
+                account=dict(accounts={},reasons=[],ts=self.clock(),execution_authorized=False,
+                             fee_evidence='PUBLIC_MARKET_RATE_PAPER_ASSUMPTION')
             e['accounts']=account
             # Read-only balances and account fee rates never grant execution.
             if e['transfer']:
@@ -339,7 +349,7 @@ class Scanner:
                         e['reasons'].append(source+': не удалось прочитать исходный spot счёт ('+type(exc).__name__+')')
                 row=account['accounts'].get(source)
                 need=p['funding_amount'] if source!=buy else p['spent']
-                if row is None or row['free']['USDT'] is None or D(row['free']['USDT'])<D(need):
+                if account['accounts'] and (row is None or row['free']['USDT'] is None or D(row['free']['USDT'])<D(need)):
                     e['reasons'].append(source+': не подтверждён свободный spot USDT для маршрута')
                 for venue in (buy,sell):
                     actual=account['accounts'].get(venue)
@@ -438,7 +448,7 @@ class Scanner:
                 self.loader=asyncio.create_task(self.load_loop())
             await self.flush()
             # Bounded book work; failed top routes don't starve others forever.
-            candidates=self.candidates()
+            candidates=self.candidates((await self.store.control())['min_spread'])
             if candidates:
                 offset=self.route_cursor%len(candidates)
                 candidates=candidates[offset:]+candidates[:offset]
@@ -487,8 +497,8 @@ class Scanner:
             text+=f'\n\nBybit ↔ DEX · проверок {dx.checked}\n'+escape(dx.last_reason[:150])
             e=getattr(dx,'last_economics',None)
             if e:text+=f'\n{escape(e["symbol"])} · спред {e["spread_pct"]:+.2f}% · стресс-NET ${e["stress_net"]:+.3f}'
-        elif len(self.trade_venues)<2:
-            text += '\n\nДля сделок нужны две подключённые spot-биржи.'
+        elif len(self.paper_venues)<2:
+            text += '\n\nДля PAPER-цикла нужны две spot-биржи.'
         return text
 
     async def close(self):
