@@ -275,7 +275,7 @@ class Source:
                      spread_pct=spread,net_after_reserve=net-D('.10'),stress_net=stress,reasons=reasons,
                      preview_buy=entry,preview_base=base,
                      costs=dict(gas=gas,funding=funding,base=base,returned=returned),network_evidence=networks,
-                     delay_evidence='UNMEASURED_900S_PER_TRANSFER',gas_evidence='200K_TRANSFER_100K_APPROVAL_PAPER_UNITS'))
+                     delay_evidence='UNMEASURED_ETH_120S_BSC_8S_PLUS_BYBIT_300S_PER_TRANSFER_PAPER',gas_evidence='200K_TRANSFER_100K_APPROVAL_PAPER_UNITS'))
         return dict(symbol=symbol,buy=buy,sell=sell,ts=min(float(entry['ts']),float(sale['ts'])),
                     spread_pct=str(spread),reasons=reasons,transfer=p,trade_configured=True,mode=control['mode'])
 

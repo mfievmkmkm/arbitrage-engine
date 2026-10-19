@@ -3,7 +3,7 @@ import copy
 from types import SimpleNamespace as NS
 import pytest
 from app.market_signals import Scanner
-from app.dex_transfer_paper import Service
+from app.dex_transfer_paper import Service, transfer_delay, position_delay
 from app.dex_transfer_source import KIND
 from app.strategy_math import D
 
@@ -101,6 +101,30 @@ def test_both_directions_conserve_one_account_and_use_later_sale(tmp_path,direct
         assert len([f for f in p['fills'] if f['stage']=='BUY'])==1
         assert D(p['sold'])<=D(entry_qty)
         assert p['live_allowed'] is False
+    asyncio.run(go())
+
+
+def test_chain_specific_paper_delay_does_not_credit_before_due(tmp_path):
+    assert transfer_delay(1)==420  # 120 sec network + 300 sec exchange assumption
+    assert transfer_delay(56)==308  # 8 sec network + 300 sec exchange assumption
+    assert position_delay({'plan':{'route':{'chain_id':56}}})==900
+    with pytest.raises(ValueError,match='DELAY_CHAIN_UNSUPPORTED'):transfer_delay(137)
+    async def go():
+        feed,s,c,prices,now=await setup(tmp_path)
+        c.bid=D('.999');c.ask=D(1);prices.token_price=D('1.08')
+        e=await s.review('X/USDT','bybit','dex56')
+        await feed.paper.open(dict(signal=e,transfer=e['transfer']))
+        await next_stage(feed,now)  # buy
+        await next_stage(feed,now)  # submit modeled transfer
+        p=feed.paper.state['position']
+        assert p['status']=='BASE_IN_TRANSIT' and p['due']==now[0]+308
+        assert p['delay_model']['source']=='OPERATOR_FAST_PAPER_ASSUMPTION_UNMEASURED'
+        now[0]=p['due']-1
+        await feed.paper.monitor(feed)
+        assert feed.paper.state['position']['status']=='BASE_IN_TRANSIT'
+        now[0]=p['due']
+        await feed.paper.monitor(feed)
+        assert feed.paper.state['position']['status']=='SELL_PENDING'
     asyncio.run(go())
 
 

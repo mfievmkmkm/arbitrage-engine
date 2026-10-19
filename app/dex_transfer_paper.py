@@ -7,7 +7,18 @@ from .dex_transfer_source import Source, KIND, dex
 from .strategy_math import D, ZERO, plain
 from .inventory_paper import day
 
-DELAY=900  # explicit assumption, not observed confirmations
+CHAIN_SECONDS={1:120,56:8}  # optimistic PAPER network scenarios, not observed confirmations
+BYBIT_PROCESSING_SECONDS=300  # unmeasured exchange processing scenario
+
+
+def transfer_delay(chain_id):
+    if chain_id not in CHAIN_SECONDS:raise ValueError('DEX_TRANSFER_DELAY_CHAIN_UNSUPPORTED')
+    return CHAIN_SECONDS[chain_id]+BYBIT_PROCESSING_SECONDS
+
+
+def position_delay(position):
+    # A position opened before this PAPER revision keeps its 900s schedule.
+    return (position.get('delay_model') or {}).get('per_transfer_seconds',900)
 
 
 class Service(Source):
@@ -73,11 +84,15 @@ class Service(Source):
                    gas_reserved=str(reserve),gas_used='0',credits_earlier='0',funding_fee='0',
                    remaining='0',sold='0',proceeds='0',sell_fees='0',dust='0',fills=[],
                    live_allowed=False,execution_verified=False)
+            p['delay_model']=dict(network_seconds=CHAIN_SECONDS[plan['route']['chain_id']],
+                                  bybit_processing_seconds=BYBIT_PROCESSING_SECONDS,
+                                  per_transfer_seconds=transfer_delay(plan['route']['chain_id']),
+                                  source='OPERATOR_FAST_PAPER_ASSUMPTION_UNMEASURED')
             state['balances'][src]=str(D(state['balances'][src])-total)
             if src!=e['buy']:
                 t=plan['costs']['funding']
                 self.charge(state,p,t['gas']);self.credit(state,p,src,t['dust'])
-                p.update(status='USDT_TO_BUY_IN_TRANSIT',due=self.clock()+DELAY,
+                p.update(status='USDT_TO_BUY_IN_TRANSIT',due=self.clock()+position_delay(p),
                          purchase_budget=t['amount'],funding_fee=t['fee'],funding_transfer=t)
             state['position']=p;state['cash']=self.paper.available(state);state['last_error']=''
             await self.paper.save(state,'DEX_TRANSFER_RESERVATION',p)
@@ -117,7 +132,7 @@ class Service(Source):
             elif p['status']=='BASE_TRANSFER_PENDING':
                 t=await self.transfer(r,r['base'],s['buy'],s['sell'],p['remaining'],networks)
                 self.charge(state,p,t['gas'])
-                p.update(status='BASE_IN_TRANSIT',due=self.clock()+DELAY,
+                p.update(status='BASE_IN_TRANSIT',due=self.clock()+position_delay(p),
                          remaining=t['amount'],base_transfer=t,dust=str(D(p['dust'])+D(t['dust'])))
             elif p['status']=='BASE_IN_TRANSIT':
                 if s['sell']=='bybit':p['remaining']=str(self.received(networks[r['base']],p['base_transfer']['gross']))
@@ -142,7 +157,7 @@ class Service(Source):
                 else:
                     t=await self.transfer(r,'USDT',s['sell'],p['source'],p['proceeds'],networks)
                     self.charge(state,p,t['gas']);self.credit(state,p,s['sell'],t['dust'])
-                    p.update(status='QUOTE_IN_TRANSIT',due=self.clock()+DELAY,return_credit=t['amount'],return_transfer=t)
+                    p.update(status='QUOTE_IN_TRANSIT',due=self.clock()+position_delay(p),return_credit=t['amount'],return_transfer=t)
             elif p['status']=='QUOTE_IN_TRANSIT':
                 if p['source']=='bybit':p['return_credit']=str(self.received(networks['USDT'],p['return_transfer']['gross']))
                 self.finish(state,p,p['return_credit'])
