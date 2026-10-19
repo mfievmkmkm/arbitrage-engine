@@ -222,7 +222,7 @@ def test_route_rotation_survives_cooldown_bucket_and_old_spot_is_not_resent(tmp_
         async def notify(text):sent.append(text)
         s=Scanner(tmp_path/'db',notify,clock=lambda:now[0],venues=[])
         await s.init()
-        s.candidates=lambda:[(10-i,'X'+str(i)+'/USDT','a','b') for i in range(50)]
+        s.candidates=lambda min_spread=5:[(10-i,'X'+str(i)+'/USDT','a','b') for i in range(50)]
         async def evaluate(symbol,*args):seen.append(symbol);return None
         s.evaluate=evaluate
         await s.cycle()

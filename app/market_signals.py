@@ -518,7 +518,7 @@ class Scanner:
             e=getattr(dx,'last_economics',None)
             if e:text+=f'\n{escape(e["symbol"])} · спред {e["spread_pct"]:+.2f}% · стресс-NET ${e["stress_net"]:+.3f}'
         elif len(self.paper_venues)<2:
-            text += '\n\nДля PAPER-цикла нужны две spot-биржи.'
+            text += '\n\nДля PAPER-цикла нужны две подключённые spot-биржи.'
         return text
 
     async def close(self):
