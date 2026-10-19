@@ -338,7 +338,8 @@ class Scanner:
         e=dict(symbol=symbol,buy=a,sell=b,ts=float(min(aa['ts'],bb['ts'])),
                spread_pct=str(raw_spread),reasons=list(dict.fromkeys(reasons)),
                  transfer=transfer,mode=control['mode'],trade_configured=configured,
-                 fee_evidence={a:aa['fee_evidence'],b:bb['fee_evidence']},
+                 fee_evidence={a:aa.get('fee_evidence','PUBLIC_MARKET_RATE_PAPER_ASSUMPTION'),
+                               b:bb.get('fee_evidence','PUBLIC_MARKET_RATE_PAPER_ASSUMPTION')},
                  fee_rates={a:str(aa['fee_rate']),b:str(bb['fee_rate'])})
         return e
 
