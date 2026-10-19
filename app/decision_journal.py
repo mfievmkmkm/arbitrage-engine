@@ -133,8 +133,18 @@ class Journal:
         for ts,stage,status,reason,payload in reversed(checks):
             data=json.loads(payload)
             facts={k:v for k,v in data.items() if k in ('observed','threshold','unit','partial_net_usd','costs_usd','raw_edge_usd','immediate_net_usd','reverse_loss_limit_usd','error_type')}
-            out.append(escape(f'{stage} · {status} · {reason}')+ ('\n'+escape(json.dumps(facts,ensure_ascii=False)) if facts else ''))
-        return '\n\n'.join(out)[:3800]
+            numeric=('spread_pct','net','stress_net','net_after_reserve','budget','spent','partial_net','raw_edge','costs','funding_reserve','target_usd','stop_usd','min_spread','max_spread','min_net','stress_drop','gas')
+            facts.update({k:v for k,v in data.items() if k in numeric})
+            for group in ('economics','thresholds','plan'):
+                values=data.get(group)
+                if isinstance(values,dict):
+                    chosen={k:v for k,v in values.items() if k in numeric and isinstance(v,(str,int,float,bool))}
+                    if chosen:facts[group]=chosen
+            # Bound plain facts before escaping; never truncate an HTML entity.
+            block=escape(f'{stage} · {status} · {reason}')+ ('\n'+escape(json.dumps(facts,ensure_ascii=False)[:700]) if facts else '')
+            if len('\n\n'.join(out))+len(block)+2>3900:break
+            out.append(block)
+        return '\n\n'.join(out)
 
     async def no_trade_reports(self,hours=1):
         s=await self.snapshot(hours)

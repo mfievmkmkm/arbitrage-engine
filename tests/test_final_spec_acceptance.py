@@ -319,3 +319,16 @@ def test_staged_hedge_does_not_reset_slippage_after_adverse_move(tmp_path):
         assert len(closed)==1 and closed[0]['exit_reason']=='UNHEDGED_UNWIND'
         assert not any(f['stage']=='CEX_SHORT' for f in closed[0]['execution_events'])
     asyncio.run(run())
+
+
+def test_diagnostics_shows_transfer_actual_values_and_thresholds(tmp_path):
+    async def run():
+        j=Journal(tmp_path/'facts.sqlite',lambda:1000);await j.init()
+        ident=await j.start('B','TEST/USDT','dex56','mexc','paper_auto')
+        await j.check(ident,'COSTS','FAIL','DEX_TRANSFER_ECONOMICS',dict(
+            economics=dict(spread_pct=1.8,net=.13,stress_net=-.14),
+            thresholds=dict(min_spread=2,min_net=.25,max_spread=10)))
+        await j.finish(ident,'REJECTED','Спред вне заданных границ')
+        text=await j.trace(ident)
+        for value in ('1.8','0.13','-0.14','min_spread','0.25'):assert value in text
+    asyncio.run(run())
