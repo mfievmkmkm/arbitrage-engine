@@ -2823,9 +2823,14 @@ async def main():
                                        disable_web_page_preview=True,reply_markup=markup)
             from .credentials import configured
             trade_venues={'gate' if v=='gateio' else v for v in configured() if v in spot_private_clients}
+            # The secondary bundle reuses futures market clients. MEXC needs its
+            # own spot adapter; reuse the already loaded Bybit spot account client.
+            spot_shared={v:c for v,c in getattr(secondary,'clients',{}).items() if v!='mexc'}
+            if 'bybit' in spot_private_clients:
+                spot_shared['bybit']=spot_private_clients['bybit']
             feed=MarketSignals(config.db_path,market_signal_notification,
                                trade_venues=trade_venues,account_clients=spot_private_clients,
-                               shared_clients=getattr(secondary,'clients',{}),paper_venues={'mexc'})
+                               shared_clients=spot_shared,paper_venues={'mexc'})
             await feed.init()
             feed.actionable_only=True
             async def position_card(p,text,message_id):
