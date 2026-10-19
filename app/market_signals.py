@@ -106,6 +106,7 @@ class Scanner:
         self.capital = 250
         from .signal_account_check import Accounts
         self.accounts=Accounts(account_clients or {},clock)
+        self.account_fee_cache={}
         self.paper=TransferPaper(self.store,clock)
         self.position_card=None
         self.actionable_only=False
@@ -209,10 +210,27 @@ class Scanner:
         c=self.clients[venue]; m=c.markets[symbol]
         if m.get('taker') is None or not 0 <= D(m['taker']) < ONE:
             raise ValueError('Неизвестна торговая комиссия')
+        account=self.accounts.client(venue)
+        if venue in self.trade_venues and account is not None:
+            cached=self.account_fee_cache.get((venue,symbol))
+            if not cached or not 0<=self.clock()-cached[0]<30:
+                if account.has.get('fetchTradingFee') is not True:
+                    raise ValueError('Нет API чтения персональной spot-комиссии')
+                fee=await asyncio.wait_for(account.fetch_trading_fee(symbol),8)
+                if fee.get('symbol')!=symbol or fee.get('taker') is None or not ZERO<=D(fee['taker'])<ONE:
+                    raise ValueError('Персональная spot-комиссия не подтверждена')
+                cached=(self.clock(),D(fee['taker']))
+                self.account_fee_cache[(venue,symbol)]=cached
+            fee_rate,evidence=cached[1],'ACCOUNT_READ_ONLY'
+        else:
+            fee_rate,evidence=D(m['taker']),'PUBLIC_MARKET_RATE_PAPER_ASSUMPTION'
         async with self.gate:
             start=self.clock(); raw=await asyncio.wait_for(c.fetch_order_book(symbol),8)
             book=normalize(raw,symbol,start,self.clock(),3)
-        return priced(book,c,m)
+        result=priced(book,c,m)
+        result['fee_rate']=fee_rate
+        result['fee_evidence']=evidence
+        return result
 
     async def currencies(self,venue):
         old=self.currency_cache.get(venue)
@@ -319,7 +337,9 @@ class Scanner:
                 reasons.append('USDT до биржи покупки: '+str(exc))
         e=dict(symbol=symbol,buy=a,sell=b,ts=float(min(aa['ts'],bb['ts'])),
                spread_pct=str(raw_spread),reasons=list(dict.fromkeys(reasons)),
-                 transfer=transfer,mode=control['mode'],trade_configured=configured)
+                 transfer=transfer,mode=control['mode'],trade_configured=configured,
+                 fee_evidence={a:aa['fee_evidence'],b:bb['fee_evidence']},
+                 fee_rates={a:str(aa['fee_rate']),b:str(bb['fee_rate'])})
         return e
 
     async def review(self,symbol,buy,sell,read_accounts=False):
@@ -342,7 +362,7 @@ class Scanner:
             # Read-only balances and account fee rates never grant execution.
             if e['transfer']:
                 p=e['transfer'];source=p.get('funding_source',buy)
-                if source not in account['accounts'] and source!=buy:
+                if source not in account['accounts'] and source!=buy and 'fee_evidence' not in account:
                     try:
                         account['accounts'][source]=await self.accounts.read(source,symbol)
                     except Exception as exc:
@@ -353,7 +373,7 @@ class Scanner:
                     e['reasons'].append(source+': не подтверждён свободный spot USDT для маршрута')
                 for venue in (buy,sell):
                     actual=account['accounts'].get(venue)
-                    if actual and D(actual['taker'])>D(self.clients[venue].markets[symbol]['taker']):
+                    if actual and D(actual['taker'])>D(e['fee_rates'][venue]):
                         e['reasons'].append(venue+': тарифная комиссия выше комиссии модели; пересчёт нужен до входа')
             e['reasons'].extend(account['reasons'])
         return e
