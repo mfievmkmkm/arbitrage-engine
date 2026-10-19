@@ -153,6 +153,10 @@ class Scanner:
             except Exception as exc:
                 self.health[name] = type(exc).__name__ if not isinstance(exc,ValueError) else str(exc)
                 self.retry[name] = self.clock()+900
+                if name=='mexc':
+                    import logging
+                    logging.getLogger('arbitrage').warning('MEXC_SPOT_PAPER | load_failed=%s',
+                                                          type(exc).__name__)
                 await client.close()
 
     async def load_loop(self):
