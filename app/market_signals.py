@@ -165,7 +165,13 @@ class Scanner:
             if self.names:
                 name=self.names[self.load_cursor%len(self.names)]
                 self.load_cursor+=1
+                if self.load_cursor<=2:
+                    import logging
+                    logging.getLogger('arbitrage').info('PAPER_CEX_SPOT_LOAD | venue=%s | phase=start',name)
                 await self.load(name)
+                if self.load_cursor<=2:
+                    logging.getLogger('arbitrage').info('PAPER_CEX_SPOT_LOAD | venue=%s | status=%s',
+                                                        name,self.health.get(name,'shared'))
             await asyncio.sleep(20)
 
     async def ticker_loop(self,name):
