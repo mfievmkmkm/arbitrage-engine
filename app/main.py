@@ -216,7 +216,7 @@ async def numeric_prompt(q, kind, key):
     from .trading_controls_view import LABELS
     from .transfer_console import FIELDS
     transfer_limits={'budget':(5,100),'min_spread':(2,20),'max_spread':(2,30),
-                     'min_net':(.25,5),'stress_drop':(1,10),'dex_deposit_fee_pct':(0,1),'daily_loss':(.1,1.25),'total_loss':(.1,2.5)}
+                     'min_net':(.25,5),'stress_drop':(1,10),'dex_deposit_fee_pct':(0,1),'mexc_deposit_fee_pct':(0,1),'daily_loss':(.1,1.25),'total_loss':(.1,2.5)}
     limits=transfer_limits if kind=='sig' else LIMITS
     if key not in limits:raise ValueError('Неизвестный параметр')
     low,high=limits[key];label=FIELDS[key][0] if kind=='sig' else LABELS[key]
@@ -244,7 +244,7 @@ async def numeric_setting_message(m: Message):
             numeric_pending.pop(m.from_user.id,None)
             raise ValueError('Время ввода истекло. Открой параметр заново')
         from .numeric_settings import parse
-        value=parse(m.text,integer=key=='max_positions')
+        value=parse(m.text,integer=key in ('max_positions','slippage_bps'))
         if kind=='sig':
             feed=getattr(secondary,'market_signals',None)
             if feed is None:raise ValueError('Модуль недоступен')
@@ -1628,19 +1628,42 @@ async def paired_position_action(q: CallbackQuery):
     if engine is None or sync is None:
         return await q.answer('PAPER-контур недоступен',show_alert=True)
     try:
-        _,ident,action=q.data.split(':')
-        if action not in ('close','refresh') or not ident.isdecimal():
+        parts=q.data.split(':');_,ident,action=parts[:3]
+        if action not in ('close','refresh','view','policy','history','auto','set') or not ident.isdecimal():
             raise ValueError('Недопустимое действие')
         if str(ident) not in engine.positions:
             await sync()
             return await q.answer('Сделка завершена · результат в дневнике',show_alert=True)
         if action=='close':
             await engine.request_exit(ident)
+        if not hasattr(engine,'card_views'):engine.card_views={}
+        if action in ('policy','history'):engine.card_views[str(ident)]=action
+        elif action=='view':engine.card_views.pop(str(ident),None)
+        elif action=='auto':
+            p=engine.positions[str(ident)]
+            await engine.update_management(ident,auto_profit=not p.get('operator_auto_profit',True))
+        elif action=='set':
+            if len(parts)!=5:raise ValueError('Некорректный параметр')
+            await engine.update_management(ident,**{parts[3]:float(parts[4])})
         await q.answer('Выход запрошен' if action=='close' else 'Обновляю')
-        await engine.cycle(entry_enabled=False)
+        if action in ('close','refresh'):await engine.cycle(entry_enabled=False)
         await sync()
     except ValueError as exc:
         await q.answer(str(exc)[:190],show_alert=True)
+
+
+@dp.callback_query(F.data.startswith('audit:'))
+async def decision_diagnostics_page(q: CallbackQuery):
+    if not allowed(q.from_user.id):return await q.answer('Нет доступа',show_alert=True)
+    from .decision_journal import Journal
+    from .decision_diagnostics import render
+    journal=Journal(config.db_path)
+    try:
+        text,keyboard=await render(journal,secondary,q.data,trading_controls,scanner.paused)
+    except ValueError as exc:
+        return await q.answer(str(exc)[:190],show_alert=True)
+    await q.answer()
+    await safe_edit(q.message,text,keyboard)
 
 
 @dp.callback_query(F.data.startswith('pair:'))
@@ -1685,7 +1708,7 @@ async def paired_control_action(q: CallbackQuery):
                 await diary.record_decisions([dict(ts=time.time(),strategy='dex_paired',symbol='*',
                     buy='',sell='',action='CONFIG_CHANGE',reason='PAPER_ENTRY_TOGGLE',
                     enabled=strategy_runtime.enabled['dex_paired'])])
-            elif q.data in ('pair:mode:manual','pair:mode:auto'):
+            elif q.data in ('pair:mode:observe','pair:mode:manual','pair:mode:auto'):
                 trading_controls.update(mode=q.data.rsplit(':',1)[1])
                 apply_operator_paper_limits()
             else:
@@ -2806,6 +2829,10 @@ async def main():
                                   inventory_notification,lambda:scanner.paused,venue_controller.get,
                                   network_clients=private_clients)
         if paired_engine is not None and getattr(secondary,'route_discovery',None) is not None:
+            paired_engine.source.operator_profile=lambda:trading_controls.profile('paper')
+            paired_engine.entry_block_reason=lambda p:operator_paper_reason('dex_paired',p)
+            if paired_engine.entry_executor:
+                paired_engine.entry_executor.allow_start=lambda:not scanner.paused and strategy_runtime.enabled.get('product_dex_paired',False) and strategy_runtime.enabled.get('dex_paired',False)
             from .paired_signal_intake import Intake
             secondary.paired_signal_intake=Intake(config.db_path,secondary.route_discovery,
                                                   secondary.runtime.services['dex_paired'])
@@ -2831,7 +2858,12 @@ async def main():
             feed=MarketSignals(config.db_path,market_signal_notification,
                                trade_venues=trade_venues,account_clients=spot_private_clients,
                                shared_clients=spot_shared,paper_venues={'mexc'})
+            feed.venue_allowed=lambda venue,kind:not scanner.paused and venue_controller.get(venue)[kind]
             await feed.init()
+            recovered_decisions=await feed.journal.recover_interrupted()
+            log.info("DECISION_JOURNAL_READY strategies=A,B live=DISABLED recovered=%s",recovered_decisions)
+            from .decision_diagnostics import Service as DiagnosticsService
+            secondary.runtime.add('decision_diagnostics',DiagnosticsService(feed.journal))
             feed.actionable_only=True
             async def position_card(p,text,message_id):
                 markup=transfer_position_keyboard(p)
@@ -2854,8 +2886,9 @@ async def main():
             feed.remove_position_card=remove_position_card
             feed.channel_review=Reviewer(secondary)
             if getattr(secondary,'dex_paired',None) and getattr(secondary,'kyber_provider',None):
-                from .dex_transfer_paper import Service as DexTransfer
+                from .dex_transfer_router import Router as DexTransfer
                 dex_transfer=DexTransfer(feed,secondary.runtime.services['dex_paired'])
+                await dex_transfer.init()
                 dex_transfer.paused=lambda:scanner.paused
                 secondary.runtime.add('dex_transfer',dex_transfer)
             secondary.market_signals=feed

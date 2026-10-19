@@ -99,7 +99,9 @@ class Scanner:
         self.route_cursor = 0
         self.gate = asyncio.Semaphore(4)
         self.entry_enabled = True
+        self.venue_allowed=lambda venue,kind:True
         self.channel_review = None
+        self.channel_priority={}
         self.last_scan = 0
         self.lock = asyncio.Lock()
         self.budget = min(100, max(5, float(os.getenv('MARKET_SIGNALS_NOTIONAL','25'))))
@@ -107,13 +109,17 @@ class Scanner:
         from .signal_account_check import Accounts
         self.accounts=Accounts(account_clients or {},clock)
         self.account_fee_cache={}
+        from .decision_journal import Journal
+        self.journal=Journal(path,clock)
         self.paper=TransferPaper(self.store,clock)
+        self.paper.entry_guard=lambda buy,sell:self.entry_enabled and all(self.venue_allowed(v,'paper') for v in (buy,sell) if not v.startswith('dex'))
         self.position_card=None
         self.actionable_only=False
         self.remove_position_card=None
         self._gate_logged=False
 
     async def init(self):
+        await self.journal.init()
         await self.store.init()
         await self.paper.init()
         for name in self.shared_clients:
@@ -206,6 +212,7 @@ class Scanner:
     def candidates(self,min_spread=5):
         symbols = {}
         for venue,(ts,rows) in self.tickers.items():
+            if not self.venue_allowed(venue,'scan'):continue
             if not 0 <= self.clock()-ts <= 90:
                 continue
             for symbol,t in rows.items():
@@ -219,7 +226,8 @@ class Scanner:
                     gap=(tb['bid']/ta['ask']-1)*100
                     if a!=b and math.isfinite(gap) and gap>=min_spread:
                         out.append((gap,symbol,a,b))
-        return sorted(out,reverse=True)
+        priority={s for s,(deadline,_) in self.channel_priority.items() if 0<=deadline-self.clock()<=90}
+        return sorted(out,key=lambda row:(row[1] in priority,row[0]),reverse=True)
 
     async def book(self,venue,symbol):
         c=self.clients[venue]; m=c.markets[symbol]
@@ -251,13 +259,24 @@ class Scanner:
         old=self.currency_cache.get(venue)
         if old and 0<=self.clock()-old[0]<=240:
             return old[1]
-        c=self.clients[venue]
+        # Network metadata can require a signed read even when books are public.
+        # Prefer the configured spot account reader, never infer transferability
+        # from a ticker or from a futures market map.
+        account=self.accounts.client(venue)
+        c=account or self.clients[venue]
         if c.has.get('fetchCurrencies') is not True:
-            raise ValueError('Биржа не предоставляет статус сетей публично')
-        async with self.gate:
-            rows=await asyncio.wait_for(c.fetch_currencies(),10)
+            raise ValueError(f'{venue.upper()}: API чтения сетей недоступен')
+        try:
+            async with self.gate:
+                rows=await asyncio.wait_for(c.fetch_currencies(),10)
+        except Exception:
+            if venue=='mexc' and account is None:
+                raise ValueError('MEXC: для сетей и комиссий вывода нужен ключ с правом чтения') from None
+            raise
         if not isinstance(rows,dict) or not rows:
-            raise ValueError('Нет публичных данных сетей')
+            if venue=='mexc' and account is None:
+                raise ValueError('MEXC: для сетей и комиссий вывода нужен ключ с правом чтения')
+            raise ValueError(f'{venue.upper()}: API не вернул данные сетей')
         rows=enrich(rows,None)
         self.currency_cache[venue]=(self.clock(),rows)
         return rows
@@ -291,12 +310,41 @@ class Scanner:
         return source.network('USDT',src,dst)
 
     async def evaluate(self,symbol,a,b):
+        from .decision_journal import failure_stage
+        control=await self.store.control()
+        mode='observe' if control['mode']=='observe' else 'paper_'+control['mode']
+        context=self.channel_priority.get(symbol)
+        origin='channel' if context and 0<=context[0]-self.clock()<=90 else 'scanner'
+        trace=await self.journal.start('B',symbol,a,b,mode,origin,evidence={'settings':control,'kind':'CEX_SPOT_TRANSFER'})
+        try:
+            result=await self._evaluate(symbol,a,b,trace)
+            if result is None:
+                await self.journal.finish(trace,'REJECTED','SPREAD_BELOW_MINIMUM')
+                return None
+            result['trace_id']=trace
+            if result.get('transfer'):result['transfer']['trace_id']=trace
+            for reason in result['reasons']:
+                await self.journal.check(trace,failure_stage(reason),'FAIL',reason)
+            await self.journal.finish(trace,'REJECTED' if result['reasons'] else ('OBSERVED' if mode=='observe' else 'READY'),
+                                      result['reasons'][0] if result['reasons'] else 'PREFLIGHT_OK')
+            return result
+        except asyncio.CancelledError:
+            await self.journal.finish(trace,'REJECTED','CHECK_CANCELLED',{'stage':'preflight'})
+            raise
+        except Exception as exc:
+            reason=str(exc) if isinstance(exc,ValueError) else type(exc).__name__
+            await self.journal.finish(trace,'REJECTED',reason,{'error_type':type(exc).__name__})
+            raise
+
+    async def _evaluate(self,symbol,a,b,trace):
         base=symbol.split('/')[0]
         # Metadata requests happen BEFORE fresh books.
         reasons=[];routes=None
         control=await self.store.control()
         try:
             routes=await self.route(base,a,b)
+            await self.journal.check(trace,'IDENTITY','PASS','EXACT_NETWORK_ASSET_MATCH')
+            await self.journal.check(trace,'NETWORK','INFO','BASE_AND_RETURN_ROUTES',dict(base=routes[0],quote=routes[1]))
         except Exception as exc:
             reasons.append(str(exc) if isinstance(exc,ValueError) else type(exc).__name__)
         configured=a in self.paper_venues and b in self.paper_venues
@@ -314,7 +362,10 @@ class Scanner:
         if abs(aa['ts']-bb['ts'])>1 or any(not ZERO<=D(self.clock())-x['ts']<=3 for x in (aa,bb)):
             raise ValueError('Стаканы устарели или не синхронизированы')
         raw_spread=(D(bb['bids'][0][0])/D(aa['asks'][0][0])-ONE)*100
+        await self.journal.check(trace,'MATCH','PASS','BOTH_SPOT_BOOKS_AVAILABLE')
+        await self.journal.check(trace,'QUOTES','PASS','FRESH_EXECUTABLE_BOOKS',dict(buy=aa,sell=bb))
         if raw_spread<D(control['min_spread']):
+            await self.journal.check(trace,'COSTS','FAIL','MIN_SPREAD_CHECK',dict(observed=str(raw_spread),threshold=control['min_spread'],unit='percent'))
             return None
         transfer=None
         if routes:
@@ -350,12 +401,23 @@ class Scanner:
                         reasons.append('Предварительный USDT-перевод уничтожает минимальный NET')
             except ValueError as exc:
                 reasons.append('USDT до биржи покупки: '+str(exc))
-        e=dict(symbol=symbol,buy=a,sell=b,ts=float(min(aa['ts'],bb['ts'])),
+        if not all(self.venue_allowed(v,'paper') for v in (a,b)):reasons.append('Площадка выключена для новых PAPER-входов')
+        e=dict(symbol=symbol,buy=a,sell=b,ts=float(min(aa['ts'],bb['ts'])),settings_revision=control['revision'],
                spread_pct=str(raw_spread),reasons=list(dict.fromkeys(reasons)),
                  transfer=transfer,mode=control['mode'],trade_configured=configured,
                  fee_evidence={a:aa.get('fee_evidence','PUBLIC_MARKET_RATE_PAPER_ASSUMPTION'),
                                b:bb.get('fee_evidence','PUBLIC_MARKET_RATE_PAPER_ASSUMPTION')},
                  fee_rates={a:str(aa['fee_rate']),b:str(bb['fee_rate'])})
+        if transfer:
+            await self.journal.check(trace,'COSTS','FAIL' if transfer['reasons'] else 'PASS','TRANSFER_NET_CHECK',
+                                     dict(plan=transfer,threshold=control['min_net'],unit='USD'))
+        if routes and not any('сет' in r.lower() or 'USDT до' in r for r in reasons):
+            await self.journal.check(trace,'NETWORK','PASS','ALL_REQUIRED_TRANSFER_ROUTES',dict(funding=funding))
+        if not configured:
+            reasons.append('PAPER: площадки не подключены к исполнению этой стратегии')
+        if not reasons:
+            await self.journal.check(trace,'RISK','PASS','PREFLIGHT_RISK_CLEAR',dict(funding_source=source,settings=control))
+        e['reasons']=list(dict.fromkeys(reasons))
         return e
 
     async def review(self,symbol,buy,sell,read_accounts=False):
@@ -419,6 +481,20 @@ class Scanner:
 
     async def queue_channel(self,post):
         await self.store.enqueue('channel:'+str(post['id']),'channel',post)
+        from .dex_signal_focus import parse_signal
+        trace=await self.journal.start('B','channel:'+str(post['id']),'spot','spot','observe','channel',{'message_id':post['id']})
+        if 'Aligned' in post['text']:
+            await self.journal.finish(trace,'REJECTED','ALIGNED_IS_ANALYSIS_REPORT');return
+        if not 0<=self.clock()-post['timestamp']<=90:
+            await self.journal.finish(trace,'REJECTED','CHANNEL_SIGNAL_EXPIRED');return
+        try:signal=parse_signal(post['text'])
+        except ValueError:
+            await self.journal.finish(trace,'REJECTED','CHANNEL_TOKEN_OR_CHAIN_UNPARSEABLE');return
+        self.channel_priority={s:v for s,v in self.channel_priority.items() if v[0]>=self.clock()}
+        self.channel_priority[signal['base']+'/USDT']=(post['timestamp']+90,post['id'])
+        handler=getattr(self,'dex_transfer',None)
+        count=handler.prioritize_signal(signal,post) if handler else 0
+        await self.journal.finish(trace,'PRIORITIZED','SPOT_RECHECK_QUEUED',{'dex_directions':count})
 
     async def assess_channel(self,post):
         from .dex_signal_focus import parse_signal
@@ -464,6 +540,8 @@ class Scanner:
                     or not item['payload'].get('trade_configured')):
                 await self.store.delivered(item['key'])
                 continue
+            if item['kind']=='spot' and item['payload'].get('mode')=='observe':
+                await self.store.delivered(item['key']);continue
             delivery=result
             if item['kind']=='channel' and self.clock()-item['ts']>90:
                 delivery='⚠ Задержанная доставка. Проверка ниже устарела; НЕ использовать для текущего входа.\n\n'+delivery
@@ -506,6 +584,8 @@ class Scanner:
                     e=await self.evaluate(symbol,a,b)
                 except Exception as exc:
                     self.health['route:'+a+':'+b]=type(exc).__name__+': '+str(exc)[:100]
+                    await self.store.enqueue(key,'miss',dict(reason=str(exc) if isinstance(exc,ValueError) else type(exc).__name__,symbol=symbol,buy=a,sell=b))
+                    await self.store.delivered(key)
                     e=None
                 # Persist misses too, so one unsupported route cannot starve
                 # the same lower-ranked candidates on every cycle.
@@ -519,7 +599,7 @@ class Scanner:
                         if self.position_card:
                             await self.paper.sync_cards(self.position_card,self.remove_position_card)
                 else:
-                    await self.store.enqueue(key,'miss',{})
+                    await self.store.enqueue(key,'miss',dict(reason='SPREAD_BELOW_MINIMUM',symbol=symbol,buy=a,sell=b))
                     await self.store.delivered(key)
                 await self.flush()
                 break

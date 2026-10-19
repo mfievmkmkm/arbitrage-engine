@@ -22,12 +22,12 @@ def test_forwarded_identity_prioritizes_bybit_without_opening_and_deduplicates(t
         intake=Intake(tmp_path/'db',discovery,service,clock=lambda:1000)
         post=dict(id=42,timestamp=1000,text='SHORT? #X #ETHEREUM '+ASSET)
         result=await intake.accept(post)
-        assert result['ok'] and discovery.calls==[('bybit',ASSET)]
+        assert result['ok'] and discovery.calls==[('mexc',ASSET),('bybit',ASSET)]
         assert service.paper.source.routes[0]['mode']=='paired'
         assert priorities[0][3:] == ('bybit','X/USDT:USDT','paired')
         assert service.paper.positions=={}
         assert (await Intake(tmp_path/'db',discovery,service,clock=lambda:1000).accept(post))['duplicate']
-        assert len(discovery.calls)==1 and len(priorities)==1
+        assert len(discovery.calls)==2 and len(priorities)==1
     asyncio.run(run())
 
 

@@ -26,6 +26,27 @@ class Catalog:
             await self.scan_venue(source,venue,NATIVE)
         return []
 
+    async def resolve_signal(self,venue,signal):
+        """Exact channel contract -> independently verified executable route."""
+        from .dex_paired_experiment import NATIVE
+        source=self.scanner.service.paper.source
+        chain,base,asset=signal['chain_id'],signal['base'],signal['asset']
+        if chain not in NATIVE:raise ValueError('PAIRED_SIGNAL_CHAIN_UNSUPPORTED')
+        client=source.public.get(venue)
+        symbols=eligible_markets(client,base) if client else []
+        if len(symbols)!=1:raise ValueError('PAIRED_SIGNAL_FUTURES_MARKET_UNAVAILABLE')
+        await source.identity_gate.verify(dict(cex_venue=venue,base=base,chain_id=chain,asset=asset))
+        network,stable_address=stable_config(chain)
+        provider=source.provider.evm
+        token,stable=await asyncio.gather(provider.token(network,asset),provider.token(network,stable_address))
+        if token.get('symbol','').upper()!=base or stable.get('symbol','').upper() not in ('USDC','USDT'):
+            raise ValueError('DEX_CATALOG_TOKEN_SCOPE_MISMATCH')
+        return dict(chain_id=chain,base=base,asset=asset,stable=stable_address,
+                    stable_symbol=stable['symbol'].upper(),asset_decimals=token['decimals'],stable_decimals=stable['decimals'],
+                    cex_venue=venue,cex_symbol=symbols[0],native_symbol=NATIVE[chain]+'/USDT:USDT',native_decimals=18,
+                    mode='paired',notional_usd=100,max_notional_usd=110,label=f'{base} · {venue.upper()} · {network}',
+                    identity_source='EXCHANGE_NETWORK_CONTRACT_AND_TOKEN_METADATA')
+
     async def scan_venue(self,source,venue,NATIVE):
         seeds = [r for r in source.routes if r['cex_venue']==venue]
         if not seeds:

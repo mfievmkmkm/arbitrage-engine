@@ -123,7 +123,7 @@ def test_paired_dex_keeps_actual_inventory_and_has_no_directional_fallback(tmp_p
         assert result['ok'],result
         p=result['position']
         assert p['cex_side']=='sell' and p['virtual_asset_qty']>0
-        assert p['virtual_mode']=='paired' and p['paired_route']==route
+        assert p['virtual_mode']=='paired' and p['paired_route']==dict(route,slippage_bps=20)
         assert p['cex_identity']['asset']==ASSET and p['live_allowed'] is False
         engine=Engine(tmp_path/'dex.db',source2,capital=250,virtual=True,namespace='paired',clock=source2.clock)
         await engine.init(); await engine.cycle(route)

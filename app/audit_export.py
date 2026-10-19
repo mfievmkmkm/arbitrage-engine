@@ -10,6 +10,12 @@ from .export_service import write_csv
 from .secret_redaction import redact
 
 TABLES = {
+    'Candidate checks': 'arb_checks',
+    'Candidate registry': 'arb_candidates',
+    'Trade lifecycle': 'arb_lifecycle',
+    'Strategy configuration': 'arb_config_events',
+    'Diagnostic reports': 'arb_diagnostic_reports',
+    'Asset identity registry': 'asset_identity_evidence',
     "DEX scanner state": "dex_scanner_audit",
     "Paired channel intake": "paired_channel_intake",
     "Paired Telegram cards": "paired_telegram_cards",

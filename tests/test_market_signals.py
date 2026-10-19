@@ -37,6 +37,28 @@ def test_public_spot_fee_is_not_raised_to_two_tenths_percent():
     assert result['fee_rate']==D('.0005')
 
 
+def test_transfer_networks_require_account_read_when_public_mexc_has_no_data(tmp_path):
+    async def go():
+        calls=[]
+        class Client:
+            has={'fetchCurrencies':True}
+            def __init__(self,rows):self.rows=rows
+            async def fetch_currencies(self):
+                calls.append(self.rows)
+                return self.rows
+        public=Client({})
+        scanner=Scanner(tmp_path/'db',None,clock=lambda:100,venues=[],shared_clients={'mexc':public})
+        await scanner.init()
+        with pytest.raises(ValueError,match='MEXC: для сетей'):
+            await scanner.currencies('mexc')
+        account=Client({'USDT':{'networks':{}}})
+        scanner.accounts.clients['mexc']=account
+        rows=await scanner.currencies('mexc')
+        assert 'USDT' in rows and calls==[{},account.rows]
+        await scanner.close()
+    asyncio.run(go())
+
+
 def test_discovery_excludes_dex_and_includes_supported_spot_adapters():
     venues=discover()
     assert {'gate','mexc','bybit','binance','okx'}<=set(venues)

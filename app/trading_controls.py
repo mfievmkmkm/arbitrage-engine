@@ -14,7 +14,9 @@ MODES = {'observe', 'manual', 'auto'}
 ENVIRONMENTS = {'paper', 'live'}
 LIMITS = {'notional_usd': (1, 1000), 'daily_loss_usd': (.1, 100),
           'max_positions': (1, 5), 'min_net_usd': (.01, 100),
-          'max_spread_pct': (.1, 10), 'stop_loss_usd': (.1, 20), 'max_hold_seconds': (60, 86400)}
+          'max_spread_pct': (.1, 10), 'stop_loss_usd': (.1, 20), 'max_hold_seconds': (60, 86400),
+          'min_spread_pct':(0,10),'slippage_bps':(0,100),'target_net_usd':(0,100),'trail_drawdown_pct':(1,90)}
+EXTENDED_DEFAULTS=dict(min_spread_pct=0,slippage_bps=20,target_net_usd=0,trail_drawdown_pct=25)
 
 
 def operator_exit_limits(policy, hold_seconds, stop_net):
@@ -40,6 +42,8 @@ class Controls:
         self.events = []
         if self.path.exists():
             self.state = json.loads(self.path.read_text(encoding='utf-8'))
+        for p in self.state.get('profiles',{}).values():
+            for key,value in EXTENDED_DEFAULTS.items():p.setdefault(key,value)
         self.validate(self.state)
 
     @staticmethod
@@ -59,6 +63,8 @@ class Controls:
                     raise ValueError('TRADING_RISK_INVALID:' + key)
             if type(p['max_positions']) is not int:
                 raise ValueError('TRADING_POSITION_LIMIT_INVALID')
+            if p['min_spread_pct']>p['max_spread_pct'] or p['slippage_bps']!=int(p['slippage_bps']):
+                raise ValueError('TRADING_SPREAD_OR_SLIPPAGE_INVALID')
 
     @property
     def environment(self):

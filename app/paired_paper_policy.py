@@ -2,25 +2,30 @@
 import math
 
 
-def plan(notional, raw_edge, costs, funding_reserve=0):
+def plan(notional, raw_edge, costs, funding_reserve=0, settings=None):
     values = (notional, raw_edge, costs, funding_reserve)
     if not all(math.isfinite(float(x)) for x in values) or notional <= 0 or min(costs, funding_reserve) < 0:
         raise ValueError('PAIRED_ECONOMICS_INVALID')
     # Admit on a partial convergence scenario, not on a promise of zero spread.
+    settings=settings or {}
+    minimum=settings.get('min_net_usd',.25)
+    min_spread=settings.get('min_spread_pct',0)
+    maximum=settings.get('max_spread_pct',10)
     partial_net = raw_edge * .5 - costs - funding_reserve
-    if raw_edge <= 0 or partial_net < .25:
+    if raw_edge <= 0 or partial_net < minimum or raw_edge/notional*100<min_spread:
         raise ValueError('PAIRED_PARTIAL_NET_LOW')
-    if raw_edge > notional * .10:
+    if raw_edge > notional * maximum/100:
         raise ValueError('PAIRED_REFERENCE_GAP_EXTREME')
     return dict(version=1, mechanism='TWO_LEG_CONVERGENCE',
                 partial_net=partial_net, raw_edge=raw_edge, costs=costs,
-                funding_reserve=funding_reserve, target_usd=partial_net,
-                stop_usd=max(.50, notional * .01),
+                funding_reserve=funding_reserve, target_usd=settings.get('target_net_usd',0) or partial_net,
+                stop_usd=settings.get('stop_loss_usd',max(.50, notional * .01)),
                 trail_arm_usd=max(.25, partial_net * .5),
-                max_seconds=1200)
+                trail_drawdown=settings.get('trail_drawdown_pct',25)/100,
+                max_seconds=settings.get('max_hold_seconds',1200))
 
 
-def exit_reason(policy, opened_at, best, mark, funding_known):
+def exit_reason(policy, opened_at, best, mark, funding_known,auto_profit=True):
     price_net = mark['gross'] - mark['entry_fees'] - mark['exit_fees'] - mark['safety']
     # Settled funding is real model PnL, not a forecast. It must participate in
     # the loss limit. Without verified funding retain the price-only emergency
@@ -32,10 +37,11 @@ def exit_reason(policy, opened_at, best, mark, funding_known):
         return 'TIME_STOP'
     if not funding_known:
         return None
+    if not auto_profit:return None
     net = mark['net']
     if net >= policy['target_usd']:
         return 'PARTIAL_CONVERGENCE_NET'
-    if best >= policy['trail_arm_usd'] and net <= max(.10, best * .75):
+    if best >= policy['trail_arm_usd'] and net <= max(.10, best * (1-policy.get('trail_drawdown',.25))):
         return 'PROFIT_GIVEBACK'
     return None
 

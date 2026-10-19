@@ -25,11 +25,22 @@ class Service(Source):
     enabled_name='market_signals'
     interval=3
 
-    def __init__(self,feed,paired):
-        super().__init__(feed,paired)
+    def __init__(self,feed,paired,venue="bybit"):
+        super().__init__(feed,paired,venue)
         self.entry_enabled=True;self.index=0;self.paused=lambda:False
         self.reasons={}
+        self.priorities=[]
         feed.dex_transfer=self;feed.paper.dex_transfer=self
+
+    def prioritize_signal(self,signal,post):
+        found=[r for r in self.catalog() if r['base']==signal['base'] and r['chain_id']==signal['chain_id']
+               and r['asset'].lower()==signal['asset'].lower()]
+        for r in found:
+            route=dict(r,signal_source='channel',signal_id=post['id'],signal_deadline=post['timestamp']+90)
+            for a,b in ((self.venue,'dex'+str(r['chain_id'])),('dex'+str(r['chain_id']),self.venue)):
+                self.priorities.append((route,a,b))
+        self.priorities=self.priorities[-16:]
+        return len(found)*2
 
     def credit(self,state,p,venue,amount):
         amount=D(amount)
@@ -58,7 +69,7 @@ class Service(Source):
         state['wins' if net>0 else 'losses']+=1
         today=day(self.clock());state['daily'][today]=str(D(state['daily'].get(today,0))+net)
         state['last_position']=copy.deepcopy(p);state['position']=None;state['last_error']=''
-        state['notifications']['close:'+p['id']]=f"🧪 PAPER #{p['id']}: цикл Bybit ↔ DEX завершён. NET модели {float(net):+.4f} USDT."
+        state['notifications']['close:'+p['id']]=f"🧪 PAPER #{p['id']}: цикл {self.venue.upper()} ↔ DEX завершён. NET модели {float(net):+.4f} USDT."
 
     async def open(self,review):
         async with self.paper.lock:
@@ -69,15 +80,18 @@ class Service(Source):
                 raise ValueError('Входы на паузе')
             if (await self.store.control())['mode']!=e['mode']:
                 raise ValueError('Режим изменился; нужна новая проверка')
+            if e['mode']=='observe':raise ValueError('Наблюдение: новые позиции не открываются')
             if not 0<=self.clock()-e['ts']<=3:raise ValueError('Нужна новая проверка цен')
             if self.paper.state.get('position'):raise ValueError('Сначала заверши текущий PAPER-цикл')
             risk=await self.store.control()
+            if e.get('settings_revision',risk['revision'])!=risk['revision']:raise ValueError('Настройки изменились; нужна новая проверка')
             if D(self.paper.state['realized'])<=-D(risk['total_loss']) or D(self.paper.state['daily'].get(day(self.clock()),0))<=-D(risk['daily_loss']):
                 raise ValueError('Достигнут лимит убытка PAPER')
             state=copy.deepcopy(self.paper.state);src=plan['source']
             budget=D(plan['budget']);reserve=D(plan['gas_reserve']);total=budget+reserve
             if D(state['balances'].get(src,0))<total:raise ValueError('Недостаточно виртуального USDT с резервом gas')
             p=dict(id=str(self.paper.version+1),kind=KIND,plan=copy.deepcopy(plan),
+                   trace_id=e.get('trace_id'),
                    signal=dict(symbol=e['symbol'],buy=e['buy'],sell=e['sell']),source=src,
                    opened=self.clock(),due=self.clock(),status='BUY_PENDING',
                    original_budget=str(budget),purchase_budget=str(budget),cash_debited=str(total),
@@ -92,21 +106,33 @@ class Service(Source):
             if src!=e['buy']:
                 t=plan['costs']['funding']
                 self.charge(state,p,t['gas']);self.credit(state,p,src,t['dust'])
-                p.update(status='USDT_TO_BUY_IN_TRANSIT',due=self.clock()+position_delay(p),
+                p.update(status='USDT_TO_BUY_IN_TRANSIT',due=self.clock()+float(t.get('delay_seconds',position_delay(p))),
                          purchase_budget=t['amount'],funding_fee=t['fee'],funding_transfer=t)
             state['position']=p;state['cash']=self.paper.available(state);state['last_error']=''
+            if p.get('trace_id'):
+                await self.paper.journal.check(p['trace_id'],'EXECUTOR','PASS','DEX_SEQUENTIAL_PAPER_ACCEPTED')
             await self.paper.save(state,'DEX_TRANSFER_RESERVATION',p)
             return p
 
     async def monitor_unlocked(self):
         state=copy.deepcopy(self.paper.state);p=state['position'];s=p['signal'];r=p['plan']['route']
         try:
-            networks=await self.networks(r,self.required_operations(r['base'],p['source'],s['buy'],s['sell']))
+            required={r['base']:set(),'USDT':set()}
+            stage=p['status']
+            if stage=='USDT_TO_BUY_IN_TRANSIT' and s['buy']==self.venue:required['USDT'].add('deposit')
+            if stage=='BASE_TRANSFER_PENDING':
+                if s['buy']==self.venue:required[r['base']].add('withdraw')
+                if s['sell']==self.venue:required[r['base']].add('deposit')
+            if stage=='BASE_IN_TRANSIT' and s['sell']==self.venue:required[r['base']].add('deposit')
+            if stage=='RETURN_PENDING':
+                if s['sell']==self.venue:required['USDT'].add('withdraw')
+                if p['source']==self.venue:required['USDT'].add('deposit')
+            if stage=='QUOTE_IN_TRANSIT' and p['source']==self.venue:required['USDT'].add('deposit')
+            networks=await self.networks(r,required)
             if p['status']=='USDT_TO_BUY_IN_TRANSIT':
-                if s['buy']=='bybit':
-                    receipt=self.received(networks['USDT'],p['funding_transfer']['gross'])
-                    p['purchase_budget']=str(receipt)
-                    p['funding_fee']=str(D(p['original_budget'])-receipt-D(p['funding_transfer']['dust']))
+                receipt=await self.receipt(r,'USDT',p['funding_transfer'],s['buy'],networks)
+                p['purchase_budget']=str(receipt)
+                p['funding_fee']=str(D(p['original_budget'])-receipt-D(p['funding_transfer']['dust']))
                 p.update(status='BUY_PENDING',due=self.clock())
                 # The reserved stable is now at buy; never credited as free too.
             elif p['status']=='BUY_PENDING':
@@ -135,7 +161,7 @@ class Service(Source):
                 p.update(status='BASE_IN_TRANSIT',due=self.clock()+position_delay(p),
                          remaining=t['amount'],base_transfer=t,dust=str(D(p['dust'])+D(t['dust'])))
             elif p['status']=='BASE_IN_TRANSIT':
-                if s['sell']=='bybit':p['remaining']=str(self.received(networks[r['base']],p['base_transfer']['gross']))
+                p['remaining']=str(await self.receipt(r,r['base'],p['base_transfer'],s['sell'],networks))
                 p.update(status='SELL_PENDING',due=self.clock())
             elif p['status']=='SELL_PENDING':
                 if not p.get('sale_held'):
@@ -157,9 +183,9 @@ class Service(Source):
                 else:
                     t=await self.transfer(r,'USDT',s['sell'],p['source'],p['proceeds'],networks)
                     self.charge(state,p,t['gas']);self.credit(state,p,s['sell'],t['dust'])
-                    p.update(status='QUOTE_IN_TRANSIT',due=self.clock()+position_delay(p),return_credit=t['amount'],return_transfer=t)
+                    p.update(status='QUOTE_IN_TRANSIT',due=self.clock()+float(t.get('delay_seconds',position_delay(p))),return_credit=t['amount'],return_transfer=t)
             elif p['status']=='QUOTE_IN_TRANSIT':
-                if p['source']=='bybit':p['return_credit']=str(self.received(networks['USDT'],p['return_transfer']['gross']))
+                p['return_credit']=str(await self.receipt(r,'USDT',p['return_transfer'],p['source'],networks))
                 self.finish(state,p,p['return_credit'])
             else:raise ValueError('DEX_TRANSFER_STATE_UNKNOWN')
             state['cash']=self.paper.available(state);state['last_error']=''
@@ -189,7 +215,11 @@ class Service(Source):
             catalog=self.catalog()
             if not catalog:return []
             r=catalog[(self.index//2)%len(catalog)];direction=self.index%2;self.index+=1
-            a,b=('bybit','dex'+str(r['chain_id'])) if direction==0 else ('dex'+str(r['chain_id']),'bybit')
+            a,b=(self.venue,'dex'+str(r['chain_id'])) if direction==0 else ('dex'+str(r['chain_id']),self.venue)
+            while self.priorities:
+                priority,pa,pb=self.priorities.pop(0)
+                if self.clock()<=priority['signal_deadline']:
+                    r,a,b=priority,pa,pb;break
             self.last_economics=None
             try:
                 from .dex_request_budget import background

@@ -4,10 +4,12 @@ from .tg_ui import button
 MODE_NAMES={'observe':'Пауза входов','manual':'Вручную','auto':'Авто'}
 CHOICES={'notional_usd':(5,10,25,50,100),'daily_loss_usd':(1,2,5),
          'max_positions':(1,2,3),'min_net_usd':(.05,.1,.25,.5,1),
-         'max_spread_pct':(2,5,10),'stop_loss_usd':(.5,1,2),'max_hold_seconds':(300,600,1200)}
+         'max_spread_pct':(2,5,10),'stop_loss_usd':(.5,1,2),'max_hold_seconds':(300,600,1200),
+         'min_spread_pct':(0,2,5),'slippage_bps':(10,20,50),'target_net_usd':(0,.25,.5,1),'trail_drawdown_pct':(10,25,50)}
 LABELS={'notional_usd':'На сторону, USD','daily_loss_usd':'Дневной стоп, USD',
         'max_positions':'Открытых пар','min_net_usd':'NET от, USD',
-        'max_spread_pct':'Спред до, %','stop_loss_usd':'Стоп пары, USD','max_hold_seconds':'Время, сек.'}
+        'max_spread_pct':'Спред до, %','stop_loss_usd':'Стоп пары, USD','max_hold_seconds':'Время, сек.',
+        'min_spread_pct':'Спред от, %','slippage_bps':'Проскальзывание, bps','target_net_usd':'Цель NET, USD · 0 = сценарий','trail_drawdown_pct':'Откат прибыли, %'}
 
 
 def render(controls,live_configured=False,show_risk=False,selected_key=None):

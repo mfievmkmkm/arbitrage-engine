@@ -29,6 +29,7 @@ class Scanner:
         self.last_sweep_seconds = None
         self.sweep_seen = set()
         self.sweep_started = time.monotonic()
+        self.cooldowns={}
 
     def add(self, route, priority=False):
         routes_checked([route], 300)
@@ -42,6 +43,7 @@ class Scanner:
         if priority and key not in self.priority:
             self.priority.append(key)
         if priority:
+            self.cooldowns.pop(key,None)
             self.wake.set()
 
     def promote(self, route):
@@ -69,7 +71,14 @@ class Scanner:
         from .dex_paired_experiment import PairedSource
         key = route_key(route)
         original = self.service.paper.source
+        previous=self.service.candidates.get(key)
+        journal=getattr(original,'journal',None)
+        if previous and journal and previous['position'].get('trace_id'):
+            await journal.finish(previous['position']['trace_id'],'SUPERSEDED','CANDIDATE_QUOTES_REFRESHED')
         route = dict(route)
+        if route.get('signal_deadline',original.clock()+1)<original.clock():
+            # The asset remains in the independent universe, not a stale signal.
+            route={k:v for k,v in route.items() if k not in ('signal_source','signal_id','signal_deadline')}
         if hasattr(self.service.paper, 'operator_notional'):
             limit = self.service.paper.operator_notional()
             route.update(notional_usd=min(100, limit/1.1), max_notional_usd=limit)
@@ -92,12 +101,24 @@ class Scanner:
                     self.service.wake.set()
                     return candidate, 'READY'
             self.service.candidates.pop(key, None)
-            return None, result.get('reason', 'PAIRED_ACCOUNT_FEE_REQUIRED')
+            reason=result.get('reason', 'PAIRED_ACCOUNT_FEE_REQUIRED')
+            delays={'KYBER_FILTERED_LIQUIDITY':30,'DEX_TAX_CHAIN_UNSUPPORTED':300,
+                    'DEX_TAX_HTTP_404':60,'DEX_TAX_HONEYPOT_OR_UNKNOWN':60,'DEX_TAX_FLAGS_UNSUPPORTED':60,
+                    'DEX_CEX_IDENTITY_UNVERIFIED':30,'DEX_VIRTUAL_AMOUNT_BELOW_NATIVE_STEP':60}
+            if reason in delays:self.cooldowns[key]=original.clock()+delays[reason]
+            trace=getattr(source,'current_trace',None)
+            if trace and getattr(source,'journal',None) and result.get('ok'):
+                await source.journal.finish(trace,'REJECTED',reason,{'fee_source':fee_source})
+            return None, reason
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             self.service.candidates.pop(key, None)
-            return None, 'DEX_SCAN_TIMEOUT' if isinstance(exc, asyncio.TimeoutError) else type(exc).__name__
+            reason='DEX_SCAN_TIMEOUT' if isinstance(exc, asyncio.TimeoutError) else (str(exc) if isinstance(exc,ValueError) else type(exc).__name__)
+            trace=getattr(source,'current_trace',None)
+            if trace and getattr(source,'journal',None):
+                await source.journal.finish(trace,'REJECTED',reason,{'error_type':type(exc).__name__})
+            return None, reason
         finally:
             background.reset(token)
 
@@ -105,6 +126,11 @@ class Scanner:
         evm=getattr(self.service.paper.source.provider,'evm',None)
         self.provider_health=evm.health() if hasattr(evm,'health') else {}
         if self.provider_health.get('blocked'):
+            journal=getattr(self.service.paper.source,'journal',None)
+            if journal:
+                for candidate in self.service.candidates.values():
+                    trace=candidate['position'].get('trace_id')
+                    if trace:await journal.finish(trace,'REJECTED',self.provider_health.get('reason') or 'PROVIDER_BLOCKED',{'stage':'candidate_waiting'})
             self.service.candidates.clear()
             self.interval=min(30,max(1,self.provider_health['retry_after_seconds']))
             return []
@@ -113,7 +139,12 @@ class Scanner:
         for r in list(self.service.routes):
             if r['cex_venue'] in ('bybit','mexc'):
                 self.add(r)
-        keys = list(self.catalog)
+        now=self.service.paper.clock()
+        keys = [k for k in self.catalog if self.cooldowns.get(k,0)<=now]
+        if not keys and not self.priority:
+            next_retry=min(self.cooldowns.values(),default=now+1)
+            self.interval=max(.25,min(30,next_retry-now))
+            return []
         selected = []
         while self.priority and len(selected)<self.workers:
             key = self.priority.pop(0)
@@ -156,6 +187,12 @@ class Scanner:
             self.sweep_started = time.monotonic()
             self.sweep_seen.clear()
         now = self.service.paper.clock()
+        journal=getattr(self.service.paper.source,'journal',None)
+        if journal:
+            for c in self.service.candidates.values():
+                trace=c['position'].get('trace_id')
+                if trace and now-c['position']['opened_at']>30:
+                    await journal.finish(trace,'EXPIRED','CANDIDATE_EXPIRED_BEFORE_EXECUTION')
         self.service.candidates = {k:c for k,c in self.service.candidates.items()
                                    if 0<=now-c['position']['opened_at']<=30}
         if self.service.notify_candidate and not self.service.paper.positions:

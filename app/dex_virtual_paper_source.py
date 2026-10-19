@@ -26,7 +26,7 @@ class PriceUnavailable(ValueError):
     def __init__(self, result):
         super().__init__(result.get('reason', 'DEX_VIRTUAL_PRICE_UNAVAILABLE'))
         self.diagnostics = {key: result[key] for key in
-                            ('retry_after_seconds', 'request_sent', 'action_required', 'error_code') if key in result}
+                            ('retry_after_seconds', 'request_sent', 'action_required', 'error_code','provider','http_status','chain_id','request_scope') if key in result}
 
 
 def token_key(r, token):
@@ -104,6 +104,7 @@ class Source(HistorySource):
         self.identity_gate = None
         self.fast_exit = False
         self.native_paired_inventory = False
+        self.fee_cache={};self.fee_locks={}
         self.exit_reader = Reader(public, timeout=1.4, clock=clock, max_slippage=.20)
 
     def venue_allowed(self, venue):
@@ -152,16 +153,22 @@ class Source(HistorySource):
         return q
 
     async def fee(self, r):
+        if r['cex_venue']=='mexc' and r.get('mode')=='paired':
+            # CCXT MEXC fetchTradingFee supports SPOT ONLY. A connected spot
+            # reader must not turn the futures fee read into an invalid request.
+            return .0008, 'MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER'
         c = self.private.get(r["cex_venue"])
         if c is not None and c.has.get("fetchTradingFee") is True:
-            f = await asyncio.wait_for(c.fetch_trading_fee(r["cex_symbol"]), 8)
-            if f.get("symbol") != r["cex_symbol"]:
-                raise ValueError("DEX_VIRTUAL_FEE_SCOPE_MISMATCH")
-            return float(rate(f.get("taker"))), "ACCOUNT_READ_ONLY"
-        if r['cex_venue']=='mexc' and r.get('mode')=='paired':
-            # Published API futures taker schedule since 2026-06-01;
-            # an account-specific read must replace this before LIVE.
-            return .0008, 'MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER'
+            key=(r['cex_venue'],r['cex_symbol'])
+            async with self.fee_locks.setdefault(key,asyncio.Lock()):
+                cached=self.fee_cache.get(key)
+                if cached and 0<=self.clock()-cached[0]<30:return cached[1],'ACCOUNT_READ_ONLY'
+                f = await asyncio.wait_for(c.fetch_trading_fee(r["cex_symbol"]), 8)
+                if f.get("symbol") != r["cex_symbol"]:
+                    raise ValueError("DEX_VIRTUAL_FEE_SCOPE_MISMATCH")
+                value=float(rate(f.get('taker')))
+                self.fee_cache[key]=(self.clock(),value)
+                return value, "ACCOUNT_READ_ONLY"
         m = market(self.public[r["cex_venue"]], r["cex_symbol"])
         return float(rate(m.get("taker"))), "PUBLIC_RATE_ASSUMPTION"
 
@@ -365,6 +372,10 @@ class Source(HistorySource):
             immediate_gross = (x["cash"] - cash if p["virtual_mode"] == "paired" else 0) + (1 if side == "buy" else -1) * qty * (x["price"] - p["entry_price"])
             immediate_net = immediate_gross - p["entry_fees"] - qty * x["price"] * x["fee_rate"] - x["gas"] - p["safety"]
             p['entry_immediate_net'] = immediate_net
+            diagnostics.update(entry_edge_usd=p['entry_edge'],immediate_net_usd=immediate_net,
+                               reverse_loss_limit_usd=max(cash,notional)*.02,
+                               entry_fees_usd=p['entry_fees'],exit_fee_usd=qty*x['price']*x['fee_rate'],
+                               exit_gas_usd=x['gas'],safety_usd=p['safety'])
             if immediate_net <= -max(cash, notional) * 0.02:
                 raise ValueError("DEX_VIRTUAL_REVERSE_PREFLIGHT_NET_STOP")
             if self.focus and p["virtual_mode"] == "reference":

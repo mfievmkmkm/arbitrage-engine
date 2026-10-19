@@ -11,6 +11,7 @@ class Paper:
     def __init__(self,store,clock):
         self.store,self.clock=store,clock
         self.lock=asyncio.Lock();self.state=None;self.version=0
+        self.entry_guard=lambda buy,sell:True
 
     @property
     def positions(self):
@@ -19,6 +20,9 @@ class Paper:
 
     async def init(self):
         import aiosqlite
+        from .decision_journal import Journal
+        self.journal=Journal(self.store.path,self.clock)
+        await self.journal.init()
         initial=dict(cash='250',balances={},home='',realized='0',closed=0,wins=0,losses=0,position=None,last_position=None,
                      position_cards={},daily={},last_error='',notifications={})
         async with aiosqlite.connect(self.store.path) as db:
@@ -61,27 +65,51 @@ class Paper:
             if c.rowcount!=1:raise ValueError('Другой процесс изменил PAPER-счёт; перезапустите экземпляр')
             await db.execute('INSERT INTO signal_transfer_events(ts,reason,payload) VALUES(?,?,?)',
                              (self.clock(),reason,json.dumps(payload,allow_nan=False)))
+            position=state.get('position') or state.get('last_position')
+            if position and position.get('trace_id'):
+                await self.journal.lifecycle(db,'B',position,reason,position['status'])
             await db.commit()
         self.state=state;self.version+=1
 
     async def open(self,review):
+        try:
+            return await self._open(review)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            trace=review.get('signal',{}).get('trace_id')
+            if trace:
+                reason=str(exc) if isinstance(exc,ValueError) else type(exc).__name__
+                await self.journal.check(trace,'EXECUTOR','FAIL',reason)
+                await self.journal.finish(trace,'REJECTED',reason)
+            raise
+
+    async def _open(self,review):
+        signal=review.get('signal',{})
+        if not self.entry_guard(signal.get('buy',''),signal.get('sell','')):raise ValueError('Площадка или входы выключены')
         if (review.get("transfer") or {}).get("kind")=="DEX_SEQUENTIAL_V1":
             if not hasattr(self,"dex_transfer"):raise ValueError("DEX-перевод недоступен")
             return await self.dex_transfer.open(review)
         async with self.lock:
             e=review['signal'];plan=review['transfer']
-            if plan is None or plan['reasons']:
+            if plan is None or plan['reasons'] or e.get('reasons') or e.get('trade_configured') is False:
                 raise ValueError('Переводная модель не прошла фильтры')
             if not 0<=self.clock()-e['ts']<=3:
                 raise ValueError('Нужны новые котировки')
             if self.state['position']:
                 raise ValueError('Сначала завершите текущую PAPER-позицию')
             risk=await self.store.control()
+            if e.get('settings_revision',risk['revision'])!=risk['revision']:
+                raise ValueError('Настройки изменились; нужна новая проверка')
+            if risk['mode']=='observe' or not await self.store.enabled():
+                raise ValueError('Наблюдение или входы выключены')
+            if e.get('mode') is not None and e['mode']!=risk['mode']:
+                raise ValueError('Режим изменился; нужна новая проверка')
             if D(self.state['realized'])<=-D(risk['total_loss']) or D(self.state['daily'].get(day(self.clock()),'0'))<=-D(risk['daily_loss']):
                 raise ValueError('Достигнут лимит убытка PAPER')
             if not self.state.get('home'):raise ValueError('Сначала выбери исходную биржу PAPER-капитала')
             state=copy.deepcopy(self.state)
-            p=dict(id=str(self.version+1),signal=dict(symbol=e['symbol'],buy=e['buy'],sell=e['sell']),
+            p=dict(id=str(self.version+1),trace_id=e.get('trace_id'),signal=dict(symbol=e['symbol'],buy=e['buy'],sell=e['sell']),
                    plan=plan,opened=self.clock(),due=self.clock()+900,status='BASE_IN_TRANSIT',
                    remaining=plan['received_qty'],proceeds='0',sell_fees='0',dust='0',sold='0',fills=[],funding_fee='0')
             if plan.get('funding_route'):
@@ -98,6 +126,8 @@ class Paper:
                      +(f"Сначала USDT {plan['funding_source']} → {e['buy']}; покупка после нового стакана." if p['status']=='USDT_TO_BUY_IN_TRANSIT' else f"Куплено по модели на ${float(plan['spent']):.4f}.")+
                      ' Продажа по будущему стакану после зачисления монеты; найденный спред не зафиксирован.')
             key='open:'+p['id'];state['notifications'][key]=message
+            if p.get('trace_id'):
+                await self.journal.check(p['trace_id'],'EXECUTOR','PASS','SEQUENTIAL_PAPER_ACCEPTED')
             await self.save(state,'FUNDING_RESERVATION' if p['status']=='USDT_TO_BUY_IN_TRANSIT' else 'BUY_AND_BASE_RESERVATION',p)
             return p
 
@@ -249,7 +279,7 @@ class Paper:
         text=(f"🔁 <b>{escape(s['symbol'])} · PAPER</b> · #{escape(p['id'])}\n"
               f"{escape(venue_label(s['buy']))} → {escape(venue_label(s['sell']))}\n\n"
               f"<b>{escape(stages.get(status,status))}</b>\n"
-              f"Покупка ${float(model['spent']):.2f}\n"
+              f"{'План покупки' if status in ('USDT_TO_BUY_IN_TRANSIT','BUY_PENDING') else 'Покупка'} ${float(p.get('actual_spent',model['spent'])):.2f}\n"
               f"Осталось {float(p['remaining']):.8g} · продано {float(p['sold']):.8g}\n"
               f"Выручка ${float(p['proceeds']):.3f}\n")
         if p.get('sale_held'):text+='⏸ Продажа удержана\n'

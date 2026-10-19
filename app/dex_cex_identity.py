@@ -52,6 +52,7 @@ class Gate:
         self.public, self.private, self.clock = public, private, clock
         self.cache = {}
         self.locks = {}
+        self.registry = None
 
     async def verify(self, route):
         async with self.locks.setdefault(route['cex_venue'], asyncio.Lock()):
@@ -60,7 +61,7 @@ class Gate:
     async def _verify(self, route):
         venue = route['cex_venue']
         cached = self.cache.get(venue)
-        if not cached or self.clock()-cached[0] > 300:
+        if not cached or not 0<=self.clock()-cached[0]<=300:
             data = {}
             errors = []
             # Collect all read-only sources. A nonempty currency response can
@@ -104,5 +105,9 @@ class Gate:
             raise ValueError('DEX_CEX_CURRENCY_NOT_LISTED')
         if not matching_contract(cached[1].get(route['base']), route):
             raise ValueError('DEX_CEX_IDENTITY_UNVERIFIED')
-        return dict(source='EXCHANGE_CURRENCY_NETWORK_METADATA', chain_id=route['chain_id'],
-                    asset=route['asset'], base=route['base'], verified_at=self.clock())
+        evidence=dict(source='EXCHANGE_CURRENCY_NETWORK_METADATA', chain_id=route['chain_id'],
+                      asset=route['asset'], base=route['base'], verified_at=cached[0],expires_at=cached[0]+300)
+        if self.registry and route.get('cex_symbol'):
+            market=self.public[venue].markets.get(route['cex_symbol'],{})
+            evidence=await self.registry.record(route,evidence,market)
+        return evidence

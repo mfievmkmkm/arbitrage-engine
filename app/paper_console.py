@@ -12,9 +12,10 @@ LABELS = {'spot_inventory':'Spot/Spot · размещённые средства
 
 def main_menu(paused=False):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [button('💰 Балансы','balances:show','primary'),button('📈 Сделки','paper','primary')],
-        [button('🧭 Стратегии','strategies'),button('📒 Дневник','diary')],
-        [button('⚙️ Настройки','paper_settings'),button('▶ Продолжить' if paused else '⏸ Пауза','resume' if paused else 'pause','success' if paused else None)],
+        [button('📊 Обзор','home','primary'),button('🔎 Сканер','audit:scanner','primary')],
+        [button('⚡ Стратегии','strategies'),button('💼 Позиции','paper')],
+        [button('📒 Дневник','diary'),button('⚙️ Настройки','paper_settings')],
+        [button('🛡 Риски','audit:risk'),button('🩺 Диагностика','audit:show')],
     ])
 
 
@@ -29,7 +30,8 @@ def keyboard(screen, enabled, paused=False):
                         'success' if enabled.get(k) else None)] for k in ('spot_futures','spot_spot','funding_arb')]
     elif screen == 'paper_settings':
         rows = [[button('🏦 Биржи','exchanges'),button('🛡 Риск','ctl:risk')],
-                [button('👛 Кошелёк','wallet:show')]]
+                [button('💰 Балансы','balances:show'),button('👛 Кошелёк','wallet:show')],
+                [button('▶ Продолжить' if paused else '⏸ Пауза входов','resume' if paused else 'pause')]]
     elif screen == 'paper_checks':
         rows = [[button('Проверка запуска','startup'),button('Рынок','top')],
                 [button('Исторический Replay','replay'),button('Задержки и fills','execution_replay')],
@@ -145,7 +147,7 @@ async def render(screen,path,paper,scanner,risk,runtime,bundle):
         return '⚙️ <b>Настройки</b>\n\nPAPER · виртуальные деньги'
     if screen=='strategies':
         return ('🧭 <b>Стратегии</b>\n\n'
-                '📉 <b>Сжатие</b>\nDEX-покупка + шорт Bybit.\n\n'
+                '📉 <b>Сжатие</b>\nDEX-покупка + шорт Bybit/MEXC.\n\n'
                 '🔁 <b>Перевод</b>\nКупить → перевести → продать.')
     if screen=='paper':
         text=positions(paper,bundle)

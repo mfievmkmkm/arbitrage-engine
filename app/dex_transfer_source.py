@@ -1,4 +1,4 @@
-"""Bybit spot <-> DEX sequential PAPER. GET/read APIs only; no signer.
+"""CEX spot <-> DEX sequential PAPER. GET/read APIs only; no signer.
 
 Quotes qualify an entry scenario; they never lock the later sale price.
 Initial scope: same-chain ERC20 tokens on Ethereum/BSC, USDT settlement.
@@ -20,7 +20,7 @@ KIND='DEX_SEQUENTIAL_V1'
 
 def dex(venue):return venue in ('dex1','dex56')
 
-def venue_label(venue):return {'dex1':'DEX · Ethereum','dex56':'DEX · BSC','bybit':'Bybit Spot'}.get(venue,venue.upper())
+def venue_label(venue):return {'dex1':'DEX · Ethereum','dex56':'DEX · BSC','bybit':'Bybit Spot','mexc':'MEXC Spot'}.get(venue,venue.upper())
 
 
 def amount_raw(amount,decimals):
@@ -28,8 +28,10 @@ def amount_raw(amount,decimals):
 
 
 class Source:
-    def __init__(self,feed,paired):
+    def __init__(self,feed,paired,venue="bybit"):
         self.feed,self.paired,self.clock=feed,paired,feed.clock
+        if venue not in ("bybit","mexc"):raise ValueError("DEX_TRANSFER_CEX_UNSUPPORTED")
+        self.venue=venue;self.external_sources={}
         self.paper=feed.paper;self.store=feed.store
         self.metadata=None;self.metadata_at=0;self.metadata_lock=asyncio.Lock()
         self.metadata_retry=0;self.metadata_error="Bybit: сети недоступны"
@@ -41,15 +43,15 @@ class Source:
 
     def catalog(self):
         self.routes={}
-        client=self.feed.clients.get('bybit');out=[]
+        client=self.feed.clients.get(self.venue);out=[]
         if not client:return []
         # A spot transfer does not require a futures listing. Include verified
         # Bybit reference routes as well as the paired scanner's routes.
         candidates=list(self.paired.scanner.catalog.values())
         legacy=getattr(self.paired,'legacy',{})
-        bybit=legacy.get('dex_bybit') if isinstance(legacy,dict) else None
+        bybit=legacy.get('dex_bybit' if self.venue=='bybit' else 'dex_channel') if isinstance(legacy,dict) else None
         if bybit is not None:
-            candidates.extend(r for r in bybit.source.routes if r.get('cex_venue')=='bybit')
+            candidates.extend(r for r in bybit.source.routes if r.get('cex_venue')==self.venue)
         for original in candidates:
             chain=original['chain_id'];symbol=original['base']+'/USDT'
             m=client.markets.get(symbol,{})
@@ -61,12 +63,12 @@ class Source:
             if (symbol,'dex'+str(chain)) in self.routes:
                 continue
             r=dict(original,stable=stable,stable_decimals=decimals,stable_symbol='USDT',
-                   spot_symbol=symbol,native_spot=native+'/USDT',mode='paired')
+                   spot_symbol=symbol,native_spot=native+'/USDT',spot_venue=self.venue,mode='paired')
             key=(symbol,'dex'+str(chain));self.routes[key]=r;out.append(r)
         return out
 
     def route_for(self,symbol,a,b):
-        if {a,b} not in ({'bybit','dex1'},{'bybit','dex56'}):
+        if {a,b} not in ({self.venue,'dex1'},{self.venue,'dex56'}):
             raise ValueError('DEX_TRANSFER_VENUES_INVALID')
         self.catalog()
         r=self.routes.get((symbol,a if dex(a) else b))
@@ -77,7 +79,7 @@ class Source:
         async with self.metadata_lock:
             if self.metadata is not None and 0<=self.clock()-self.metadata_at<60:return self.metadata
             if self.clock()<self.metadata_retry:raise ValueError(self.metadata_error)
-            c=self.feed.accounts.client('bybit')
+            c=self.feed.accounts.client(self.venue)
             if c is None or c.has.get('fetchCurrencies') is not True:
                 raise ValueError('Bybit: нужен API чтения сетей')
             try:
@@ -96,10 +98,12 @@ class Source:
             return self.metadata
 
     async def networks(self,r,operations=None):
+        if operations is not None and not any(operations.values()):return {}
         rows=await self.currencies();control=await self.store.control();out={}
         for name,contract in ((r['base'],r['asset']),('USDT',r['stable'])):
             cur=rows.get(name) or {};matches=[]
-            required=(operations or {}).get(name,{'deposit','withdraw'})
+            required=(operations if operations is not None else {}).get(name,{'deposit','withdraw'} if operations is None else set())
+            if not required:continue
             if any(cur.get(action) is False for action in required):
                 raise ValueError('Bybit: нужный ввод/вывод '+name+' остановлен')
             for key,n in (cur.get('networks') or {}).items():
@@ -133,9 +137,10 @@ class Source:
             source='ACCOUNT_NETWORK_API'
             if 'deposit' in required and (deposit is None or dep_pct is None):
                 # Explicit operator PAPER parameter, never silently assume zero.
-                deposit=control.get('dex_deposit_fee_pct');dep_pct=True
+                fee_key='dex_deposit_fee_pct' if self.venue=='bybit' else 'mexc_deposit_fee_pct'
+                deposit=control.get(fee_key);dep_pct=True
                 source='OPERATOR_PAPER_PERCENT'
-                if deposit is None or not 0<=self.clock()-control.get('dex_deposit_fee_set_at',0)<86400:
+                if deposit is None or not 0<=self.clock()-control.get(fee_key.replace('_pct','_set_at'),0)<86400:
                     raise ValueError('Укажи комиссию ввода Bybit в параметрах PAPER')
                 deposit=D(deposit)/100
             if 'deposit' in required and (type(dep_pct) is not bool or D(deposit)<0 or (dep_pct is True and D(deposit)>=1)):
@@ -165,22 +170,14 @@ class Source:
         return qty-D(net['fee']),D(amount)-qty
 
     async def book(self,r):
-        symbol=r['spot_symbol'];c=self.feed.accounts.client('bybit')
-        market=(self.feed.clients.get('bybit').markets.get(symbol,{}) if self.feed.clients.get('bybit') else {})
+        symbol=r['spot_symbol'];c=self.feed.accounts.client(self.venue)
+        market=(self.feed.clients.get(self.venue).markets.get(symbol,{}) if self.feed.clients.get(self.venue) else {})
         if market.get('spot') is not True or market.get('active') is not True or market.get('contract') or market.get('base')!=r['base'] or market.get('quote')!='USDT':
             raise ValueError('Bybit: spot-рынок недоступен')
         if c is None or c.has.get('fetchTradingFee') is not True:raise ValueError('Bybit: нет account-read spot комиссии')
-        old=self.fees.get(symbol)
-        if not old or not 0<=self.clock()-old[0]<30:
-            try:
-                f=await asyncio.wait_for(c.fetch_trading_fee(symbol),8)
-            except asyncio.CancelledError:raise
-            except Exception as exc:raise ValueError('Bybit: комиссия spot недоступна ('+type(exc).__name__+')') from None
-            if f.get('symbol')!=symbol or f.get('taker') is None or not 0<=D(f['taker'])<1:
-                raise ValueError('Bybit: комиссия spot не подтверждена')
-            old=(self.clock(),D(f['taker']));self.fees[symbol]=old
-        b=await self.feed.book('bybit',symbol)
-        b['fee_rate']=old[1];return b
+        b=await self.feed.book(self.venue,symbol)
+        if b.get('fee_evidence')!='ACCOUNT_READ_ONLY':raise ValueError(self.venue.upper()+': нет account-read spot комиссии')
+        return b
 
     async def price(self,r,sell_asset,quantity):
         decimals=r['asset_decimals'] if sell_asset else r['stable_decimals']
@@ -189,10 +186,10 @@ class Source:
         return await self.quote.price(r,sell_asset,raw)
 
     async def gas(self,r,q,transfer=False,swap=False):
-        market=self.feed.clients['bybit'].markets.get(r['native_spot'],{})
+        market=self.feed.clients[self.venue].markets.get(r['native_spot'],{})
         if market.get('spot') is not True or market.get('active') is not True or market.get('contract'):
             raise ValueError('Bybit: нет активного spot native/USDT для gas')
-        b=await self.feed.book('bybit',r['native_spot'])
+        b=await self.feed.book(self.venue,r['native_spot'])
         price=D(b['asks'][0][0]);raw=D(q.get('gas_price_raw'))
         if raw<=0 or not 0<=self.clock()-float(q['ts'])<=15 or not ZERO<=D(self.clock())-b['ts']<=3:raise ValueError('DEX: нет свежего gas/native price')
         # Declared PAPER gas-unit assumptions, not eth_estimateGas or receipts.
@@ -212,7 +209,7 @@ class Source:
             qty=D(q['virtual_min_buy_raw'])/D(10)**r['asset_decimals']
             return plain(dict(qty=qty,cost=budget,buy_fee=0,dust=0,ts=q['ts'],
                               gas=await self.gas(r,q,swap=True),quote=q))
-        b=await self.book(r);client=self.feed.clients['bybit'];m=client.markets[r['spot_symbol']]
+        b=await self.book(r);client=self.feed.clients[self.venue];m=client.markets[r['spot_symbol']]
         qty=common_quantity(budget/D(b['asks'][0][0]),[b['step']]);filled,cash,_=fill(b,qty,'buy')
         if filled!=qty or qty<=0:raise ValueError('Bybit: недостаточно глубины покупки')
         limits(m,qty,cash)
@@ -230,29 +227,89 @@ class Source:
             return plain(dict(sold=used,cash=D(q['virtual_min_buy_raw'])/D(10)**r['stable_decimals'],
                               fee=0,dust=quantity-used,gas=await self.gas(r,q,swap=True),ts=q['ts'],quote=q))
         b=await self.book(r);qty=common_quantity(quantity,[b['step']]);sold,cash,fee=fill(b,qty,'sell')
-        if sold>0:limits(self.feed.clients['bybit'].markets[r['spot_symbol']],sold,cash)
+        if sold>0:limits(self.feed.clients[self.venue].markets[r['spot_symbol']],sold,cash)
         return plain(dict(sold=sold,cash=cash-fee,fee=fee,dust=quantity-qty,gas=0,ts=b['ts'],quote=None))
 
     async def transfer(self,r,asset,src,dst,amount,networks,q=None):
         amount=D(amount);gas=ZERO;dust=ZERO
         if src==dst:return plain(dict(amount=amount,gas=0,dust=0,fee=0))
-        if src=='bybit':
+        if not dex(src) and not dex(dst):
+            if asset!='USDT':raise ValueError('DEX_TRANSFER_EXTERNAL_CEX_ASSET_UNSUPPORTED')
+            network=await self.feed.quote_route(src,dst)
+            if network.get('deposit_fee') is None or network.get('deposit_fee_percentage') is not False or D(network['deposit_fee'])!=0:
+                raise ValueError('Не подтверждена комиссия CEX-депозита USDT')
+            fee=D(network['fee']);received=amount-fee
+            if amount<D(network['withdraw_minimum']) or received<D(network['deposit_minimum']) or received<=0:
+                raise ValueError('USDT меньше комиссии или минимумов предварительного перевода')
+            return plain(dict(amount=received,gross=amount,gas=0,dust=0,fee=fee,cex_route=network,
+                              source=src,destination=dst,delay_seconds=network.get('delay_seconds','900')))
+        peer=next((v for v in (src,dst) if not dex(v) and v!=self.venue),None)
+        if peer:
+            adapter=self.external_sources.setdefault(peer,Source(self.feed,self.paired,peer))
+            required={r['base']:set(),'USDT':set()}
+            required[asset]={'withdraw' if src==peer else 'deposit'}
+            evidence=await adapter.networks(r,required)
+            return dict(await adapter.transfer(r,asset,src,dst,amount,evidence,q),external_venue=peer)
+        if src==self.venue:
             received,dust=self.withdrawn(networks[asset],amount);fee=amount-received-dust
         else:
             q=q or await self.gas_probe(r)
             gas=await self.gas(r,q,transfer=True)
             received=self.received(networks[asset],amount);fee=amount-received
-        return plain(dict(amount=received,gross=amount if src!='bybit' else received,gas=gas,dust=dust,fee=fee))
+        return plain(dict(amount=received,gross=amount if src!=self.venue else received,gas=gas,dust=dust,fee=fee))
+
+    async def receipt(self,r,asset,transfer,destination,networks):
+        if transfer.get('cex_route'):
+            fresh=await self.feed.quote_route(transfer['source'],transfer['destination'])
+            if fresh['network']!=transfer['cex_route']['network']:
+                raise ValueError('Сеть предварительного CEX-перевода изменилась')
+            if fresh.get('deposit_fee') is None or fresh.get('deposit_fee_percentage') is not False or D(fresh['deposit_fee'])!=0:
+                raise ValueError('Не подтверждена комиссия зачисления USDT')
+            return D(transfer['amount'])
+        if dex(destination):return D(transfer['amount'])
+        if destination==self.venue:return self.received(networks[asset],transfer['gross'])
+        adapter=self.external_sources.setdefault(destination,Source(self.feed,self.paired,destination))
+        evidence=await adapter.networks(r,{r['base']:set(),'USDT':{'deposit'}})
+        return adapter.received(evidence[asset],transfer['gross'])
 
     async def review(self,symbol,buy,sell,read_accounts=False,route=None,reserved=None):
+        from .decision_journal import failure_stage
+        journal=getattr(self.feed,'journal',None)
+        if journal is None:return await self._review(symbol,buy,sell,read_accounts,route,reserved)
+        control=await self.store.control()
+        trace=await journal.start('B',symbol,buy,sell,'observe' if control['mode']=='observe' else 'paper_'+control['mode'],
+                                  source=(route or {}).get('signal_source','scanner'),evidence=dict(kind=KIND,settings=control))
+        try:
+            result=await self._review(symbol,buy,sell,read_accounts,route,reserved)
+            result['trace_id']=trace;result['transfer']['trace_id']=trace
+            failed_stages={failure_stage(reason) for reason in result['reasons']}
+            for stage in ('MATCH','IDENTITY','NETWORK','QUOTES'):
+                await journal.check(trace,stage,'FAIL' if stage in failed_stages else 'PASS','DEX_SPOT_TRANSFER_PREFLIGHT',dict(route=result['transfer']['route']))
+            await journal.check(trace,'COSTS','FAIL' if 'COSTS' in failed_stages else 'PASS','DEX_TRANSFER_ECONOMICS',dict(economics=self.last_economics,thresholds=control))
+            if not result['reasons']:await journal.check(trace,'RISK','PASS','DEX_TRANSFER_CAPITAL_CLEAR')
+            for reason in result['reasons']:await journal.check(trace,failure_stage(reason),'FAIL',reason)
+            await journal.finish(trace,'REJECTED' if result['reasons'] else ('OBSERVED' if control['mode']=='observe' else 'READY'),
+                                  result['reasons'][0] if result['reasons'] else 'PREFLIGHT_OK')
+            return result
+        except asyncio.CancelledError:
+            await journal.finish(trace,'REJECTED','CHECK_CANCELLED',{'stage':'DEX_TRANSFER'})
+            raise
+        except Exception as exc:
+            reason=str(exc).replace('Bybit',self.venue.upper()) if isinstance(exc,ValueError) else type(exc).__name__
+            await journal.finish(trace,'REJECTED',reason,{'error_type':type(exc).__name__})
+            if isinstance(exc,ValueError):raise ValueError(reason) from None
+            raise
+
+    async def _review(self,symbol,buy,sell,read_accounts=False,route=None,reserved=None):
         r=copy.deepcopy(route or self.route_for(symbol,buy,sell))
         control=await self.store.control()
-        if 'bybit' not in self.feed.trade_venues:raise ValueError('Подключи Bybit spot API')
+        if self.venue not in self.feed.trade_venues:raise ValueError('Подключи '+self.venue.upper()+' spot API чтения')
+        if not self.feed.venue_allowed(self.venue,'paper'):raise ValueError('Площадка выключена для новых PAPER-входов')
         budget=D(control['budget']);state=self.paper.state
         if not reserved and (D(state['realized'])<=-D(control['total_loss']) or D(state['daily'].get(day(self.clock()),0))<=-D(control['daily_loss'])):
             raise ValueError('Достигнут лимит убытка PAPER')
         source=reserved['source'] if reserved else self.paper.funding_source(buy,budget)
-        if source not in ('bybit','dex'+str(r['chain_id'])):raise ValueError('Выбери старт PAPER на Bybit; нет USDT для этой сети')
+        if source not in ('bybit','mexc','dex'+str(r['chain_id'])):raise ValueError('Нет исходного USDT для этого маршрута')
         networks=await self.networks(r,self.required_operations(r['base'],source,buy,sell))
         buy_budget=budget
         funding=(dict(amount=reserved['purchase_budget'],gas=str(reserved['gas_used']),dust='0',fee=reserved['funding_fee']) if reserved else
@@ -284,17 +341,16 @@ class Source:
                      spread_pct=spread,net_after_reserve=net-D('.10'),stress_net=stress,reasons=reasons,
                      preview_buy=entry,preview_base=base,
                      costs=dict(gas=gas,funding=funding,base=base,returned=returned),network_evidence=networks,
-                     delay_evidence='UNMEASURED_ETH_120S_BSC_8S_PLUS_BYBIT_300S_PER_TRANSFER_PAPER',gas_evidence='200K_TRANSFER_100K_APPROVAL_PAPER_UNITS'))
-        return dict(symbol=symbol,buy=buy,sell=sell,ts=min(float(entry['ts']),float(sale['ts'])),
+                     delay_evidence='UNMEASURED_ETH_120S_BSC_8S_PLUS_'+self.venue.upper()+'_300S_PER_TRANSFER_PAPER',gas_evidence='200K_TRANSFER_100K_APPROVAL_PAPER_UNITS'))
+        return dict(symbol=symbol,buy=buy,sell=sell,ts=min(float(entry['ts']),float(sale['ts'])),settings_revision=control['revision'],
                     spread_pct=str(spread),reasons=reasons,transfer=p,trade_configured=True,mode=control['mode'])
 
-    @staticmethod
-    def required_operations(base,source,buy,sell):
+    def required_operations(self,base,source,buy,sell):
         required={'USDT':set(),base:set()}
         for asset,src,dst in (('USDT',source,buy),(base,buy,sell),('USDT',sell,source)):
             if src==dst:continue
-            if src=='bybit':required[asset].add('withdraw')
-            if dst=='bybit':required[asset].add('deposit')
+            if src==self.venue:required[asset].add('withdraw')
+            if dst==self.venue:required[asset].add('deposit')
         return required
 
     def format(self,e,include_code=True):

@@ -22,7 +22,7 @@ def render(engine, enabled, controls, paused):
     if engine:
         rows += [[button('⏸ Выключить' if active else '▶ Включить вручную','pair:toggle','danger' if active else 'success')],
                  [button(('✓ ' if p['mode']==m else '')+label,'pair:mode:'+m,'primary' if p['mode']==m else None)
-                  for m,label in (('manual','Вручную'),('auto','Авто'))]]
+                  for m,label in (('observe','Смотреть'),('manual','Вручную'),('auto','Авто'))]]
         if active and p['mode']=='manual' and controls.environment=='paper':
             rows.append([button('🔎 Сканер','pair:scan','primary')])
         elif active:

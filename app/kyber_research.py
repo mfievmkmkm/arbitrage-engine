@@ -31,6 +31,7 @@ class Provider(MetadataProvider):
         self.metadata = metadata
         self.tax_reader = tax_reader
         self.budget = Budget(spacing=.4, concurrency=4)
+        self.server_failures={}
 
     async def close(self):
         if self.tax_reader:
@@ -90,12 +91,14 @@ class Provider(MetadataProvider):
                 if response.status != 200:
                     status = response.status
                     reason = 'DEX_HTTP_'+str(status)
+                    problem_code=None
                     if status==400:
                         # Retain only recognized codes; never persist response text.
                         try:
                             error=await response.json()
-                            if isinstance(error,dict) and type(error.get('code')) is int and error['code']==40011:
-                                reason='KYBER_FILTERED_LIQUIDITY'
+                            if isinstance(error,dict) and type(error.get('code')) is int:
+                                problem_code=error['code']
+                                if problem_code==40011:reason='KYBER_FILTERED_LIQUIDITY'
                         except (ValueError,aiohttp.ClientError):pass
 
                     delay = 0
@@ -114,12 +117,17 @@ class Provider(MetadataProvider):
                             pass
                         self.rate_limit_until = self.clock()+delay
                     elif status>=500:
-                        delay = 5
+                        self.server_failures[chain_id]=self.server_failures.get(chain_id,0)+1
+                        delay = min(60,5*2**min(4,self.server_failures[chain_id]-1))
                         self.chain_cooldowns[chain_id] = (self.clock()+delay,reason)
                     return dict(ok=False,reason=reason,request_sent=True,retry_after_seconds=delay,
-                                error_code=self.access_error_code if status in (401,403) else None)
+                                error_code=self.access_error_code if status in (401,403) else problem_code,
+                                provider=self.name,http_status=status,chain_id=chain_id,
+                                request_scope=dict(sell_contract=sell_token,buy_contract=buy_token,amount_raw=sell_amount,
+                                                   direct_only=bool(self.tax_reader),sources=params.get('includedSources'),requested_at=started))
                 raw = await response.json()
             self.access_failures = 0
+            self.server_failures[chain_id]=0
             self.access_block_until = 0
             self.access_status = self.access_error_code = None
             if not 0<=self.clock()-started<=8:
