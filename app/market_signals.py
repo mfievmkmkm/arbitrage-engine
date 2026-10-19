@@ -144,6 +144,10 @@ class Scanner:
                 self.clients[name] = client;self.loaded_order.append(name)
                 self.health[name] = 'Загружена; ждём котировки'
                 self.workers[name] = asyncio.create_task(self.ticker_loop(name))
+                if name=='mexc':
+                    import logging
+                    logging.getLogger('arbitrage').info('MEXC_SPOT_PAPER | markets=%s | public_only=%s',
+                                                        sum(spot(m) for m in client.markets.values()),name not in self.trade_venues)
             except asyncio.CancelledError:
                 await client.close();raise
             except Exception as exc:
