@@ -126,8 +126,35 @@ def test_network_gate_prevents_wrong_token_and_unavailable_transfer(tmp_path,fau
         if fault=='withdraw':row['withdraw']=False
         if fault=='percent':row['info']['withdrawPercentageFee']='.01'
         if fault=='minimum':row['limits']['deposit']['min']=None
-        with pytest.raises(ValueError):await s.review('X/USDT','dex56','bybit')
+        buy,sell=('bybit','dex56') if fault in ('withdraw','percent') else ('dex56','bybit')
+        with pytest.raises(ValueError):await s.review('X/USDT',buy,sell)
         assert not feed.paper.positions and D(feed.paper.state['cash'])==250
+    asyncio.run(go())
+
+
+def test_network_checks_only_the_transfer_direction_on_bybit(tmp_path):
+    async def go():
+        feed,s,c,prices,_=await setup(tmp_path)
+        prices.token_price=D('1.08')
+        # Bybit buy -> DEX sale: BASE is withdrawn and USDT is deposited.
+        c.currencies['X']['networks']['BSC']['deposit']=False
+        c.currencies['USDT']['networks']['BSC']['withdraw']=False
+        assert (await s.review('X/USDT','bybit','dex56'))['transfer']['kind']==KIND
+        # Missing withdrawal metadata must not block a deposit-only token.
+        c.currencies['USDT']['networks']['BSC']['fee']=None
+        c.currencies['USDT']['networks']['BSC']['precision']=None
+        s.metadata=None
+        assert (await s.review('X/USDT','bybit','dex56'))['transfer']['kind']==KIND
+        c.currencies['X']['networks']['BSC']['withdraw']=False
+        s.metadata=None
+        with pytest.raises(ValueError,match='нужный ввод/вывод X'):
+            await s.review('X/USDT','bybit','dex56')
+        # DEX buy -> Bybit sale: the opposite network permissions apply.
+        c.currencies['X']['networks']['BSC'].update(withdraw=True,deposit=True)
+        c.currencies['USDT']['networks']['BSC'].update(withdraw=False,deposit=False)
+        s.metadata=None
+        with pytest.raises(ValueError,match='нужный ввод/вывод USDT'):
+            await s.review('X/USDT','dex56','bybit')
     asyncio.run(go())
 
 

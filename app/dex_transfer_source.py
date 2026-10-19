@@ -86,12 +86,13 @@ class Source:
             self.metadata_at=self.clock()
             return self.metadata
 
-    async def networks(self,r):
+    async def networks(self,r,operations=None):
         rows=await self.currencies();control=await self.store.control();out={}
         for name,contract in ((r['base'],r['asset']),('USDT',r['stable'])):
             cur=rows.get(name) or {};matches=[]
-            if cur.get('deposit') is False or cur.get('withdraw') is False:
-                raise ValueError('Bybit: ввод/вывод '+name+' остановлен')
+            required=(operations or {}).get(name,{'deposit','withdraw'})
+            if any(cur.get(action) is False for action in required):
+                raise ValueError('Bybit: нужный ввод/вывод '+name+' остановлен')
             for key,n in (cur.get('networks') or {}).items():
                 raw=n.get('info') or {}
                 chains={ALIASES.get(str(x).upper()) for x in (key,n.get('network'),n.get('id'),raw.get('chain'))}-{None}
@@ -100,8 +101,8 @@ class Source:
                     matches.append(n)
             if len(matches)!=1:raise ValueError('Bybit: сеть/контракт '+name+' не подтверждены')
             n=matches[0];raw=n.get('info') or {}
-            if n.get('active') is False or n.get('deposit') is not True or n.get('withdraw') is not True:
-                raise ValueError('Bybit: ввод/вывод '+name+' недоступен')
+            if n.get('active') is False or any(n.get(action) is not True for action in required):
+                raise ValueError('Bybit: нужный ввод/вывод '+name+' недоступен')
             def number(value):
                 try:return D(value)
                 except ValueError:raise ValueError('Bybit: неверное числовое поле сети '+name) from None
@@ -115,23 +116,25 @@ class Source:
                 accuracy=int(raw['minAccuracy'])
                 if not 0<=accuracy<=36:raise ValueError('Bybit: неизвестна точность вывода')
                 precision=D(10)**-accuracy
-            if percentage is not False or any(x is None for x in (fee,wd,dep,precision)):
+            if ('withdraw' in required and (percentage is not False or any(x is None for x in (fee,wd,precision)))) or ('deposit' in required and dep is None):
                 raise ValueError('Bybit: неизвестны комиссия, точность или минимумы '+name)
-            if min(number(fee),number(wd),number(dep))<0 or number(precision)<=0:raise ValueError('Bybit: неверные параметры сети')
+            if ('withdraw' in required and (min(number(fee),number(wd))<0 or number(precision)<=0)) or ('deposit' in required and number(dep)<0):
+                raise ValueError('Bybit: неверные параметры сети')
             deposit=n.get('deposit_fee');dep_pct=n.get('deposit_fee_percentage')
             source='ACCOUNT_NETWORK_API'
-            if deposit is None or dep_pct is None:
+            if 'deposit' in required and (deposit is None or dep_pct is None):
                 # Explicit operator PAPER parameter, never silently assume zero.
                 deposit=control.get('dex_deposit_fee_pct');dep_pct=True
                 source='OPERATOR_PAPER_PERCENT'
                 if deposit is None or not 0<=self.clock()-control.get('dex_deposit_fee_set_at',0)<86400:
                     raise ValueError('Укажи комиссию ввода Bybit в параметрах PAPER')
                 deposit=D(deposit)/100
-            if type(dep_pct) is not bool or D(deposit)<0 or (dep_pct is True and D(deposit)>=1):raise ValueError('Bybit: комиссия ввода неизвестна')
-            out[name]=dict(contract=contract.lower(),chain_id=r['chain_id'],fee=str(D(fee)),
-                withdraw_min=str(D(wd)),deposit_min=str(D(dep)),step=str(D(precision)),
+            if 'deposit' in required and (type(dep_pct) is not bool or D(deposit)<0 or (dep_pct is True and D(deposit)>=1)):
+                raise ValueError('Bybit: комиссия ввода неизвестна')
+            out[name]=dict(contract=contract.lower(),chain_id=r['chain_id'],fee=str(D(fee)) if fee is not None else None,
+                withdraw_min=str(D(wd)) if wd is not None else None,deposit_min=str(D(dep)) if dep is not None else None,step=str(D(precision)) if precision is not None else None,
                 withdraw_max=raw.get('withdrawMax'),
-                deposit_fee=str(D(deposit)),deposit_percentage=dep_pct,fee_source=source,
+                deposit_fee=str(D(deposit)) if deposit is not None else None,deposit_percentage=dep_pct,fee_source=source,
                 observed_at=self.metadata_at)
         return out
 
@@ -234,13 +237,14 @@ class Source:
 
     async def review(self,symbol,buy,sell,read_accounts=False,route=None,reserved=None):
         r=copy.deepcopy(route or self.route_for(symbol,buy,sell))
-        control=await self.store.control();networks=await self.networks(r)
+        control=await self.store.control()
         if 'bybit' not in self.feed.trade_venues:raise ValueError('Подключи Bybit spot API')
         budget=D(control['budget']);state=self.paper.state
         if not reserved and (D(state['realized'])<=-D(control['total_loss']) or D(state['daily'].get(day(self.clock()),0))<=-D(control['daily_loss'])):
             raise ValueError('Достигнут лимит убытка PAPER')
         source=reserved['source'] if reserved else self.paper.funding_source(buy,budget)
         if source not in ('bybit','dex'+str(r['chain_id'])):raise ValueError('Выбери старт PAPER на Bybit; нет USDT для этой сети')
+        networks=await self.networks(r,self.required_operations(r['base'],source,buy,sell))
         buy_budget=budget
         funding=(dict(amount=reserved['purchase_budget'],gas=str(reserved['gas_used']),dust='0',fee=reserved['funding_fee']) if reserved else
                  await self.transfer(r,'USDT',source,buy,budget,networks) if source!=buy else dict(amount=str(budget),gas='0',dust='0',fee='0'))
@@ -274,6 +278,15 @@ class Source:
                      delay_evidence='UNMEASURED_900S_PER_TRANSFER',gas_evidence='200K_TRANSFER_100K_APPROVAL_PAPER_UNITS'))
         return dict(symbol=symbol,buy=buy,sell=sell,ts=min(float(entry['ts']),float(sale['ts'])),
                     spread_pct=str(spread),reasons=reasons,transfer=p,trade_configured=True,mode=control['mode'])
+
+    @staticmethod
+    def required_operations(base,source,buy,sell):
+        required={'USDT':set(),base:set()}
+        for asset,src,dst in (('USDT',source,buy),(base,buy,sell),('USDT',sell,source)):
+            if src==dst:continue
+            if src=='bybit':required[asset].add('withdraw')
+            if dst=='bybit':required[asset].add('deposit')
+        return required
 
     def format(self,e,include_code=True):
         from html import escape

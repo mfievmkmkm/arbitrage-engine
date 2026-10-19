@@ -17,6 +17,7 @@ class Service(Source):
     def __init__(self,feed,paired):
         super().__init__(feed,paired)
         self.entry_enabled=True;self.index=0;self.paused=lambda:False
+        self.reasons={}
         feed.dex_transfer=self;feed.paper.dex_transfer=self
 
     def credit(self,state,p,venue,amount):
@@ -85,7 +86,7 @@ class Service(Source):
     async def monitor_unlocked(self):
         state=copy.deepcopy(self.paper.state);p=state['position'];s=p['signal'];r=p['plan']['route']
         try:
-            networks=await self.networks(r)
+            networks=await self.networks(r,self.required_operations(r['base'],p['source'],s['buy'],s['sell']))
             if p['status']=='USDT_TO_BUY_IN_TRANSIT':
                 if s['buy']=='bybit':
                     receipt=self.received(networks['USDT'],p['funding_transfer']['gross'])
@@ -195,11 +196,13 @@ class Service(Source):
             except ValueError as exc:
                 self.checked+=1;self.last_reason=str(exc)
             if self.last_reason!='READY':
+                self.reasons[self.last_reason]=self.reasons.get(self.last_reason,0)+1
+            if self.last_reason!='READY':
                 key=f'dex-miss:{r["spot_symbol"]}:{a}:{b}:{int(self.clock()//60)}'
                 await self.store.enqueue(key,'miss',dict(reason=self.last_reason,route=r,buy=a,sell=b,economics=self.last_economics))
                 await self.store.delivered(key)
             from .scan_audit import save
-            await save(self.store.path,'transfer',dict(ts=self.clock(),checked=self.checked,routes=len(catalog),reason=self.last_reason,economics=self.last_economics))
+            await save(self.store.path,'transfer',dict(ts=self.clock(),checked=self.checked,routes=len(catalog),reason=self.last_reason,reasons=self.reasons,economics=self.last_economics))
             if self.checked%20==1:
                 logging.getLogger('arbitrage').info('DEX_TRANSFER_SCAN | checked=%s | routes=%s | reason=%s',self.checked,len(catalog),self.last_reason)
             return []
