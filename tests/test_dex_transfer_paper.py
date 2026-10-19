@@ -59,6 +59,18 @@ async def setup(tmp_path,deposit=True):
     return feed,service,c,provider,now
 
 
+def test_transfer_catalog_includes_spot_only_reference_route(tmp_path):
+    async def go():
+        feed,service,client,_,_=await setup(tmp_path)
+        service.paired.scanner.catalog={}
+        service.paired.legacy={'dex_bybit':NS(source=NS(routes=[dict(R,mode='reference')]))}
+        assert [r['base'] for r in service.catalog()]==['X']
+        metadata=await service.currencies()
+        assert 'X' in metadata
+        assert service.catalog()[0]['mode']=='paired'  # use tax-checked DEX quote path
+    asyncio.run(go())
+
+
 async def next_stage(feed,now):
     p=feed.paper.state['position']
     now[0]=max(now[0],p['due'])

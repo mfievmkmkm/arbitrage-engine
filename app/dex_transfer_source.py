@@ -43,7 +43,14 @@ class Source:
         self.routes={}
         client=self.feed.clients.get('bybit');out=[]
         if not client:return []
-        for original in self.paired.scanner.catalog.values():
+        # A spot transfer does not require a futures listing. Include verified
+        # Bybit reference routes as well as the paired scanner's routes.
+        candidates=list(self.paired.scanner.catalog.values())
+        legacy=getattr(self.paired,'legacy',{})
+        bybit=legacy.get('dex_bybit') if isinstance(legacy,dict) else None
+        if bybit is not None:
+            candidates.extend(r for r in bybit.source.routes if r.get('cex_venue')=='bybit')
+        for original in candidates:
             chain=original['chain_id'];symbol=original['base']+'/USDT'
             m=client.markets.get(symbol,{})
             if (chain not in STABLES or m.get('spot') is not True or m.get('active') is not True
@@ -51,6 +58,8 @@ class Source:
                 continue
             stable,decimals,native=STABLES[chain]
             if original['asset'].lower()==stable:continue
+            if (symbol,'dex'+str(chain)) in self.routes:
+                continue
             r=dict(original,stable=stable,stable_decimals=decimals,stable_symbol='USDT',
                    spot_symbol=symbol,native_spot=native+'/USDT',mode='paired')
             key=(symbol,'dex'+str(chain));self.routes[key]=r;out.append(r)
@@ -79,7 +88,7 @@ class Source:
                 self.metadata_retry=self.clock()+30
                 raise ValueError(self.metadata_error) from None
             if not isinstance(rows,dict) or not rows:raise ValueError('Bybit: нет свежих данных сетей')
-            wanted={'USDT'} | {r['base'] for r in self.paired.scanner.catalog.values()}
+            wanted={'USDT'} | {r['base'] for r in self.catalog()}
             active=self.paper.state.get('position')
             if active and active.get('kind')==KIND:wanted.add(active['plan']['route']['base'])
             self.metadata={coin:row for coin,row in rows.items() if coin in wanted}
