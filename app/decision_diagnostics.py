@@ -7,16 +7,28 @@ from .market_signals import spot
 
 class Service:
     interval=60
-    def __init__(self,journal):self.journal=journal;self.entry_enabled=True
+    def __init__(self,journal,capabilities=None):
+        self.journal=journal;self.entry_enabled=True;self.capabilities=capabilities;self.last_capabilities=None
     async def cycle(self):
         await self.journal.no_trade_reports()
+        if self.capabilities:
+            from .scan_audit import save
+            report=await self.capabilities()
+            await save(self.journal.path,'execution',dict(ts=self.journal.clock(),**report))
+            if report!=self.last_capabilities:
+                import logging,json
+                logging.getLogger('arbitrage').info('PRODUCT_EXECUTION_STATUS %s',json.dumps(report,ensure_ascii=False))
+                self.last_capabilities=report
         return []
 
 
 async def render(journal,bundle,data,controls=None,paused=False):
     feed=getattr(bundle,'market_signals',None)
     paired=getattr(bundle,'dex_paired',None)
-    if data=='audit:comparison':
+    if data=='audit:execution':
+        from .product_execution_status import inspect,render as execution_text
+        text=execution_text(await inspect(bundle,controls,paused));rows=[]
+    elif data=='audit:comparison':
         text=await journal.comparison();rows=[]
     elif data=='audit:risk':
         a=controls.profile('paper') if controls else {}
@@ -55,5 +67,6 @@ async def render(journal,bundle,data,controls=None,paused=False):
         rows=[[button(f'{r[1]} · {r[2]} · {r[5]}','audit:trace:'+r[0])] for r in s['latest'][:3]]
         rows.append([button('За час','audit:show'),button('За сутки','audit:day')])
         rows.append([button('Сравнение A / B','audit:comparison')])
+        rows.append([button('Исполнение','audit:execution')])
     rows.append([button('↻ Обновить',data),button('‹ Назад','home')])
     return text,InlineKeyboardMarkup(inline_keyboard=rows)

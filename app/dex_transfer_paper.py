@@ -92,6 +92,7 @@ class Service(Source):
             if D(state['balances'].get(src,0))<total:raise ValueError('Недостаточно виртуального USDT с резервом gas')
             p=dict(id=str(self.paper.version+1),kind=KIND,plan=copy.deepcopy(plan),
                    trace_id=e.get('trace_id'),
+                   entry_mode=e['mode'],settings_revision=risk['revision'],
                    signal=dict(symbol=e['symbol'],buy=e['buy'],sell=e['sell']),source=src,
                    opened=self.clock(),due=self.clock(),status='BUY_PENDING',
                    original_budget=str(budget),purchase_budget=str(budget),cash_debited=str(total),
@@ -136,7 +137,13 @@ class Service(Source):
                 p.update(status='BUY_PENDING',due=self.clock())
                 # The reserved stable is now at buy; never credited as free too.
             elif p['status']=='BUY_PENDING':
-                if not self.entry_enabled or not self.feed.entry_enabled or not await self.store.enabled():
+                control=await self.store.control()
+                if (p.get('entry_mode')!=control['mode'] or control['mode']=='observe'
+                        or p.get('settings_revision')!=control['revision']):
+                    p['reason']='ENTRY_INTENT_CHANGED_BEFORE_BUY'
+                    await self.cancel_unlocked(state,p)
+                    return
+                if not self.entry_enabled or not self.feed.entry_enabled or self.paused() or not await self.store.enabled():
                     p['due']=self.clock()+3
                     await self.paper.save(state,'DEX_TRANSFER_BUY_PAUSED',p);return
                 e=await self.review(s['symbol'],s['buy'],s['sell'],route=r,reserved=p)

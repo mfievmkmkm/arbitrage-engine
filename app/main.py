@@ -2863,7 +2863,9 @@ async def main():
             recovered_decisions=await feed.journal.recover_interrupted()
             log.info("DECISION_JOURNAL_READY strategies=A,B live=DISABLED recovered=%s",recovered_decisions)
             from .decision_diagnostics import Service as DiagnosticsService
-            secondary.runtime.add('decision_diagnostics',DiagnosticsService(feed.journal))
+            from .product_execution_status import inspect as execution_status
+            secondary.runtime.add('decision_diagnostics',DiagnosticsService(feed.journal,
+                lambda:execution_status(secondary,trading_controls,scanner.paused)))
             feed.actionable_only=True
             async def position_card(p,text,message_id):
                 markup=transfer_position_keyboard(p)
