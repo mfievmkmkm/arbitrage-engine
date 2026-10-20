@@ -94,7 +94,7 @@ def test_profile_is_paper_only_and_migration_preserves_operator_toggles(tmp_path
     path=tmp_path/'state'; store=Store(str(path)+'.strategies.json')
     migrate_toggles(path,runtime,store)
     assert runtime.enabled['futures_futures'] and runtime.enabled['dex_paired']
-    assert not runtime.enabled['dex_channel'] and not runtime.enabled['spot_futures']
+    assert not runtime.enabled['dex_channel'] and runtime.enabled['spot_futures']
     runtime.enabled['futures_futures']=False
     migrate_toggles(path,runtime,store)
     assert not runtime.enabled['futures_futures']
