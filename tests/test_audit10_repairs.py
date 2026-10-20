@@ -47,6 +47,8 @@ def test_kyber_message_classification_never_persists_free_text():
         p=Provider(NS(),Session(Response(400,{'code':4008,'message':'Route not found'})),clock=lambda:100)
         result=await p.price(1,STABLE,ASSET,'100')
         assert result['response_evidence']['message_category']=='ROUTE_NOT_FOUND'
+        from app.dex_virtual_paper_source import PriceUnavailable
+        assert PriceUnavailable(result).diagnostics['response_evidence']['message_category']=='ROUTE_NOT_FOUND'
         assert len(result['response_evidence']['message_sha256'])==64
         p=Provider(NS(),Session(Response(400,{'code':4008,'message':'private secret bearer xyz'})),clock=lambda:100)
         result=await p.price(1,STABLE,ASSET,'100')
