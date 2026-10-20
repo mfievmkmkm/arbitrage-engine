@@ -120,7 +120,7 @@ def test_console_separates_successful_quotes_from_trade_admission():
             catalog={1:{}},workers=3,checked=3,last_reasons={'DEX_VIRTUAL_TAX_INVALID':3},
             provider_health=dict(provider='KyberSwap',requests_sent=3,responses_ok=3))
     text,_=scanner(NS(clock=lambda:100),NS(scanner=scan,candidates={}))
-    assert 'KyberSwap с запуска' in text and 'Комиссии токенов не подтверждены' in text
+    assert 'KyberSwap с запуска' in text and 'Проверка безопасности токенов не пройдена' in text
     assert 'Подходящих проверенных пар сейчас нет' not in text
 
 

@@ -3,6 +3,7 @@ import asyncio
 from .dex_network_registry import CHAINS
 from .jupiter_research import mint_valid
 from .zerox_research import ADDRESS
+from .evidence_error import EvidenceError
 
 ALIASES = dict(CHAINS, ERC20=1, BEP20=56, BSC=56, SOL='solana',
                ARB=42161, ARBONE=42161, MATIC=137, AVAXC=43114)
@@ -104,7 +105,16 @@ class Gate:
         if route['base'] not in cached[1]:
             raise ValueError('DEX_CEX_CURRENCY_NOT_LISTED')
         if not matching_contract(cached[1].get(route['base']), route):
-            raise ValueError('DEX_CEX_IDENTITY_UNVERIFIED')
+            currency=cached[1].get(route['base']) or {}
+            networks=[]
+            for key,n in (currency.get('networks') or {}).items():
+                if not isinstance(n,dict):continue
+                info=n.get('info') or {}
+                networks.append(dict(network=key,chain_id=n.get('chainId',info.get('chainId')),
+                    contract=n.get('contract') or n.get('contractAddress') or info.get('contractAddress') or info.get('contract')))
+            raise EvidenceError('DEX_CEX_IDENTITY_UNVERIFIED',venue=venue,base=route['base'],
+                expected_chain=route['chain_id'],expected_contract=route['asset'],
+                exchange_networks=networks,metadata_errors=cached[3],observed_at=cached[0])
         evidence=dict(source='EXCHANGE_CURRENCY_NETWORK_METADATA', chain_id=route['chain_id'],
                       asset=route['asset'], base=route['base'], verified_at=cached[0],expires_at=cached[0]+300)
         if self.registry and route.get('cex_symbol'):

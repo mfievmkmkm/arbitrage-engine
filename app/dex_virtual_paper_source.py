@@ -144,7 +144,8 @@ class Source(HistorySource):
                  mode="DEX_VIRTUAL_INDICATIVE_MODEL", execution_verified=False)
         if r.get("mode", "paired") == "paired":
             if q.get("tax_reason"):
-                raise ValueError(q["tax_reason"])
+                from .evidence_error import EvidenceError
+                raise EvidenceError(q["tax_reason"],**q.get('tax_diagnostics',{}))
             metadata = q.get("token_metadata") or {}
             for side in ("sellToken", "buyToken"):
                 for field in ("buyTaxBps", "sellTaxBps", "transferTaxBps"):

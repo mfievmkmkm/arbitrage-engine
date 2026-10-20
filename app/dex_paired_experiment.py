@@ -101,7 +101,7 @@ class PairedSource(Source):
         try:
             evidence = await self.identity_gate.verify(route)
         except ValueError as exc:
-            return dict(ok=False, reason=str(exc))
+            return dict(ok=False, reason=str(exc),diagnostics=getattr(exc,'diagnostics',{}))
         if self.journal and self.current_trace:
             await self.journal.check(self.current_trace,'MATCH','PASS','FUTURES_AND_EXACT_DEX_ROUTE')
             await self.journal.check(self.current_trace,'IDENTITY','PASS','EXCHANGE_NETWORK_CONTRACT_MATCH',evidence)
@@ -147,7 +147,9 @@ class PairedSource(Source):
                 costs_usd=costs,funding_reserve_usd=reserve,partial_net_usd=raw*.5-costs-reserve,
                 observed=raw*.5-costs-reserve,threshold=self.operator_profile().get('min_net_usd',.25),unit='USD',settings=self.operator_profile()))
         if -p['entry_immediate_net'] >= policy['stop_usd']:
-            return dict(ok=False, reason='PAIRED_IMMEDIATE_COST_HIGH')
+            return dict(ok=False, reason='PAIRED_IMMEDIATE_COST_HIGH',diagnostics=dict(
+                observed=-p['entry_immediate_net'],threshold=policy['stop_usd'],unit='USD',
+                immediate_net_usd=p['entry_immediate_net'],raw_edge_usd=raw,costs_usd=costs))
         p.update(paired_policy=policy, cex_identity=evidence,
                  strategy='dex_paired', hedge_residual_qty=p['virtual_asset_qty']-p['base_qty'],
                  paired_route=dict(route),native_size_attempts=attempts)

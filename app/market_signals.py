@@ -247,9 +247,15 @@ class Scanner:
             fee_rate,evidence=cached[1],'ACCOUNT_READ_ONLY'
         else:
             fee_rate,evidence=D(m['taker']),'PUBLIC_MARKET_RATE_PAPER_ASSUMPTION'
-        async with self.gate:
-            start=self.clock(); raw=await asyncio.wait_for(c.fetch_order_book(symbol),8)
-            book=normalize(raw,symbol,start,self.clock(),3)
+        for attempt in range(2):
+            async with self.gate:
+                start=self.clock(); raw=await asyncio.wait_for(c.fetch_order_book(symbol),8)
+                try:
+                    book=normalize(raw,symbol,start,self.clock(),3)
+                except ValueError as exc:
+                    if str(exc)=='PUBLIC_BOOK_STALE' and attempt==0:continue
+                    raise
+            break
         result=priced(book,c,m)
         result['fee_rate']=fee_rate
         result['fee_evidence']=evidence

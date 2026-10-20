@@ -9,6 +9,7 @@ import copy
 import math
 import time
 from collections import Counter
+from .evidence_error import EvidenceError
 
 
 def positive(value, reason):
@@ -43,7 +44,8 @@ def normalize(book, symbol, started, received, max_age, source="REST"):
         or received - ts > max_age
         or (source == "REST" and received - started > max_age)
     ):
-        raise ValueError("PUBLIC_BOOK_STALE")
+        raise EvidenceError("PUBLIC_BOOK_STALE",book_ts=ts,requested_at=started,received_at=received,
+                            observed=received-ts,threshold=max_age,unit='seconds',source=source)
     out = {}
     for side in ("bids", "asks"):
         rows = book.get(side)

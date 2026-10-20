@@ -12,6 +12,7 @@ from .inventory_public_source import step
 from .transfer_signal_math import limits
 from .dex_virtual_paper_source import Source as QuoteSource
 from .dex_cex_identity import ALIASES
+from .evidence_error import EvidenceError
 
 STABLES={1:('0xdac17f958d2ee523a2206206994597c13d831ec7',6,'ETH'),
          56:('0x55d398326f99059ff775485246999027b3197955',18,'BNB')}
@@ -109,10 +110,13 @@ class Source:
             for key,n in (cur.get('networks') or {}).items():
                 raw=n.get('info') or {}
                 chains={ALIASES.get(str(x).upper()) for x in (key,n.get('network'),n.get('id'),raw.get('chain'))}-{None}
-                address=n.get('contract') or raw.get('contractAddress')
+                address=n.get('contract') or n.get('contractAddress') or raw.get('contractAddress') or raw.get('contract')
                 if chains=={r['chain_id']} and isinstance(address,str) and address.lower()==contract.lower():
                     matches.append(n)
-            if len(matches)!=1:raise ValueError('Bybit: сеть/контракт '+name+' не подтверждены')
+            if len(matches)!=1:
+                raise EvidenceError('Bybit: сеть/контракт '+name+' не подтверждены',asset=name,
+                    expected_chain=r['chain_id'],expected_contract=contract,matching_networks=len(matches),
+                    available_networks=list((cur.get('networks') or {}).keys()),required_operations=sorted(required))
             n=matches[0];raw=n.get('info') or {}
             if n.get('active') is False or any(n.get(action) is not True for action in required):
                 raise ValueError('Bybit: нужный ввод/вывод '+name+' недоступен')
@@ -155,7 +159,7 @@ class Source:
     @staticmethod
     def received(net,amount):
         amount=D(amount)
-        if amount<D(net['deposit_min']):raise ValueError('Bybit: депозит меньше минимума')
+        if amount<D(net['deposit_min']):raise EvidenceError('Bybit: депозит меньше минимума',observed=str(amount),threshold=net['deposit_min'],unit='BASE')
         fee=amount*D(net['deposit_fee']) if net['deposit_percentage'] is True else D(net['deposit_fee'])
         if fee>=amount:raise ValueError('Bybit: депозит меньше комиссии')
         return amount-fee
@@ -164,9 +168,9 @@ class Source:
     def withdrawn(net,amount):
         qty=common_quantity(D(amount),[D(net['step'])])
         maximum=net.get('withdraw_max')
-        if maximum not in (None,'-1',-1) and qty>D(maximum):raise ValueError('Bybit: превышен максимум вывода')
+        if maximum not in (None,'-1',-1) and qty>D(maximum):raise EvidenceError('Bybit: превышен максимум вывода',observed=str(qty),threshold=maximum,unit='BASE')
         if qty<D(net['withdraw_min']) or qty<=D(net['fee']):
-            raise ValueError('Bybit: вывод меньше минимума/комиссии')
+            raise EvidenceError('Bybit: вывод меньше минимума/комиссии',observed=str(qty),minimum=net['withdraw_min'],fee=net['fee'],unit='BASE')
         return qty-D(net['fee']),D(amount)-qty
 
     async def book(self,r):
@@ -281,13 +285,20 @@ class Source:
                                   source=(route or {}).get('signal_source','scanner'),evidence=dict(kind=KIND,settings=control))
         try:
             result=await self._review(symbol,buy,sell,read_accounts,route,reserved)
+            if 'Нужны новые цены входа' in result['reasons']:
+                await journal.check(trace,'QUOTES','WAIT','REFRESH_AFTER_SLOW_PREFLIGHT',
+                                    dict(economics=result['transfer']['economics'],maximum_age_seconds=3))
+                result=await self._review(symbol,buy,sell,read_accounts,route,reserved)
             result['trace_id']=trace;result['transfer']['trace_id']=trace
             failed_stages={failure_stage(reason) for reason in result['reasons']}
             for stage in ('MATCH','IDENTITY','NETWORK','QUOTES'):
                 await journal.check(trace,stage,'FAIL' if stage in failed_stages else 'PASS','DEX_SPOT_TRANSFER_PREFLIGHT',dict(route=result['transfer']['route']))
-            await journal.check(trace,'COSTS','FAIL' if 'COSTS' in failed_stages else 'PASS','DEX_TRANSFER_ECONOMICS',dict(economics=self.last_economics,thresholds=control))
+            await journal.check(trace,'COSTS','FAIL' if 'COSTS' in failed_stages else 'PASS','DEX_TRANSFER_ECONOMICS',dict(economics=result['transfer']['economics'],thresholds=control))
             if not result['reasons']:await journal.check(trace,'RISK','PASS','DEX_TRANSFER_CAPITAL_CLEAR')
-            for reason in result['reasons']:await journal.check(trace,failure_stage(reason),'FAIL',reason)
+            for reason in result['reasons']:
+                await journal.check(trace,failure_stage(reason),'FAIL',reason,
+                    dict(economics=result['transfer']['economics'],thresholds=control,
+                         observed=result['transfer']['checks'].get(reason)))
             await journal.finish(trace,'REJECTED' if result['reasons'] else ('OBSERVED' if control['mode']=='observe' else 'READY'),
                                   result['reasons'][0] if result['reasons'] else 'PREFLIGHT_OK')
             return result
@@ -296,8 +307,9 @@ class Source:
             raise
         except Exception as exc:
             reason=str(exc).replace('Bybit',self.venue.upper()) if isinstance(exc,ValueError) else type(exc).__name__
-            await journal.finish(trace,'REJECTED',reason,{'error_type':type(exc).__name__})
-            if isinstance(exc,ValueError):raise ValueError(reason) from None
+            details=dict(getattr(exc,'diagnostics',{}),error_type=type(exc).__name__)
+            await journal.finish(trace,'REJECTED',reason,details)
+            if isinstance(exc,ValueError):raise EvidenceError(reason,**details) from None
             raise
 
     async def _review(self,symbol,buy,sell,read_accounts=False,route=None,reserved=None):
@@ -334,12 +346,24 @@ class Source:
         self.last_economics=dict(symbol=symbol,buy=buy,sell=sell,spread_pct=float(spread),net=float(net),stress_net=float(stress),ts=self.clock())
         reserve=max(D('.10'),gas*2)
         if not reserved and D(state['balances'].get(source,'0'))<budget+reserve:reasons.append('Не хватает виртуального USDT с резервом gas')
+        economics=plain(dict(budget=budget,purchase_spent=entry['cost'],buy_fee=entry['buy_fee'],
+            sale_proceeds=sale['cash'],sell_fee=sale['fee'],returned=returned['amount'],
+            funding_fee=funding['fee'],base_transfer_fee=base['fee'],return_fee=returned['fee'],
+            gas=gas,leftover=leftover,spent=spent,net=net,net_after_reserve=net-D('.10'),
+            safety=D('.10'),stress_drop_pct=control['stress_drop'],stress_loss=D(sale['cash'])*D(control['stress_drop'])/100,
+            stress_net=stress,spread_pct=spread,risk_evidence='OPERATOR_PAPER_SCENARIO_NOT_A_FEE'))
+        checks=plain({
+            'Спред вне заданных границ':dict(value=spread,minimum=control['min_spread'],maximum=control['max_spread'],unit='percent'),
+            'Стресс-NET после переводов и gas ниже минимума':dict(value=stress,minimum=control['min_net'],unit='USD'),
+            'Недостаточно глубины предполагаемой продажи':dict(sold=sale['sold'],dust=sale['dust'],required=base['amount'],unit='BASE'),
+            'Нужны новые цены входа':dict(buy_age_seconds=self.clock()-float(entry['ts']),sell_age_seconds=self.clock()-float(sale['ts']),maximum_seconds=3),
+            'Не хватает виртуального USDT с резервом gas':dict(value=state['balances'].get(source,'0'),minimum=budget+reserve,unit='USD')})
         p=plain(dict(kind=KIND,route=r,source=source,budget=budget,gas_reserve=reserve,
                      buy_qty=entry['qty'],received_qty=base['amount'],sell_qty=sale['sold'],spent=entry['cost'],
                      buy_fee=entry['buy_fee'],sell_fee=sale['fee'],buy_vwap=buy_vwap,sell_vwap=sell_vwap,
                      base_route=dict(network=str(r['chain_id']),fee=base['fee']),return_fee=returned['fee'],
                      spread_pct=spread,net_after_reserve=net-D('.10'),stress_net=stress,reasons=reasons,
-                     preview_buy=entry,preview_base=base,
+                     preview_buy=entry,preview_base=base,economics=economics,checks=checks,
                      costs=dict(gas=gas,funding=funding,base=base,returned=returned),network_evidence=networks,
                      delay_evidence='UNMEASURED_ETH_120S_BSC_8S_PLUS_'+self.venue.upper()+'_300S_PER_TRANSFER_PAPER',gas_evidence='200K_TRANSFER_100K_APPROVAL_PAPER_UNITS'))
         return dict(symbol=symbol,buy=buy,sell=sell,ts=min(float(entry['ts']),float(sale['ts'])),settings_revision=control['revision'],

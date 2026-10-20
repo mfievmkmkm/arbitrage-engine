@@ -1,6 +1,7 @@
 """Sequential spot BUY -> transfer -> SELL. Future bids are scenarios only."""
 from .strategy_math import D, ONE, ZERO, plain, positive, nonnegative, common_quantity
 from .inventory_paper import fill
+from .evidence_error import EvidenceError
 
 
 def limits(market,qty,cost):
@@ -8,9 +9,10 @@ def limits(market,qty,cost):
     for key,value in (('amount',D(qty)),('cost',D(cost))):
         spec=rows.get(key) or {}
         if spec.get('min') is None:
-            raise ValueError('Неизвестен минимум '+key)
+            raise EvidenceError('Неизвестен минимум '+key,observed=str(value),minimum=None,unit=key,symbol=market.get('symbol'))
         if value<D(spec['min']) or (spec.get('max') is not None and value>D(spec['max'])):
-            raise ValueError('Размер ордера за пределами '+key)
+            raise EvidenceError('Размер ордера за пределами '+key,observed=str(value),
+                                minimum=str(spec['min']),maximum=spec.get('max'),unit=key,symbol=market.get('symbol'))
 
 
 def deposit_known(route):

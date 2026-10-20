@@ -63,7 +63,9 @@ def validate_evidence(request, venue, now=None, max_slippage=MAX_SLIPPAGE):
         or received > now
         or now - min(book_ts, start) > MAX_AGE
     ):
-        raise ValueError("RECOVERY_BOOK_STALE")
+        from .evidence_error import EvidenceError
+        raise EvidenceError("RECOVERY_BOOK_STALE",book_ts=book_ts,requested_at=start,received_at=received,
+                            observed=now-min(book_ts,start),threshold=MAX_AGE,unit='seconds')
     bids, asks = levels(e.get("bids"), "bids"), levels(e.get("asks"), "asks")
     if bids[0][0] >= asks[0][0]:
         raise ValueError("RECOVERY_BOOK_CROSSED")

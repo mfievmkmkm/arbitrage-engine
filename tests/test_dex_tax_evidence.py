@@ -39,10 +39,10 @@ def test_missing_or_invalid_taxes_never_become_zero(field,value):
     ({'token':dict(address=ASSET)},'SCOPE_MISMATCH'),
     ({'pairAddress':ASSET},'SCOPE_MISMATCH'),
     ({'simulationSuccess':False},'SIMULATION_FAILED'),
-    ({'honeypotResult':{}},'HONEYPOT_OR_UNKNOWN'),
-    ({'honeypotResult':dict(isHoneypot=True)},'HONEYPOT_OR_UNKNOWN'),
-    ({'summary':dict(riskLevel=20)},'RISK_OR_UNKNOWN'),
-    ({'summary':{}},'RISK_OR_UNKNOWN'),
+    ({'honeypotResult':{}},'HONEYPOT_UNKNOWN'),
+    ({'honeypotResult':dict(isHoneypot=True)},'HONEYPOT_DETECTED'),
+    ({'summary':dict(riskLevel=20)},'RISK_HIGH'),
+    ({'summary':{}},'RISK_UNKNOWN'),
     ({'flags':['TRANSFER_BLOCKED']},'FLAGS_UNSUPPORTED'),
     ({'simulationResult':dict(buyTax=0,sellTax=0,transferTax=0,maxSell={'tokenWei':'1'})},'SIZE_LIMIT_UNSUPPORTED')
 ])
@@ -132,7 +132,7 @@ def test_paired_cycle_uses_real_adapter_shapes_and_preserves_both_legs(tmp_path)
         assert 'dex_pnl' in closed[0]['last_mark'] and 'cex_pnl' in closed[0]['last_mark']
         assert all('routes/build' not in url for url,_ in calls)
         kyber=[params for url,params in calls if 'kyberswap' in url]
-        assert kyber and all(p['onlyDirectPools']=='true' and p['includedSources']=='uniswap,uniswapv3' for p in kyber)
+        assert kyber and all(p['onlyDirectPools']=='false' and p['includedSources']=='uniswap,uniswapv3' for p in kyber)
     asyncio.run(go())
 
 
@@ -151,12 +151,9 @@ def test_nonzero_observed_tax_still_blocks_paired_trade():
         raw=payload();raw['simulationResult']['transferTax']=.1
         reader=Reader(Session(Response(200,raw),Response(200,payload(ASSET,STABLE))),lambda:100)
         reader.budget.spacing=0
-        metadata=await reader.route(quote())
-        q=quote()|dict(ok=True,sell_amount_raw='100',buy_amount_raw='200',ts=100,token_metadata=metadata)
-        source=Source.__new__(Source);source.clock=lambda:100
-        source.provider=NS(price_route=lambda *args:asyncio.sleep(0,result=q))
-        with pytest.raises(ValueError,match='TOKEN_TAX_UNSUPPORTED'):
-            await source.price(dict(chain_id=1,stable=STABLE,asset=ASSET,mode='paired'),False,100)
+        with pytest.raises(ValueError,match='TOKEN_TAX_UNSUPPORTED') as caught:
+            await reader.route(quote())
+        assert caught.value.diagnostics['threshold']==0
     asyncio.run(go())
 
 

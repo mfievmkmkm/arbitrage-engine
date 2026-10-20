@@ -78,13 +78,16 @@ def scanner(engine,service,manual=True):
     elif failures and reasons.get('DEX_HTTP_429',0)==failures:
         text+=f'\n\n⏳ {provider}: лимит запросов. Повтор после паузы провайдера.'
     elif not candidates and any(count and (code.startswith('DEX_TAX_') or code.startswith('DEX_VIRTUAL_TAX')) for code,count in reasons.items()):
-        text+='\n\nКомиссии токенов не подтверждены — входов нет.'
+        text+='\n\nПроверка безопасности токенов не пройдена — входов нет.'
     elif not candidates and reasons.get('KYBER_FILTERED_LIQUIDITY',0)==failures and failures:
-        text+='\n\nНет прямого пула с проверяемыми комиссиями.'
+        text+='\n\nНет маршрута среди поддерживаемых проверяемых пулов.'
     elif not candidates:
         text+='\n\nПодходящих проверенных пар сейчас нет.'
     if not candidates and reasons:
-        names={'KYBER_FILTERED_LIQUIDITY':'нет прямого пула','PAIRED_PARTIAL_NET_LOW':'низкий NET',
+        names={'KYBER_FILTERED_LIQUIDITY':'нет проверяемого маршрута','PAIRED_PARTIAL_NET_LOW':'низкий NET',
+               'DEX_TAX_HONEYPOT_DETECTED':'обнаружено ограничение продажи',
+               'DEX_TAX_HONEYPOT_UNKNOWN':'возможность продажи не подтверждена',
+               'DEX_TAX_SIMULATION_FAILED':'сбой симуляции токена','DEX_TAX_HTTP_404':'сервис проверки: HTTP 404',
                'DEX_VIRTUAL_REVERSE_PREFLIGHT_NET_STOP':'убыток при закрытии','RECOVERY_BOOK_STALE':'устарел стакан'}
         text+='\nПоследний пакет: '+escape(', '.join(f'{names.get(k,k)}: {v}' for k,v in sorted(reasons.items(),key=lambda x:-x[1])[:3]))
     if health.get('blocked') and health.get('reason') in ('DEX_HTTP_401','DEX_HTTP_403'):

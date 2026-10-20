@@ -39,13 +39,21 @@ class Provider(MetadataProvider):
         await super().close()
 
     async def price(self, *args, **kwargs):
-        q = await super().price(*args, **kwargs)
-        if q.get("ok") and self.tax_reader:
+        # Cold simulations can age a quote. Requote once through the same budget;
+        # verify the returned path again rather than reusing unrelated evidence.
+        for attempt in range(2):
+            q = await super().price(*args, **kwargs)
+            if not q.get('ok') or not self.tax_reader:return q
             try:
                 q["token_metadata"] = await self.tax_reader.route(q)
                 q["tax_evidence"] = "POOL_SIMULATION_PAPER_ONLY"
             except ValueError as exc:
                 q["tax_reason"] = str(exc)
+                q["tax_diagnostics"] = getattr(exc,'diagnostics',{})
+                return q
+            if 0<=self.clock()-q['ts']<=2:return q
+        q['tax_reason']='DEX_TAX_QUOTE_REFRESH_REQUIRED'
+        q['tax_diagnostics']=dict(observed=self.clock()-q['ts'],threshold=2,unit='seconds')
         return q
 
     async def token(self, network, address):
@@ -83,7 +91,7 @@ class Provider(MetadataProvider):
             elif self.tax_reader and chain_id==56:
                 params['includedSources']='pancake,pancake-v3'
             if self.tax_reader:
-                params.update(onlyDirectPools='true', onlySinglePath='true')
+                params.update(onlyDirectPools='false', onlySinglePath='true')
             async with self.session.get(
                 f'https://aggregator-api.kyberswap.com/{CHAINS[chain_id]}/api/v1/routes',
                 params=params,
@@ -124,7 +132,7 @@ class Provider(MetadataProvider):
                                 error_code=self.access_error_code if status in (401,403) else problem_code,
                                 provider=self.name,http_status=status,chain_id=chain_id,
                                 request_scope=dict(sell_contract=sell_token,buy_contract=buy_token,amount_raw=sell_amount,
-                                                   direct_only=bool(self.tax_reader),sources=params.get('includedSources'),requested_at=started))
+                                                   direct_only=False,sources=params.get('includedSources'),requested_at=started))
                 raw = await response.json()
             self.access_failures = 0
             self.server_failures[chain_id]=0

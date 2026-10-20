@@ -12,8 +12,12 @@ STAGES=('SIGNAL','MATCH','IDENTITY','NETWORK','QUOTES','COSTS','RISK','EXECUTOR'
 REMEDIES={
  'KYBER_FILTERED_LIQUIDITY':'Маршрут не найден среди разрешённых пулов; нужен другой проверяемый пул или меньший размер.',
  'DEX_TAX_SIMULATION_FAILED':'Симуляция токена не прошла; дождаться подтверждённой проверки или выбрать другой токен.',
- 'DEX_TAX_HTTP_404':'Сервис не знает этот пул/токен; безопасность остаётся неподтверждённой.',
+ 'DEX_TAX_HTTP_404':'Сервис вернул HTTP 404; проверить endpoint и поддержку сети/пула. Это не подтверждение опасности токена.',
  'DEX_TAX_HONEYPOT_OR_UNKNOWN':'Не подтверждена возможность безопасной продажи токена.',
+ 'DEX_TAX_HONEYPOT_DETECTED':'Проверка обнаружила ограничение продажи; вход запрещён.',
+ 'DEX_TAX_HONEYPOT_UNKNOWN':'Сервис не определил возможность продажи; нужна новая подтверждённая проверка.',
+ 'DEX_TAX_RISK_UNKNOWN':'Сервис не сообщил оценку риска; вход запрещён до подтверждения.',
+ 'DEX_TAX_RISK_HIGH':'Оценка риска превышает разрешённый порог; вход запрещён.',
  'DEX_CEX_IDENTITY_UNVERIFIED':'Нужны совпадающие сеть и контракт в данных биржи.',
  'PAIRED_PARTIAL_NET_LOW':'Сценарный NET ниже заданного порога; числа находятся в проверке кандидата.',
  'DEX_VIRTUAL_REVERSE_PREFLIGHT_NET_STOP':'Затраты немедленного выхода превышают лимит риска; числа находятся в проверке.',
@@ -133,8 +137,8 @@ class Journal:
         out=[f'🩺 <b>{escape(row[1])} · {row[0]}</b>',escape(f'{row[2]} → {row[3]} · {row[4]} · {row[5]}'),escape(f'{row[6]} · {row[7]}')]
         for ts,stage,status,reason,payload in reversed(checks):
             data=payload_loads(payload)
-            facts={k:v for k,v in data.items() if k in ('observed','threshold','unit','partial_net_usd','costs_usd','raw_edge_usd','immediate_net_usd','reverse_loss_limit_usd','error_type')}
-            numeric=('spread_pct','net','stress_net','net_after_reserve','budget','spent','partial_net','raw_edge','costs','funding_reserve','target_usd','stop_usd','min_spread','max_spread','min_net','stress_drop','gas')
+            facts={k:v for k,v in data.items() if k in ('observed','threshold','minimum','maximum','unit','partial_net_usd','costs_usd','raw_edge_usd','immediate_net_usd','reverse_loss_limit_usd','error_type','http_status','simulation_error_category','expected_chain','expected_contract','metadata_errors')}
+            numeric=('spread_pct','net','stress_net','net_after_reserve','budget','spent','partial_net','raw_edge','costs','funding_reserve','target_usd','stop_usd','min_spread','max_spread','min_net','stress_drop','stress_drop_pct','stress_loss','gas','buy_fee','sell_fee','safety','funding_fee','return_fee')
             facts.update({k:v for k,v in data.items() if k in numeric})
             for group in ('economics','thresholds','plan'):
                 values=data.get(group)
