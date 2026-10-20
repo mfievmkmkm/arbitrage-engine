@@ -11,7 +11,7 @@ class Diary:
         self.path = path
 
     async def init(self):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.executescript(SCHEMA)
             await d.execute(
                 "CREATE TABLE IF NOT EXISTS order_request_evidence(intent_id TEXT PRIMARY KEY,trade_id TEXT,ts REAL,payload TEXT)"
@@ -40,7 +40,7 @@ class Diary:
     async def record(self, ops):
         if not ops:
             return
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.executemany(
                 "INSERT INTO observations(ts,symbol,buy,sell,raw,executable,fee_pct,hypothetical_edge,notional,payload) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 [
@@ -62,14 +62,14 @@ class Diary:
             await d.commit()
 
     async def summary(self):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             async with d.execute(
                 "SELECT COUNT(*),MAX(ts),MAX(hypothetical_edge) FROM observations"
             ) as c:
                 return await c.fetchone()
 
     async def create_paper_position(self, p):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             c = await d.execute(
                 "INSERT INTO paper_positions(symbol,buy,sell,notional,entry_buy,entry_sell,entry_spread,opened_at,best_net_usd,current_net_usd,current_spread,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -113,7 +113,7 @@ class Diary:
             return c.lastrowid
 
     async def update_paper_position(self, p):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.execute('UPDATE paper_positions SET paired_policy=?,funding_calendar=?,exit_pending=? WHERE id=?',
                             tuple(json.dumps(p.get(k)) if p.get(k) is not None else None for k in ('paired_policy', 'funding_calendar', 'exit_pending')) + (p['id'],))
             await d.execute(
@@ -141,7 +141,7 @@ class Diary:
             await d.commit()
 
     async def close_paper_position(self, p, reason):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.execute(
                 "UPDATE paper_positions SET status='CLOSED',closed_at=?,close_reason=?,best_net_usd=?,current_net_usd=?,current_spread=? WHERE id=?",
                 (
@@ -156,7 +156,7 @@ class Diary:
             await d.commit()
 
     async def open_paper_positions(self):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             d.row_factory = aiosqlite.Row
             async with d.execute(
                 "SELECT id,symbol,buy,sell,notional,entry_buy,entry_sell,entry_spread,opened_at,best_net_usd,current_net_usd,current_spread,status,base_qty,entry_fees_usd,COALESCE(safety_usd,0) AS safety_usd,paired_policy,funding_calendar,exit_pending,(SELECT payload FROM paper_marks m WHERE m.position_id=paper_positions.id ORDER BY ts DESC,id DESC LIMIT 1) AS last_mark FROM paper_positions WHERE status='OPEN'"
@@ -171,7 +171,7 @@ class Diary:
                 return rows
 
     async def paper_stats(self):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             async with d.execute(
                 "SELECT COUNT(*),COALESCE(SUM(current_net_usd),0),COALESCE(SUM(CASE WHEN current_net_usd>0 THEN 1 ELSE 0 END),0) FROM paper_positions WHERE status='CLOSED'"
             ) as c:
@@ -179,7 +179,7 @@ class Diary:
 
     async def record_execution_event(self, event):
         row = event.row()
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.execute(
                 "INSERT INTO execution_events(trade_id,ts,kind,venue,symbol,side,qty,price,fee,reason,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -199,7 +199,7 @@ class Diary:
             await d.commit()
 
     async def execution_history(self, trade_id):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             d.row_factory = aiosqlite.Row
             async with d.execute(
                 "SELECT * FROM execution_events WHERE trade_id=? ORDER BY ts,id",
@@ -208,7 +208,7 @@ class Diary:
                 return [dict(x) for x in await cur.fetchall()]
 
     async def all_execution_events(self, limit=5000):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             d.row_factory = aiosqlite.Row
             async with d.execute(
                 "SELECT trade_id,ts,kind,venue,symbol,side,qty,price,fee,reason,payload FROM execution_events ORDER BY ts DESC LIMIT ?",
@@ -228,7 +228,7 @@ class Diary:
     async def save_order_intent(self, intent, state=None):
         row = intent.row()
         row["state"] = state or row["state"]
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.execute(
                 "INSERT INTO order_intents(intent_id,trade_id,venue,symbol,side,qty,reduce_only,state,updated_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(intent_id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at,payload=excluded.payload",
                 (
@@ -260,7 +260,7 @@ class Diary:
                 "base_currency": result.base_currency,
             }
         )
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.execute(
                 "INSERT INTO order_intents(intent_id,trade_id,venue,symbol,side,qty,reduce_only,state,updated_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(intent_id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at,payload=excluded.payload",
                 (
@@ -279,7 +279,7 @@ class Diary:
             await d.commit()
 
     async def order_intent_states(self, trade_id=None):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             q = "SELECT intent_id,state FROM order_intents"
             args = ()
             if trade_id is not None:
@@ -289,7 +289,7 @@ class Diary:
                 return {x[0]: x[1] for x in await c.fetchall()}
 
     async def order_intents(self, trade_id=None):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             d.row_factory = aiosqlite.Row
             q = "SELECT rowid AS _journal_sequence,* FROM order_intents"
             args = ()
@@ -311,7 +311,7 @@ class Diary:
         return out
 
     async def update_order_intent_reconciled(self, intent_id, state, result=None):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.execute("BEGIN IMMEDIATE")
             d.row_factory = aiosqlite.Row
             async with d.execute(
@@ -363,7 +363,7 @@ class Diary:
             return valid_result
 
     async def replay_trades(self, limit=500):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             d.row_factory = aiosqlite.Row
             async with d.execute(
                 "SELECT id,entry_spread,opened_at FROM (SELECT id,entry_spread,opened_at FROM paper_positions WHERE status='CLOSED' ORDER BY opened_at DESC LIMIT ?) ORDER BY opened_at ASC",
@@ -391,7 +391,7 @@ class Diary:
 
     async def record_scan(self, summary):
         # Includes empty cycles: absence of trades is not absence of scanning.
-        async with aiosqlite.connect(self.path) as db:
+        async with aiosqlite.connect(self.path, timeout=30.0) as db:
             await db.execute('INSERT INTO scan_cycles(ts,status,payload) VALUES(?,?,?)',
                              (summary['ts'], summary.get('status', 'COMPLETED'),
                               json.dumps(summary, ensure_ascii=False, allow_nan=False)))
@@ -400,7 +400,7 @@ class Diary:
     async def record_decisions(self, rows):
         if not rows:
             return
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.executemany(
                 "INSERT INTO signal_decisions(ts,strategy,symbol,buy,sell,action,reason,payload) VALUES(?,?,?,?,?,?,?,?)",
                 [
@@ -422,7 +422,7 @@ class Diary:
     async def claim_order_intent(self, intent, request=None):
         row = intent.row()
         row["state"] = "SUBMITTING"
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             c = await d.execute(
                 "INSERT OR IGNORE INTO order_intents(intent_id,trade_id,venue,symbol,side,qty,reduce_only,state,updated_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -455,7 +455,7 @@ class Diary:
             return claimed
 
     async def order_request_evidence(self, intent_id):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             async with d.execute(
                 "SELECT payload FROM order_request_evidence WHERE intent_id=?",
                 (intent_id,),

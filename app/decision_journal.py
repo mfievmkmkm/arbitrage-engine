@@ -72,14 +72,14 @@ class Journal:
         if self.ready:return
         async with self.lock:
             if self.ready:return
-            async with aiosqlite.connect(self.path) as db:
+            async with aiosqlite.connect(self.path, timeout=20.0) as db:
                 await db.executescript(SCHEMA);await db.commit()
             self.ready=True
 
     async def start(self,strategy,symbol,buy,sell,mode='observe',source='scanner',evidence=None):
         await self.init();ident=uuid.uuid4().hex
         now=self.clock()
-        async with aiosqlite.connect(self.path) as db:
+        async with aiosqlite.connect(self.path, timeout=20.0) as db:
             await db.execute('INSERT INTO arb_candidates VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                 (ident,strategy,mode,source,symbol,buy,sell,now,now,'CHECKING','',dump(evidence or {})))
             await self.append(db,ident,'SIGNAL','PASS','CANDIDATE_DETECTED',evidence or {})
@@ -93,11 +93,11 @@ class Journal:
                          (ident,self.clock(),stage,status,reason,dump(details or {})))
 
     async def check(self,ident,stage,status,reason,details=None):
-        async with aiosqlite.connect(self.path) as db:
+        async with aiosqlite.connect(self.path, timeout=20.0) as db:
             await self.append(db,ident,stage,status,reason,details);await db.commit()
 
     async def finish(self,ident,status,reason='',details=None):
-        async with aiosqlite.connect(self.path) as db:
+        async with aiosqlite.connect(self.path, timeout=20.0) as db:
             await db.execute('UPDATE arb_candidates SET updated=?,status=?,reason=? WHERE id=?',
                              (self.clock(),status,reason,ident))
             if details is not None:
@@ -125,7 +125,7 @@ class Journal:
 
     async def snapshot(self,hours=1):
         await self.init();since=self.clock()-hours*3600
-        async with aiosqlite.connect(self.path) as db:
+        async with aiosqlite.connect(self.path, timeout=20.0) as db:
             rows=await (await db.execute('SELECT strategy,mode,COUNT(*) FROM arb_candidates WHERE detected>=? GROUP BY strategy,mode',(since,))).fetchall()
             stages=await (await db.execute('SELECT c.strategy,k.stage,COUNT(DISTINCT c.id) FROM arb_checks k JOIN arb_candidates c ON c.id=k.candidate_id WHERE c.detected>=? AND k.status="PASS" GROUP BY c.strategy,k.stage',(since,))).fetchall()
             reasons=await (await db.execute('SELECT strategy,reason,COUNT(*) FROM arb_candidates WHERE detected>=? AND status="REJECTED" GROUP BY strategy,reason ORDER BY COUNT(*) DESC LIMIT 8',(since,))).fetchall()
@@ -135,7 +135,7 @@ class Journal:
 
     async def trace(self,ident):
         await self.init()
-        async with aiosqlite.connect(self.path) as db:
+        async with aiosqlite.connect(self.path, timeout=20.0) as db:
             row=await (await db.execute('SELECT strategy,symbol,buy,sell,mode,source,status,reason FROM arb_candidates WHERE id=?',(ident,))).fetchone()
             checks=await (await db.execute('SELECT ts,stage,status,reason,payload FROM arb_checks WHERE candidate_id=? ORDER BY id DESC LIMIT 15',(ident,))).fetchall()
         if row is None:raise ValueError('Проверка не найдена')
@@ -158,7 +158,7 @@ class Journal:
 
     async def no_trade_reports(self,hours=1):
         s=await self.snapshot(hours)
-        async with aiosqlite.connect(self.path) as db:
+        async with aiosqlite.connect(self.path, timeout=20.0) as db:
             for strategy in ('A','B'):
                 counts=sum(n for st,mode,n in s['counts'] if st==strategy)
                 opened=sum(n for st,stage,n in s['stages'] if st==strategy and stage=='EXECUTED')
@@ -172,7 +172,7 @@ class Journal:
 
     async def comparison(self):
         await self.init()
-        async with aiosqlite.connect(self.path) as db:
+        async with aiosqlite.connect(self.path, timeout=20.0) as db:
             rows=await (await db.execute('SELECT strategy,mode,position_id,payload FROM arb_lifecycle WHERE status="CLOSED" ORDER BY id DESC LIMIT 5000')).fetchall()
         unique={}
         for strategy,mode,pid,payload in rows:
@@ -196,7 +196,7 @@ class Journal:
 
     async def recover_interrupted(self):
         await self.init()
-        async with aiosqlite.connect(self.path) as db:
+        async with aiosqlite.connect(self.path, timeout=20.0) as db:
             ids=await (await db.execute('SELECT id FROM arb_candidates WHERE status="CHECKING" AND updated<?',(self.clock()-120,))).fetchall()
             for (ident,) in ids:
                 await self.append(db,ident,'QUOTES','FAIL','PREVIOUS_PROCESS_CHECK_INTERRUPTED')

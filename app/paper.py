@@ -318,6 +318,11 @@ class PaperEngine:
         if not p:
             return None
         await self.diary.close_paper_position(dict(asdict(p), status="CLOSED"), reason)
+        if p.paired_policy:
+            import logging
+            logging.getLogger("arbitrage").info(
+                "PAPER_FF_CLOSED id=%s symbol=%s reason=%s model_net_usd=%+.6f",
+                pid, p.symbol, reason, p.current_net_usd)
         p.status = "CLOSED"
         self.positions.pop(pid, None)
         return p
