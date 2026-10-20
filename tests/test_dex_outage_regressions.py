@@ -256,7 +256,8 @@ def test_migration_preserves_paper_pause_and_marker(tmp_path):
     store = Store(str(migrated)+'.strategies.json')
     runtime.enabled.update(store.load({}))
     migrate_toggles(migrated, runtime, store)
-    assert not runtime.enabled['futures_futures'] and not runtime.enabled['dex_paired']
+    # Versioned owner-requested PAPER convergence activation runs only once.
+    assert runtime.enabled['futures_futures'] and not runtime.enabled['dex_paired']
     with sqlite3.connect(target/'data/arbitrage.sqlite3') as db:
         assert db.execute('SELECT value FROM history').fetchone()[0] == 'keep losses'
 
