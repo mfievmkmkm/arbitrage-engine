@@ -127,3 +127,46 @@ def test_insufficient_replacement_space_preserves_source_and_does_not_upload(tmp
     monkeypatch.setattr(module.shutil,'disk_usage',lambda _:SimpleNamespace(free=0,total=path.stat().st_size))
     with pytest.raises(ValueError,match='NOT_ENOUGH_SPACE'):recover_or_compact(path,remote,force=True)
     assert path.read_bytes()==before and remote.calls==0
+
+
+@pytest.mark.skipif(os.name!='posix',reason='Railway offline backup archiving requires POSIX fsync')
+def test_archive_backup_copy_requires_remote_ack_and_receipt(tmp_path,monkeypatch):
+    import app.storage_compaction as module
+    from types import SimpleNamespace
+    volume=tmp_path/'volume';volume.mkdir();path=volume/'arbitrage.sqlite3';seed(path);before=path.read_bytes()
+    backup=volume/'storage-backup-123.sqlite3.gz'
+    with gzip.open(backup,'wb') as f:f.write(before)
+    remote=Remote(tmp_path)
+    monkeypatch.setattr(module.shutil,'disk_usage',lambda _:SimpleNamespace(free=20*1024*1024,total=500*1024*1024))
+    assert module.archive_duplicate_backups(path,remote)==1
+    receipt=json.loads((volume/'storage-backup-123.sqlite3.gz.remote.json').read_text())
+    assert not backup.exists() and remote.calls==1 and receipt['gzip_sha256']==sha(remote.saved)
+    assert path.read_bytes()==before
+
+
+@pytest.mark.skipif(os.name!='posix',reason='Railway startup safety test')
+def test_optional_maintenance_failure_does_not_block_healthy_database(tmp_path,monkeypatch):
+    import app.storage_compaction as module
+    from types import SimpleNamespace
+    path=tmp_path/'arbitrage.sqlite3';seed(path);before=path.read_bytes()
+    monkeypatch.setenv('RAILWAY_ENVIRONMENT_ID','controlled-test');monkeypatch.setenv('BOT_TOKEN','123:controlled-secret');monkeypatch.setenv('ADMIN_ID','42')
+    monkeypatch.setattr(module.shutil,'disk_usage',lambda _:SimpleNamespace(free=44*1024*1024,total=500*1024*1024))
+    def unavailable(*a,**kw):raise ValueError('STORAGE_COMPACTION_NOT_ENOUGH_SPACE')
+    monkeypatch.setattr(module,'recover_or_compact',unavailable)
+    module.startup(path)
+    assert path.read_bytes()==before
+    (tmp_path/'storage-recovery.json').write_text('{}')
+    with pytest.raises(RuntimeError,match='RECOVERY_REQUIRED'):module.startup(path)
+
+
+@pytest.mark.skipif(os.name!='posix',reason='Railway archive safety test')
+def test_failed_archive_upload_keeps_local_backup_and_working_db(tmp_path,monkeypatch):
+    import app.storage_compaction as module
+    from types import SimpleNamespace
+    path=tmp_path/'arbitrage.sqlite3';seed(path);before=path.read_bytes();backup=tmp_path/'storage-backup-456.sqlite3.gz'
+    with gzip.open(backup,'wb') as f:f.write(before)
+    monkeypatch.setattr(module.shutil,'disk_usage',lambda _:SimpleNamespace(free=20*1024*1024,total=500*1024*1024))
+    class Failure:
+        def upload(self,p):raise RuntimeError('controlled-archive-outage')
+    with pytest.raises(RuntimeError):module.archive_duplicate_backups(path,Failure())
+    assert backup.exists() and path.read_bytes()==before and not (tmp_path/'storage-backup-456.sqlite3.gz.remote.json').exists()

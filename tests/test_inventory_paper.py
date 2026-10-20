@@ -234,7 +234,7 @@ def test_public_capture_is_wired_to_wallet_and_monitors_when_entries_disabled(tm
         e=Engine(tmp_path/'integrated.db',clock=lambda:clock[0]);await e.init()
         service=Service(source,e,allowed=lambda symbol=None:True)
         service.entry_enabled=False;await service.cycle()
-        assert e.state['initialized'] and not e.positions
+        assert not e.state['initialized'] and not e.positions  # Disabled legacy service must not seed or collect new snapshots.
         service.entry_enabled=True;await service.cycle()
         assert len(e.positions)==1 and e.state['realized']=='0'
         service.entry_enabled=False;clock[0]=1901;await service.cycle()

@@ -197,6 +197,8 @@ class Service:
 
     async def cycle(self):
         await self.paper.monitor(self.source)
+        if not self.entry_enabled:
+            return []  # Existing positions/transfers were monitored above.
         if any(D(p['residual'])>0 or p['status']=='MANUAL_EXIT_PENDING' for p in self.paper.positions.values()):
             return []
         snapshots=await self.source.capture()

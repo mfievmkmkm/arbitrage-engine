@@ -179,17 +179,56 @@ def recover_or_compact(path,remote,*,force=False):
                 'backup_bytes':backup.stat().st_size,'free_bytes':shutil.disk_usage(path.parent).free,'all_logical_rows_verified':True}
 
 
+def archive_duplicate_backups(path,remote):
+    """Move sealed backup copies to the owner with durable retrieval receipts.
+
+    Never touches the working SQLite database or its journals. Acknowledged
+    remote copies and a synced receipt must precede removal of a local copy.
+    """
+    import re
+    parent=Path(path).parent;archived=0
+    for backup in sorted(parent.glob('storage-backup-*.sqlite3.gz')):
+        disk=shutil.disk_usage(parent)
+        if disk.free>max(32*1024*1024,disk.total*.15):break
+        if backup.is_symlink() or not re.fullmatch(r'storage-backup-[0-9]+\.sqlite3\.gz',backup.name):continue
+        digest=sha(backup);receipt=backup.with_name(backup.name+'.remote.json')
+        if receipt.exists():
+            proof=json.loads(receipt.read_text())
+            if proof.get('gzip_sha256')!=digest or proof.get('bytes')!=backup.stat().st_size:
+                raise ValueError('STORAGE_BACKUP_RECEIPT_CONFLICT')
+        else:
+            # Read to EOF to verify gzip CRC before moving this backup copy.
+            with gzip.open(backup,'rb') as f:
+                while f.read(1024*1024):pass
+            proof=dict(version=1,backup_name=backup.name,gzip_sha256=digest,bytes=backup.stat().st_size,**remote.upload(backup))
+            write_manifest(receipt,proof)
+        if sha(backup)!=digest:raise ValueError('STORAGE_BACKUP_CHANGED_DURING_ARCHIVE')
+        backup.unlink();syncdir(parent);archived+=1
+    return archived
+
+
 def startup(path):
     if not os.getenv('RAILWAY_ENVIRONMENT_ID'):return
-    disk=shutil.disk_usage(Path(path).parent)
-    marker=Path(path).with_name('storage-recovery.json')
+    path=Path(path);disk=shutil.disk_usage(path.parent)
+    marker=path.with_name('storage-recovery.json')
     if not marker.exists() and disk.free>max(32*1024*1024,disk.total*.15):return
+    recovering=marker.exists()
     print('STORAGE_COMPACTION_BEGIN mode=PAPER history=LOSSLESS',flush=True)
     try:
         remote=TelegramBackup(os.getenv('BOT_TOKEN'),os.getenv('ADMIN_ID'))
+        if not recovering:
+            count=archive_duplicate_backups(path,remote)
+            if count:print('STORAGE_BACKUP_ARCHIVED '+json.dumps(dict(copies=count,free_bytes=shutil.disk_usage(path.parent).free)),flush=True)
+            disk=shutil.disk_usage(path.parent)
+            if disk.free>max(32*1024*1024,disk.total*.15):return
         print('STORAGE_COMPACTION '+json.dumps(recover_or_compact(path,remote)),flush=True)
     except Exception as exc:
-        # Startup stays blocked; never continue with a partial database.
+        # Optional maintenance cannot masquerade as an unfinished DB install.
+        if not recovering and not marker.exists() and path.is_file() and shutil.disk_usage(path.parent).free>=16*1024*1024:
+            with closing(open_db(path,'rw')) as db:
+                if db.execute('PRAGMA quick_check').fetchone()!=('ok',):raise RuntimeError('STORAGE_RECOVERY_REQUIRED') from None
+            print('STORAGE_MAINTENANCE_DEFERRED '+type(exc).__name__+' '+str(exc)[:120],flush=True)
+            return
         print('STORAGE_COMPACTION_HOLD '+type(exc).__name__+' '+str(exc)[:120],flush=True)
         raise RuntimeError('STORAGE_RECOVERY_REQUIRED') from None
 
