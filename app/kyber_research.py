@@ -5,6 +5,7 @@ Public admission stays below 3 requests/second, shared by scans and exits.
 Optional pool-scoped simulations supply PAPER tax evidence, never execution proof.
 """
 import asyncio
+import hashlib
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 import aiohttp
 from .zerox_research import Provider as MetadataProvider, ADDRESS
@@ -104,6 +105,7 @@ class Provider(MetadataProvider):
                     status = response.status
                     reason = 'DEX_HTTP_'+str(status)
                     problem_code=None
+                    response_evidence={}
                     if status==400:
                         # Retain only recognized codes; never persist response text.
                         try:
@@ -111,6 +113,13 @@ class Provider(MetadataProvider):
                             if isinstance(error,dict) and type(error.get('code')) is int:
                                 problem_code=error['code']
                                 if problem_code==40011:reason='KYBER_FILTERED_LIQUIDITY'
+                                message=error.get('message')
+                                if isinstance(message,str):
+                                    known={'route not found':'ROUTE_NOT_FOUND','no route found':'ROUTE_NOT_FOUND',
+                                           'no eligible pools':'NO_ELIGIBLE_POOLS','invalid amount':'INVALID_AMOUNT',
+                                           'invalid token address':'INVALID_ADDRESS','insufficient liquidity':'INSUFFICIENT_LIQUIDITY'}
+                                    response_evidence=dict(message_category=known.get(message.strip().lower(),'UNCLASSIFIED'),
+                                        message_sha256=hashlib.sha256(message.encode()).hexdigest(),message_length=len(message))
                         except (ValueError,aiohttp.ClientError):pass
 
                     delay = 0
@@ -134,7 +143,7 @@ class Provider(MetadataProvider):
                         self.chain_cooldowns[chain_id] = (self.clock()+delay,reason)
                     return dict(ok=False,reason=reason,request_sent=True,retry_after_seconds=delay,
                                 error_code=self.access_error_code if status in (401,403) else problem_code,
-                                provider=self.name,http_status=status,chain_id=chain_id,
+                                provider=self.name,http_status=status,chain_id=chain_id,response_evidence=response_evidence,
                                 request_scope=dict(sell_contract=sell_token,buy_contract=buy_token,amount_raw=sell_amount,
                                                    direct_only=False,sources=params.get('includedSources'),requested_at=started))
                 raw = await response.json()

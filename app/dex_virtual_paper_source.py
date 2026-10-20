@@ -120,6 +120,8 @@ class Source(HistorySource):
         return max(12, cash + self.cex_cap(r) + 2)
 
     async def price(self, r, sell_asset, amount):
+        from .preflight_progress import stage
+        stage('DEX_SELL_QUOTE' if sell_asset else 'DEX_BUY_QUOTE',chain_id=r['chain_id'],amount=str(amount))
         if hasattr(self.provider, "price_route"):
             q = await self.provider.price_route(r, sell_asset, amount)
         else:
@@ -303,7 +305,8 @@ class Source(HistorySource):
             if r.get('mode','paired')=='paired' and self.native_paired_inventory:
                 residual_value=(base-qty)*cash/base
                 diagnostics.update(dex_base_qty=base,hedge_base_qty=qty,rounding_residual_usd=residual_value,
-                                   suggested_notional_usd=min(cash,cash*qty/base+.01))
+                                   residual_limit_usd=.05,
+                                   suggested_notional_usd=min(cash,cash*(qty+min(.025*base/cash,float(step or 0)*.25))/base))
                 if residual_value > .05:
                     raise ValueError('DEX_VIRTUAL_NOTIONAL_OR_RESIDUAL_LIMIT')
                 native_raw=Decimal(str(contracts))*number(m['contractSize'],'CONTRACT_SIZE')*(10**r['asset_decimals'])
@@ -331,6 +334,8 @@ class Source(HistorySource):
                     side, native = "buy", buy
             notional = qty * native.reference_price
             if notional > self.cex_cap(r) or (r.get("mode", "paired") == "paired" and abs(base - qty) * native.reference_price > 0.05):
+                diagnostics.update(observed=notional,threshold=self.cex_cap(r),unit='USD',
+                                   suggested_notional_usd=min(cash*.999,cash*self.cex_cap(r)/notional*.999))
                 raise ValueError("DEX_VIRTUAL_NOTIONAL_OR_RESIDUAL_LIMIT")
             p = dict(symbol=r["cex_symbol"], cex_symbol=r["cex_symbol"], cex_venue=r["cex_venue"],
                      chain_id=r["chain_id"], base_qty=qty, cex_contracts=contracts,
@@ -410,6 +415,8 @@ class Source(HistorySource):
                         raise ValueError(reason or "DEX_SIGNAL_CHANGED")
                     p["channel_signal"] = signal
             if self.clock() - min(q["ts"], reverse["ts"]) > 15 or self.clock() - native.market_evidence["book_ts"] > 1.5:
+                diagnostics.update(dex_buy_age_seconds=self.clock()-q['ts'],dex_sell_age_seconds=self.clock()-reverse['ts'],
+                                   cex_age_seconds=self.clock()-native.market_evidence['book_ts'],dex_max_age_seconds=15,cex_max_age_seconds=1.5)
                 raise ValueError("DEX_VIRTUAL_ENTRY_STALE")
             if self.clock() - x["cex"]["book_ts"] > 1.5 or (gas_book and self.clock() - gas_book["timestamp"] / 1000 > 1.5):
                 raise ValueError("DEX_VIRTUAL_ENTRY_STALE")

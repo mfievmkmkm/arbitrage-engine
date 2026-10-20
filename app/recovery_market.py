@@ -97,6 +97,18 @@ class Reader:
         self.max_slippage = max_slippage
 
     async def quote(self, venue, request, contract_size):
+        from .evidence_error import EvidenceError
+        from .preflight_progress import stage
+        for attempt in range(2):
+            stage('CEX_BOOK',venue=venue,symbol=request.symbol,attempt=attempt+1,requested_at=self.clock())
+            try:
+                return await self._quote_once(venue,request,contract_size)
+            except EvidenceError as exc:
+                if str(exc)!='RECOVERY_BOOK_STALE' or attempt:
+                    exc.diagnostics['attempts']=attempt+1
+                    raise
+
+    async def _quote_once(self, venue, request, contract_size):
         client = self.clients.get(venue)
         if client is None:
             raise ValueError("RECOVERY_VENUE_MISSING")

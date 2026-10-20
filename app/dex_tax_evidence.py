@@ -29,6 +29,8 @@ def parse(raw, chain, token, pool, other, observed_at):
             or str(identity.get('address','')).lower()!=pool.lower()
             or {str(identity.get(k,'')).lower() for k in ('token0','token1')}!={token.lower(),other.lower()}):
         raise ValueError('DEX_TAX_SCOPE_MISMATCH')
+    if raw.get('withToken') is not None and str((raw.get('withToken') or {}).get('address','')).lower()!=other.lower():
+        raise ValueError('DEX_TAX_COUNTER_ASSET_MISMATCH')
     detected = (raw.get('honeypotResult') or {}).get('isHoneypot')
     if detected is True:
         raise EvidenceError('DEX_TAX_HONEYPOT_DETECTED', observed=True, threshold=False,
@@ -67,6 +69,7 @@ def parse(raw, chain, token, pool, other, observed_at):
             raise ValueError('DEX_TAX_INVALID') from None
         fields[field+'Bps'] = str(tax*100)
     return dict(fields,source='Honeypot.is',chain_id=chain,token=token.lower(),
+                other_contract=other.lower(),evidence_scope='TOKEN_IN_SPECIFIC_POOL',global_asset_verdict=False,
                 pool=pool.lower(),observed_at=observed_at,
                 evidence_mode='POOL_SIMULATION_PAPER_ONLY',execution_verified=False)
 
@@ -86,6 +89,8 @@ class Reader:
             await self.session.close()
 
     async def token(self, chain, token, pool, other):
+        from .preflight_progress import stage
+        stage('TOKEN_SAFETY_QUEUE',chain_id=chain,contract=token,pool=pool)
         if type(chain) is not int or chain not in CHAINS:
             raise ValueError('DEX_TAX_CHAIN_UNSUPPORTED')
         if not all(isinstance(x,str) and ADDRESS.fullmatch(x) for x in (token,pool,other)) or token.lower()==other.lower():
@@ -125,6 +130,8 @@ class Reader:
         if self.session is None:
             self.session=aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6))
         start=self.clock()
+        from .preflight_progress import stage
+        stage('TOKEN_SAFETY_HTTP',chain_id=chain,contract=token,pool=pool,requested_at=start)
         try:
             self.requests_sent+=1
             async with self.session.get('https://api.honeypot.is/v2/IsHoneypot',
@@ -153,7 +160,8 @@ class Reader:
             reason=str(exc) if isinstance(exc,ValueError) and str(exc).startswith('DEX_TAX_') else 'DEX_TAX_UNAVAILABLE'
             details=dict(getattr(exc,'diagnostics',{}))
             details.update(provider='Honeypot.is',chain_id=chain,contract=token,pool=pool,
-                           other_contract=other,requested_at=start,error_type=type(exc).__name__)
+                           other_contract=other,requested_at=start,error_type=type(exc).__name__,
+                           evidence_scope='TOKEN_IN_SPECIFIC_POOL',global_asset_verdict=False)
             raise EvidenceError(reason,**details) from None
 
     async def route(self, quote):
@@ -188,6 +196,7 @@ class Reader:
                     raise ValueError('DEX_TAX_EVIDENCE_STALE')
                 if any(Decimal(row[f])!=0 for f in ('buyTaxBps','sellTaxBps','transferTaxBps')):
                     raise EvidenceError('DEX_VIRTUAL_TOKEN_TAX_UNSUPPORTED',contract=token,pool=pool,
+                                        other_contract=other,evidence_scope='TOKEN_IN_SPECIFIC_POOL',global_asset_verdict=False,
                                         observed={f:row[f] for f in ('buyTaxBps','sellTaxBps','transferTaxBps')},threshold=0)
                 if token==sell:rows['sellToken'].append(row)
                 if token==buy:rows['buyToken'].append(row)

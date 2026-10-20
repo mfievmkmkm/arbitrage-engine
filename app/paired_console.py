@@ -85,7 +85,7 @@ def scanner(engine,service,manual=True):
         text+='\n\nПодходящих проверенных пар сейчас нет.'
     if not candidates and reasons:
         names={'KYBER_FILTERED_LIQUIDITY':'нет проверяемого маршрута','PAIRED_PARTIAL_NET_LOW':'низкий NET',
-               'DEX_TAX_HONEYPOT_DETECTED':'обнаружено ограничение продажи',
+               'DEX_TAX_HONEYPOT_DETECTED':'предупреждение симуляции пула',
                'DEX_TAX_HONEYPOT_UNKNOWN':'возможность продажи не подтверждена',
                'DEX_TAX_SIMULATION_FAILED':'сбой симуляции токена','DEX_TAX_HTTP_404':'сервис проверки: HTTP 404',
                'DEX_VIRTUAL_REVERSE_PREFLIGHT_NET_STOP':'убыток при закрытии','RECOVERY_BOOK_STALE':'устарел стакан'}

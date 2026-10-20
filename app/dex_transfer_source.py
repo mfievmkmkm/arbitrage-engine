@@ -106,20 +106,26 @@ class Source:
             required=(operations if operations is not None else {}).get(name,{'deposit','withdraw'} if operations is None else set())
             if not required:continue
             if any(cur.get(action) is False for action in required):
-                raise ValueError('Bybit: нужный ввод/вывод '+name+' остановлен')
+                raise EvidenceError('Bybit: нужный ввод/вывод '+name+' остановлен',asset=name,
+                    required_operations=sorted(required),operation_status={k:cur.get(k) for k in required},status_source='CURRENCY')
             for key,n in (cur.get('networks') or {}).items():
                 raw=n.get('info') or {}
                 chains={ALIASES.get(str(x).upper()) for x in (key,n.get('network'),n.get('id'),raw.get('chain'))}-{None}
                 address=n.get('contract') or n.get('contractAddress') or raw.get('contractAddress') or raw.get('contract')
-                if chains=={r['chain_id']} and isinstance(address,str) and address.lower()==contract.lower():
-                    matches.append(n)
+                exact=chains=={r['chain_id']} and isinstance(address,str) and address.lower()==contract.lower()
+                native_eth=(name=='ETH' and r['chain_id']==1 and chains=={1} and not address
+                            and contract.lower()=='0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2')
+                if exact or native_eth:
+                    matches.append(dict(n,_native_wrap=native_eth))
             if len(matches)!=1:
                 raise EvidenceError('Bybit: сеть/контракт '+name+' не подтверждены',asset=name,
                     expected_chain=r['chain_id'],expected_contract=contract,matching_networks=len(matches),
                     available_networks=list((cur.get('networks') or {}).keys()),required_operations=sorted(required))
             n=matches[0];raw=n.get('info') or {}
             if n.get('active') is False or any(n.get(action) is not True for action in required):
-                raise ValueError('Bybit: нужный ввод/вывод '+name+' недоступен')
+                raise EvidenceError('Bybit: нужный ввод/вывод '+name+' недоступен',asset=name,
+                    required_operations=sorted(required),operation_status={k:n.get(k) for k in required},
+                    active=n.get('active'),network=n.get('network'),status_source='NETWORK')
             def number(value):
                 try:return D(value)
                 except ValueError:raise ValueError('Bybit: неверное числовое поле сети '+name) from None
@@ -154,6 +160,9 @@ class Source:
                 withdraw_max=raw.get('withdrawMax'),
                 deposit_fee=str(D(deposit)) if deposit is not None else None,deposit_percentage=dep_pct,fee_source=source,
                 observed_at=self.metadata_at)
+            if n.get('_native_wrap'):
+                out[name]['conversion']='ETH_WETH_EXPLICIT_PAPER'
+                out[name]['conversion_gas_units']=30000
         return out
 
     @staticmethod
@@ -189,7 +198,7 @@ class Source:
         if raw<=0:raise ValueError('DEX: размер ниже точности токена')
         return await self.quote.price(r,sell_asset,raw)
 
-    async def gas(self,r,q,transfer=False,swap=False):
+    async def gas(self,r,q,transfer=False,swap=False,conversion=False):
         market=self.feed.clients[self.venue].markets.get(r['native_spot'],{})
         if market.get('spot') is not True or market.get('active') is not True or market.get('contract'):
             raise ValueError('Bybit: нет активного spot native/USDT для gas')
@@ -197,7 +206,7 @@ class Source:
         price=D(b['asks'][0][0]);raw=D(q.get('gas_price_raw'))
         if raw<=0 or not 0<=self.clock()-float(q['ts'])<=15 or not ZERO<=D(self.clock())-b['ts']<=3:raise ValueError('DEX: нет свежего gas/native price')
         # Declared PAPER gas-unit assumptions, not eth_estimateGas or receipts.
-        units=(200000 if transfer else 0)+(100000 if swap else 0)
+        units=(200000 if transfer else 0)+(100000 if swap else 0)+(30000 if conversion else 0)
         fee=raw*D(units)/D(10)**18*price
         if swap:fee+=D(q['network_fee_raw'])/D(10)**18*price+D(q.get('network_fee_usd_extra',0))
         if fee<0:raise ValueError('DEX: неизвестен gas')
@@ -254,13 +263,21 @@ class Source:
             required[asset]={'withdraw' if src==peer else 'deposit'}
             evidence=await adapter.networks(r,required)
             return dict(await adapter.transfer(r,asset,src,dst,amount,evidence,q),external_venue=peer)
+        conversion=None
+        if networks[asset].get('conversion')=='ETH_WETH_EXPLICIT_PAPER':
+            q=q or await self.gas_probe(r)
+            gas=await self.gas(r,q,conversion=True)
+            conversion=dict(operation='WRAP_ETH_TO_WETH' if dex(dst) else 'UNWRAP_WETH_TO_ETH',
+                            amount=str(amount),gas_units=30000,gas_evidence='UNMEASURED_PAPER_UNITS',
+                            execution_verified=False,live_allowed=False)
         if src==self.venue:
             received,dust=self.withdrawn(networks[asset],amount);fee=amount-received-dust
         else:
             q=q or await self.gas_probe(r)
-            gas=await self.gas(r,q,transfer=True)
+            gas+=await self.gas(r,q,transfer=True)
             received=self.received(networks[asset],amount);fee=amount-received
-        return plain(dict(amount=received,gross=amount if src!=self.venue else received,gas=gas,dust=dust,fee=fee))
+        if conversion and src==self.venue:conversion['amount']=str(received)
+        return plain(dict(amount=received,gross=amount if src!=self.venue else received,gas=gas,dust=dust,fee=fee,conversion=conversion))
 
     async def receipt(self,r,asset,transfer,destination,networks):
         if transfer.get('cex_route'):
@@ -283,6 +300,8 @@ class Source:
         control=await self.store.control()
         trace=await journal.start('B',symbol,buy,sell,'observe' if control['mode']=='observe' else 'paper_'+control['mode'],
                                   source=(route or {}).get('signal_source','scanner'),evidence=dict(kind=KIND,settings=control))
+        from .preflight_progress import current, snapshot
+        progress_token=current.set(dict(stage='TRANSFER_NETWORKS'))
         try:
             result=await self._review(symbol,buy,sell,read_accounts,route,reserved)
             if 'Нужны новые цены входа' in result['reasons']:
@@ -303,7 +322,7 @@ class Source:
                                   result['reasons'][0] if result['reasons'] else 'PREFLIGHT_OK')
             return result
         except asyncio.CancelledError:
-            await journal.finish(trace,'REJECTED','CHECK_CANCELLED',{'stage':'DEX_TRANSFER'})
+            await journal.finish(trace,'REJECTED','CHECK_CANCELLED',dict(stage='DEX_TRANSFER',progress=snapshot()))
             raise
         except Exception as exc:
             reason=str(exc).replace('Bybit',self.venue.upper()) if isinstance(exc,ValueError) else type(exc).__name__
@@ -311,6 +330,8 @@ class Source:
             await journal.finish(trace,'REJECTED',reason,details)
             if isinstance(exc,ValueError):raise EvidenceError(reason,**details) from None
             raise
+        finally:
+            current.reset(progress_token)
 
     async def _review(self,symbol,buy,sell,read_accounts=False,route=None,reserved=None):
         r=copy.deepcopy(route or self.route_for(symbol,buy,sell))

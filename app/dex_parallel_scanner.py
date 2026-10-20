@@ -106,7 +106,8 @@ class Scanner:
                     'DEX_TAX_HTTP_404':60,'DEX_TAX_HONEYPOT_OR_UNKNOWN':60,'DEX_TAX_FLAGS_UNSUPPORTED':60,
                     'DEX_TAX_HONEYPOT_DETECTED':300,'DEX_TAX_HONEYPOT_UNKNOWN':60,
                     'DEX_TAX_RISK_UNKNOWN':60,'DEX_TAX_RISK_HIGH':300,'DEX_TAX_SIMULATION_FAILED':30,
-                    'DEX_CEX_IDENTITY_UNVERIFIED':30,'DEX_VIRTUAL_AMOUNT_BELOW_NATIVE_STEP':60}
+                    'DEX_CEX_IDENTITY_UNVERIFIED':30,'DEX_VIRTUAL_AMOUNT_BELOW_NATIVE_STEP':60,
+                    'KYBER_CHAIN_UNSUPPORTED':300,'DEX_HTTP_400':15}
             if reason in delays:self.cooldowns[key]=original.clock()+delays[reason]
             trace=getattr(source,'current_trace',None)
             if trace and getattr(source,'journal',None) and result.get('ok'):

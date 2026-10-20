@@ -65,7 +65,8 @@ def redact(obj):
         return {
             k: (
                 "***"
-                if not public_token_value(k, v)
+                if not (k=='DEX_VIRTUAL_TOKEN_TAX_UNSUPPORTED' and isinstance(v,int) and not isinstance(v,bool) and v>=0)
+                and not public_token_value(k, v)
                 and (k.lower() == "raw" or any(x in k.lower() for x in KEYS))
                 else redact(v)
             )

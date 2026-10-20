@@ -49,6 +49,7 @@ class PairedSource(Source):
         return dict(route,slippage_bps=p.get('paired_route',{}).get('slippage_bps',route.get('slippage_bps',20)))
 
     async def entry(self, route):
+        from .preflight_progress import current, snapshot
         settings=self.operator_profile()
         trace=route.get('_execution_trace')
         if self.journal:
@@ -60,6 +61,7 @@ class PairedSource(Source):
             if route.get('parent_trace_id'):
                 await self.journal.finish(route['parent_trace_id'],'RECHECKED','FRESH_EXECUTION_RECHECK',{'child_trace_id':trace})
         self.current_trace=trace
+        progress_token=current.set(dict(stage='IDENTITY'))
         try:
             route=dict(route,slippage_bps=settings.get('slippage_bps',route.get('slippage_bps',20)))
             self.reader.max_slippage=route['slippage_bps']/10000
@@ -91,11 +93,13 @@ class PairedSource(Source):
                     await self.journal.finish(trace,'REJECTED',result.get('reason','PAIRED_ENTRY_UNAVAILABLE'),result.get('diagnostics',{}))
             return result
         except asyncio.CancelledError:
-            if trace:await self.journal.finish(trace,'REJECTED','DEX_SCAN_TIMEOUT',{'cancelled':True})
+            if trace:await self.journal.finish(trace,'REJECTED','DEX_SCAN_TIMEOUT',dict(cancelled=True,progress=snapshot()))
             raise
         except Exception as exc:
             if trace:await self.journal.finish(trace,'REJECTED',type(exc).__name__,{'error_type':type(exc).__name__})
             raise
+        finally:
+            current.reset(progress_token)
 
     async def _paired_entry(self, route):
         try:
@@ -107,7 +111,7 @@ class PairedSource(Source):
             await self.journal.check(self.current_trace,'IDENTITY','PASS','EXCHANGE_NETWORK_CONTRACT_MATCH',evidence)
         candidate=dict(route)
         attempts=[]
-        for _ in range(3):
+        for _ in range(4):
             result = await super().entry(candidate)
             attempts.append(dict(notional_usd=candidate['notional_usd'],reason=result.get('reason','PAIRED_ENTRY_OK')))
             suggested=(result.get('diagnostics') or {}).get('suggested_notional_usd')

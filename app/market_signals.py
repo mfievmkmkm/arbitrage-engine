@@ -325,12 +325,12 @@ class Scanner:
         try:
             result=await self._evaluate(symbol,a,b,trace)
             if result is None:
-                await self.journal.finish(trace,'REJECTED','SPREAD_BELOW_MINIMUM')
                 return None
             result['trace_id']=trace
             if result.get('transfer'):result['transfer']['trace_id']=trace
             for reason in result['reasons']:
-                await self.journal.check(trace,failure_stage(reason),'FAIL',reason)
+                await self.journal.check(trace,failure_stage(reason),'FAIL',reason,
+                    dict(plan=result.get('transfer'),observed_spread_pct=result['spread_pct'],thresholds=control))
             await self.journal.finish(trace,'REJECTED' if result['reasons'] else ('OBSERVED' if mode=='observe' else 'READY'),
                                       result['reasons'][0] if result['reasons'] else 'PREFLIGHT_OK')
             return result
@@ -339,7 +339,7 @@ class Scanner:
             raise
         except Exception as exc:
             reason=str(exc) if isinstance(exc,ValueError) else type(exc).__name__
-            await self.journal.finish(trace,'REJECTED',reason,{'error_type':type(exc).__name__})
+            await self.journal.finish(trace,'REJECTED',reason,dict(getattr(exc,'diagnostics',{}),error_type=type(exc).__name__))
             raise
 
     async def _evaluate(self,symbol,a,b,trace):
@@ -365,13 +365,21 @@ class Scanner:
                 except Exception as exc:
                     reasons.append('USDT до биржи покупки: '+(str(exc) if isinstance(exc,ValueError) else type(exc).__name__))
         aa,bb=await asyncio.gather(self.book(a,symbol),self.book(b,symbol))
-        if abs(aa['ts']-bb['ts'])>1 or any(not ZERO<=D(self.clock())-x['ts']<=3 for x in (aa,bb)):
-            raise ValueError('Стаканы устарели или не синхронизированы')
+        for attempt in range(2):
+            if abs(aa['ts']-bb['ts'])<=1 and all(ZERO<=D(self.clock())-x['ts']<=3 for x in (aa,bb)):break
+            if attempt==0:
+                aa,bb=await asyncio.gather(self.book(a,symbol),self.book(b,symbol))
+            else:
+                from .evidence_error import EvidenceError
+                raise EvidenceError('Стаканы устарели или не синхронизированы',buy_ts=str(aa['ts']),sell_ts=str(bb['ts']),
+                    buy_age_seconds=str(D(self.clock())-aa['ts']),sell_age_seconds=str(D(self.clock())-bb['ts']),
+                    difference_seconds=str(abs(aa['ts']-bb['ts'])),max_difference_seconds=1,max_age_seconds=3)
         raw_spread=(D(bb['bids'][0][0])/D(aa['asks'][0][0])-ONE)*100
         await self.journal.check(trace,'MATCH','PASS','BOTH_SPOT_BOOKS_AVAILABLE')
         await self.journal.check(trace,'QUOTES','PASS','FRESH_EXECUTABLE_BOOKS',dict(buy=aa,sell=bb))
         if raw_spread<D(control['min_spread']):
             await self.journal.check(trace,'COSTS','FAIL','MIN_SPREAD_CHECK',dict(observed=str(raw_spread),threshold=control['min_spread'],unit='percent'))
+            await self.journal.finish(trace,'REJECTED','SPREAD_BELOW_MINIMUM',dict(observed=str(raw_spread),threshold=control['min_spread'],unit='percent'))
             return None
         transfer=None
         if routes:
