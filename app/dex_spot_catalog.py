@@ -87,12 +87,12 @@ class Catalog:
                         except Exception as exc:
                             self.rejected+=1
                             self.last_reason=str(exc) if isinstance(exc,ValueError) else type(exc).__name__
-                self.last_stage=stage;self.last_venue=venue
                             self.last_stage=stage;self.last_venue=venue
                 finally:background.reset(token)
             except asyncio.CancelledError:raise
             except Exception as exc:
                 self.last_reason=str(exc) if isinstance(exc,ValueError) else type(exc).__name__
+                self.last_stage=stage;self.last_venue=venue
             await save(feed.journal.path,'spot_catalog_'+venue,dict(ts=feed.clock(),
                 possible=self.possible.get(venue,0),checked=self.checked,rejected=self.rejected,
                 failure_stage=self.last_stage,failure_venue=self.last_venue,
