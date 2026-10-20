@@ -8,6 +8,26 @@ import copy
 from .strategy_math import D
 
 
+def _percentage(value):
+    """Read exchange-native fee percentages without turning unknown into zero."""
+    if isinstance(value, str):
+        value = value.strip()
+        if value.endswith("%"):
+            value = value[:-1].strip()
+    return D(value) != 0
+
+
+def _set_network_percentage(network, value, source):
+    try:
+        network["percentage"] = _percentage(value)
+    except (ValueError, TypeError, ArithmeticError):
+        # One malformed coin must not stop discovery of every other coin.
+        # Unknown never authorizes a transfer: downstream gates require False.
+        network["percentage"] = None
+        network["_metadata_error"] = source + "_INVALID"
+
+
+
 def enrich(currencies,fees=None):
     rows=copy.deepcopy(currencies)
     for code,currency in rows.items():
@@ -21,7 +41,7 @@ def enrich(currencies,fees=None):
             if raw.get('withdraw_delayed') is True:
                 network['withdraw']=False
             if 'withdrawPercentageFee' in raw:
-                network['percentage']=D(raw['withdrawPercentageFee'])!=0
+                _set_network_percentage(network, raw['withdrawPercentageFee'], 'WITHDRAW_PERCENTAGE')
             unified_fee=(fee_row.get('networks') or {}).get(key,{})
             withdraw=unified_fee.get('withdraw') or {}
             if withdraw.get('fee') is not None:
@@ -36,7 +56,7 @@ def enrich(currencies,fees=None):
             percentages=raw_fee.get('withdraw_percent_on_chains') or {}
             percentage=percentages.get(chain,raw_fee.get('withdraw_percent'))
             if percentage is not None:
-                network['percentage']=D(str(percentage).rstrip('%'))!=0
+                _set_network_percentage(network, percentage, 'ACCOUNT_WITHDRAW_PERCENTAGE')
             fixed=(raw_fee.get('withdraw_fix_on_chains') or {}).get(chain)
             if fixed is not None and network.get('percentage') is False:
                 network['fee']=fixed
