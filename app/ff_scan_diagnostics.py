@@ -17,7 +17,7 @@ def summarize(diagnostics):
     if isinstance(counters, dict):
         for name in allowed:
             value = counters.get(name, 0)
-            if type(value) is int and value >= 0:
+            if name in counters and type(value) is int and value >= 0:
                 counts[name] = value
         for name, value in counters.items():
             if (isinstance(name, str)
