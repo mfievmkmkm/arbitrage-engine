@@ -24,7 +24,10 @@ def test_product_gate_preserves_legacy_blocks_and_requires_opt_in_and_account_fe
     assert main.operator_paper_reason('dex_paired', dict(row, cex_venue='mexc', fee_source='MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER')) is None
     assert main.operator_paper_reason('dex_paired', dict(row, cex_venue='mexc', fee_source='PUBLIC_RATE_ASSUMPTION')) == 'PAIRED_PRODUCT_ACCOUNT_FEE_REQUIRED'
     assert main.operator_paper_reason('dex_paired', dict(row, fee_source='PUBLIC_RATE_ASSUMPTION')) == 'PAIRED_PRODUCT_ACCOUNT_FEE_REQUIRED'
-    assert main.operator_paper_reason('futures_futures', row) == 'RESEARCH_ONLY_USE_STRATEGY_LAB'
+    # The agreed PAPER convergence route is now independently risk-gated.
+    assert main.operator_paper_reason('futures_futures', row) is None
+    # Obsolete directional / inventory research routes remain non-trading.
+    assert main.operator_paper_reason('spot_spot', row) == 'RESEARCH_ONLY_USE_STRATEGY_LAB'
     controls.update(mode='manual')
     assert main.operator_paper_reason('dex_paired', row) == 'MANUAL_CONFIRMATION_REQUIRED'
     item=controls.claim(controls.issue('dex_paired',row))
