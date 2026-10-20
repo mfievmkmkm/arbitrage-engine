@@ -145,3 +145,17 @@ def test_native_market_limit_failure_reports_value_and_minimum():
     with pytest.raises(EvidenceError) as caught:
         limits(dict(symbol='X/USDT',limits={'amount':{'min':1},'cost':{'min':5}}),2,4)
     assert caught.value.diagnostics==dict(observed='4',minimum='5',maximum=None,unit='cost',symbol='X/USDT')
+
+
+def test_refresh_trigger_does_not_silently_tighten_existing_quote_age_limit():
+    async def go():
+        now=[100]
+        class Taxes:
+            async def route(self,q):now[0]+=3;return {}
+        p=Provider(NS(),Session(Response(200,response()),Response(200,response(timestamp=103))),
+                   clock=lambda:now[0],tax_reader=Taxes())
+        p.budget.spacing=0
+        q=await p.price(1,STABLE,ASSET,'100')
+        assert q['ts']==103 and now[0]==106
+        assert 'tax_reason' not in q and q['ok']
+    asyncio.run(go())

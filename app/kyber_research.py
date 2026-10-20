@@ -52,8 +52,12 @@ class Provider(MetadataProvider):
                 q["tax_diagnostics"] = getattr(exc,'diagnostics',{})
                 return q
             if 0<=self.clock()-q['ts']<=2:return q
-        q['tax_reason']='DEX_TAX_QUOTE_REFRESH_REQUIRED'
-        q['tax_diagnostics']=dict(observed=self.clock()-q['ts'],threshold=2,unit='seconds')
+        # Two seconds triggers refresh; it is NOT a new admission limit.
+        # Keep the established 15s DEX ceiling and strategy-specific tighter
+        # checks (e.g. B's 3s) instead of rejecting a valid refreshed quote.
+        if not 0<=self.clock()-q['ts']<=15:
+            q['tax_reason']='DEX_TAX_QUOTE_REFRESH_REQUIRED'
+            q['tax_diagnostics']=dict(observed=self.clock()-q['ts'],threshold=15,unit='seconds')
         return q
 
     async def token(self, network, address):
