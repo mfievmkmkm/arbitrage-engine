@@ -243,7 +243,10 @@ def test_manual_paper_refreshes_both_legs_and_observe_keeps_position(tmp_path, m
         monkeypatch.setattr(main,'paper',engine)
         monkeypatch.setattr(main,'scanner',scanner)
         monkeypatch.setattr(main,'risk',RiskGuard(250))
-        monkeypatch.setattr(main,'secondary',None)
+        # A legacy inventory research service must not silently disable
+        # the independently risk-gated Futures/Futures PAPER strategy.
+        monkeypatch.setattr(main,'secondary',NS(inventory_paper=object(),
+            dex_paired=None, sf_paper=None, ss_paper=None, funding_paper=None))
         monkeypatch.setattr(main,'paired_paper',True)
         monkeypatch.setattr(main,'strategy_runtime',StrategyRuntime())
         monkeypatch.setattr(main,'venue_controller',NS(get=lambda v:dict(scan=True,paper=True)))
