@@ -11,6 +11,16 @@ class Service:
         self.journal=journal;self.entry_enabled=True;self.capabilities=capabilities;self.last_capabilities=None
     async def cycle(self):
         await self.journal.no_trade_reports()
+        report_interval=60 if getattr(self,'entry_report_count',0)<2 else 300
+        if self.journal.clock()-getattr(self,'last_entry_report',0)>=report_interval:
+            from .entry_evidence_report import inspect
+            from .scan_audit import save
+            import logging,json
+            report=await inspect(self.journal)
+            await save(self.journal.path,'entry_evidence',report)
+            logging.getLogger('arbitrage').info('MARKET_ENTRY_EVIDENCE %s',json.dumps(report,ensure_ascii=False))
+            self.last_entry_report=self.journal.clock()
+            self.entry_report_count=getattr(self,'entry_report_count',0)+1
         if self.capabilities:
             from .scan_audit import save
             report=await self.capabilities()
@@ -25,7 +35,10 @@ class Service:
 async def render(journal,bundle,data,controls=None,paused=False):
     feed=getattr(bundle,'market_signals',None)
     paired=getattr(bundle,'dex_paired',None)
-    if data=='audit:execution':
+    if data=='audit:why':
+        from .entry_evidence_report import inspect,render as why_text
+        text=why_text(await inspect(journal));rows=[]
+    elif data=='audit:execution':
         from .product_execution_status import inspect,render as execution_text
         text=execution_text(await inspect(bundle,controls,paused));rows=[]
     elif data=='audit:comparison':
@@ -68,5 +81,6 @@ async def render(journal,bundle,data,controls=None,paused=False):
         rows.append([button('За час','audit:show'),button('За сутки','audit:day')])
         rows.append([button('Сравнение A / B','audit:comparison')])
         rows.append([button('Исполнение','audit:execution')])
+        rows.append([button('Почему нет входов','audit:why')])
     rows.append([button('↻ Обновить',data),button('‹ Назад','home')])
     return text,InlineKeyboardMarkup(inline_keyboard=rows)

@@ -114,10 +114,12 @@ class Journal:
         await db.execute('INSERT INTO arb_lifecycle(candidate_id,strategy,mode,position_id,ts,event,status,payload) VALUES(?,?,?,?,?,?,?,?)',
                          (ident,strategy,mode,pid,self.clock(),event,status,dump(position)))
         if ident:
-            stage='CLOSED' if status in ('CLOSED','CANCELLED_BEFORE_BUY','ABORTED_AFTER_FUNDING') else 'EXECUTED'
-            if stage=='CLOSED' or event in ('DEX_PAPER_OPEN','PAIR_HEDGED','PARTIAL_HEDGE_RECOVERED','BUY_AND_BASE_RESERVATION','FUNDING_RESERVATION','DEX_TRANSFER_RESERVATION'):
+            reservation=event in ('ENTRY_RESERVED','FUNDING_RESERVATION','DEX_TRANSFER_RESERVATION')
+            stage='CLOSED' if status in ('CLOSED','CANCELLED_BEFORE_BUY','ABORTED_AFTER_FUNDING') else ('EXECUTOR' if reservation else 'EXECUTED')
+            first_dex_buy=event=='DEX_TRANSFER_STAGE' and status=='BASE_TRANSFER_PENDING' and any(f.get('stage')=='BUY' for f in position.get('fills',[]))
+            if stage=='CLOSED' or reservation or first_dex_buy or event in ('DEX_PAPER_OPEN','PAIR_HEDGED','PARTIAL_HEDGE_RECOVERED','BUY_AND_BASE_RESERVATION'):
                 await self.append(db,ident,stage,'PASS',event,dict(position_id=pid,net=position.get('net'),status=status))
-            state='CLOSED' if stage=='CLOSED' else ('RESERVED' if status=='ENTRY_RESERVED' else ('EXPOSURE' if status in ('HEDGE_PENDING','UNHEDGED_RECOVERY') else ('REJECTED' if status=='CANCELLED_BEFORE_FILL' else 'OPEN')))
+            state='CLOSED' if stage=='CLOSED' else ('RESERVED' if status in ('ENTRY_RESERVED','BUY_PENDING','USDT_TO_BUY_IN_TRANSIT') else ('EXPOSURE' if status in ('HEDGE_PENDING','UNHEDGED_RECOVERY') else ('REJECTED' if status=='CANCELLED_BEFORE_FILL' else 'OPEN')))
             await db.execute('UPDATE arb_candidates SET updated=?,status=?,reason=? WHERE id=?',
                              (self.clock(),state,event,ident))
 

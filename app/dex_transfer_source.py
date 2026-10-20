@@ -36,7 +36,7 @@ class Source:
         self.paper=feed.paper;self.store=feed.store
         self.metadata=None;self.metadata_at=0;self.metadata_lock=asyncio.Lock()
         self.metadata_retry=0;self.metadata_error="Bybit: сети недоступны"
-        self.fees={};self.routes={}
+        self.fees={};self.routes={};self.independent_routes={}
         self.last_reason='Ожидаем проверку';self.checked=0
         self.quote=QuoteSource.__new__(QuoteSource)
         self.quote.provider=paired.paper.source.price_providers.get("KyberSwap",paired.paper.source.provider)
@@ -48,7 +48,7 @@ class Source:
         if not client:return []
         # A spot transfer does not require a futures listing. Include verified
         # Bybit reference routes as well as the paired scanner's routes.
-        candidates=list(self.paired.scanner.catalog.values())
+        candidates=list(self.independent_routes.values())+list(self.paired.scanner.catalog.values())
         legacy=getattr(self.paired,'legacy',{})
         bybit=legacy.get('dex_bybit' if self.venue=='bybit' else 'dex_channel') if isinstance(legacy,dict) else None
         if bybit is not None:

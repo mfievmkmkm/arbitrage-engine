@@ -2893,6 +2893,8 @@ async def main():
                 await dex_transfer.init()
                 dex_transfer.paused=lambda:scanner.paused
                 secondary.runtime.add('dex_transfer',dex_transfer)
+                from .dex_spot_catalog import Catalog as DexSpotCatalog
+                secondary.runtime.add('dex_spot_catalog',DexSpotCatalog(dex_transfer))
             secondary.market_signals=feed
             secondary.runtime.add('market_signals',feed)
             from .dex_public_channel_reader import Reader as PublicChannelReader

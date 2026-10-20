@@ -175,7 +175,7 @@ class Source(HistorySource):
         m = market(self.public[r["cex_venue"]], r["cex_symbol"])
         return float(rate(m.get("taker"))), "PUBLIC_RATE_ASSUMPTION"
 
-    async def gas(self, r, q, book=None):
+    async def gas(self, r, q, book=None, enforce_entry_budget=True):
         if r.get("mode", "paired") == "reference":
             return 0, 0, {}
         network = number(q.get("network_fee_raw"), "DEX_VIRTUAL_GAS_UNKNOWN")
@@ -187,8 +187,13 @@ class Source(HistorySource):
         price = float(number(book["asks"][0][0], "DEX_VIRTUAL_NATIVE_PRICE"))
         extra = number(q.get("network_fee_usd_extra", 0), "DEX_VIRTUAL_EXTRA_GAS_UNKNOWN", False)
         usd = float(network / Decimal(10 ** r["native_decimals"])) * price + float(extra)
-        if not math.isfinite(usd) or usd > 0.25:
-            raise ValueError("DEX_VIRTUAL_GAS_BUDGET_LIMIT")
+        if not math.isfinite(usd):
+            raise ValueError('DEX_VIRTUAL_GAS_UNKNOWN')
+        if enforce_entry_budget and usd > 0.25:
+            from .evidence_error import EvidenceError
+            raise EvidenceError('DEX_VIRTUAL_GAS_BUDGET_LIMIT',observed=usd,threshold=.25,unit='USD',
+                                chain_id=r['chain_id'],gas_usd=usd,native_price_usd=price,
+                                network_fee_raw=str(network),extra_gas_usd=float(extra))
         return usd, price, book
 
     def route(self, p):
@@ -454,7 +459,9 @@ class Source(HistorySource):
                 fee = p['entry_fee_pct'] / 100
             else:
                 fee, _ = await self.fee(r)
-            gas, gas_price, gas_book = await self.gas(r, q)
+            # Entry admission caps must not hide an expensive executable exit.
+            # Charge the observed cost in the mark; risk logic decides closure.
+            gas, gas_price, gas_book = await self.gas(r, q,enforce_entry_budget=False)
             reader = self.exit_reader if fast and p['virtual_mode']=='reference' else self.reader
             native = await reader.quote(r["cex_venue"], SubmitRequest(r["cex_symbol"], "buy" if p["cex_side"] == "sell" else "sell", p["cex_contracts"], "market", reduce_only=True), p["contract_size"])
             if q.get("ok") and not 0 <= self.clock() - q["ts"] <= 15:
