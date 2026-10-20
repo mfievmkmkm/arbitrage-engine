@@ -256,6 +256,47 @@ def test_migration_preserves_paper_pause_and_marker(tmp_path):
     store = Store(str(migrated)+'.strategies.json')
     runtime.enabled.update(store.load({}))
     migrate_toggles(migrated, runtime, store)
-    assert not runtime.enabled['futures_futures'] and not runtime.enabled['dex_paired']
+    # Versioned owner-requested PAPER convergence activation runs only once.
+    assert runtime.enabled['futures_futures'] and not runtime.enabled['dex_paired']
     with sqlite3.connect(target/'data/arbitrage.sqlite3') as db:
         assert db.execute('SELECT value FROM history').fetchone()[0] == 'keep losses'
+
+
+def test_access_backoff_grows_caps_and_recovers_with_separate_http_counters():
+    async def run():
+        now=[100]
+        session=Session(*(Response(403) for _ in range(8)),Response(200,quote_response()))
+        p=Provider('test-only',session,clock=lambda:now[0])
+        delays=[]
+        for n in range(8):
+            denied=await p.price(1,STABLE,ASSET,'100')
+            delays.append(denied['retry_after_seconds'])
+            async def forbidden():raise AssertionError('Known block must not queue')
+            acquire=p.budget.acquire;p.budget.acquire=forbidden
+            blocked=await p.price(56,STABLE,ASSET,'100')
+            p.budget.acquire=acquire
+            assert not blocked['request_sent'] and session.calls==n+1
+            assert p.health()['requests_sent']==n+1
+            now[0]+=denied['retry_after_seconds']+1
+        assert delays==[30,60,120,240,480,960,1800,1800]
+        assert (await p.price(1,STABLE,ASSET,'100'))['ok']
+        health=p.health()
+        assert not health['blocked'] and health['responses_ok']==1
+        assert health['requests_sent']==9 and health['suppressed']==8
+        assert p.access_failures==0 and p.access_error_code is None
+    asyncio.run(run())
+
+
+def test_operator_access_probe_is_throttled_and_does_not_clear_rate_limit():
+    async def run():
+        now=[100]
+        p=Provider('test-only',Session(Response(403)),clock=lambda:now[0])
+        await p.price(1,STABLE,ASSET,'100')
+        assert not p.request_access_recheck()
+        now[0]+=31
+        assert p.request_access_recheck() and p.access_block_until==0
+        assert not p.request_access_recheck()
+        now[0]+=31;p.rate_limit_until=now[0]+60
+        assert not p.request_access_recheck()
+        assert p.rate_limit_until==now[0]+60
+    asyncio.run(run())

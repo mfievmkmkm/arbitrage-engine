@@ -26,7 +26,7 @@ class PriceUnavailable(ValueError):
     def __init__(self, result):
         super().__init__(result.get('reason', 'DEX_VIRTUAL_PRICE_UNAVAILABLE'))
         self.diagnostics = {key: result[key] for key in
-                            ('retry_after_seconds', 'request_sent', 'action_required', 'error_code') if key in result}
+                            ('retry_after_seconds', 'request_sent', 'action_required', 'error_code','provider','http_status','chain_id','request_scope','response_evidence') if key in result}
 
 
 def token_key(r, token):
@@ -104,6 +104,7 @@ class Source(HistorySource):
         self.identity_gate = None
         self.fast_exit = False
         self.native_paired_inventory = False
+        self.fee_cache={};self.fee_locks={}
         self.exit_reader = Reader(public, timeout=1.4, clock=clock, max_slippage=.20)
 
     def venue_allowed(self, venue):
@@ -119,6 +120,8 @@ class Source(HistorySource):
         return max(12, cash + self.cex_cap(r) + 2)
 
     async def price(self, r, sell_asset, amount):
+        from .preflight_progress import stage
+        stage('DEX_SELL_QUOTE' if sell_asset else 'DEX_BUY_QUOTE',chain_id=r['chain_id'],amount=str(amount))
         if hasattr(self.provider, "price_route"):
             q = await self.provider.price_route(r, sell_asset, amount)
         else:
@@ -142,6 +145,9 @@ class Source(HistorySource):
         q = dict(q, virtual_min_buy_raw=str(minimum), live_allowed=False,
                  mode="DEX_VIRTUAL_INDICATIVE_MODEL", execution_verified=False)
         if r.get("mode", "paired") == "paired":
+            if q.get("tax_reason"):
+                from .evidence_error import EvidenceError
+                raise EvidenceError(q["tax_reason"],**q.get('tax_diagnostics',{}))
             metadata = q.get("token_metadata") or {}
             for side in ("sellToken", "buyToken"):
                 for field in ("buyTaxBps", "sellTaxBps", "transferTaxBps"):
@@ -150,16 +156,26 @@ class Source(HistorySource):
         return q
 
     async def fee(self, r):
+        if r['cex_venue']=='mexc' and r.get('mode')=='paired':
+            # CCXT MEXC fetchTradingFee supports SPOT ONLY. A connected spot
+            # reader must not turn the futures fee read into an invalid request.
+            return .0008, 'MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER'
         c = self.private.get(r["cex_venue"])
         if c is not None and c.has.get("fetchTradingFee") is True:
-            f = await asyncio.wait_for(c.fetch_trading_fee(r["cex_symbol"]), 8)
-            if f.get("symbol") != r["cex_symbol"]:
-                raise ValueError("DEX_VIRTUAL_FEE_SCOPE_MISMATCH")
-            return float(rate(f.get("taker"))), "ACCOUNT_READ_ONLY"
+            key=(r['cex_venue'],r['cex_symbol'])
+            async with self.fee_locks.setdefault(key,asyncio.Lock()):
+                cached=self.fee_cache.get(key)
+                if cached and 0<=self.clock()-cached[0]<30:return cached[1],'ACCOUNT_READ_ONLY'
+                f = await asyncio.wait_for(c.fetch_trading_fee(r["cex_symbol"]), 8)
+                if f.get("symbol") != r["cex_symbol"]:
+                    raise ValueError("DEX_VIRTUAL_FEE_SCOPE_MISMATCH")
+                value=float(rate(f.get('taker')))
+                self.fee_cache[key]=(self.clock(),value)
+                return value, "ACCOUNT_READ_ONLY"
         m = market(self.public[r["cex_venue"]], r["cex_symbol"])
         return float(rate(m.get("taker"))), "PUBLIC_RATE_ASSUMPTION"
 
-    async def gas(self, r, q, book=None):
+    async def gas(self, r, q, book=None, enforce_entry_budget=True):
         if r.get("mode", "paired") == "reference":
             return 0, 0, {}
         network = number(q.get("network_fee_raw"), "DEX_VIRTUAL_GAS_UNKNOWN")
@@ -169,9 +185,15 @@ class Source(HistorySource):
         book = normalize(raw, r["native_symbol"], raw.get('requested_at', start), self.clock(),
                          1.5, raw.get('data_source', 'REST'))
         price = float(number(book["asks"][0][0], "DEX_VIRTUAL_NATIVE_PRICE"))
-        usd = float(network / Decimal(10 ** r["native_decimals"])) * price
-        if not math.isfinite(usd) or usd > 0.25:
-            raise ValueError("DEX_VIRTUAL_GAS_BUDGET_LIMIT")
+        extra = number(q.get("network_fee_usd_extra", 0), "DEX_VIRTUAL_EXTRA_GAS_UNKNOWN", False)
+        usd = float(network / Decimal(10 ** r["native_decimals"])) * price + float(extra)
+        if not math.isfinite(usd):
+            raise ValueError('DEX_VIRTUAL_GAS_UNKNOWN')
+        if enforce_entry_budget and usd > 0.25:
+            from .evidence_error import EvidenceError
+            raise EvidenceError('DEX_VIRTUAL_GAS_BUDGET_LIMIT',observed=usd,threshold=.25,unit='USD',
+                                chain_id=r['chain_id'],gas_usd=usd,native_price_usd=price,
+                                network_fee_raw=str(network),extra_gas_usd=float(extra))
         return usd, price, book
 
     def route(self, p):
@@ -288,7 +310,8 @@ class Source(HistorySource):
             if r.get('mode','paired')=='paired' and self.native_paired_inventory:
                 residual_value=(base-qty)*cash/base
                 diagnostics.update(dex_base_qty=base,hedge_base_qty=qty,rounding_residual_usd=residual_value,
-                                   suggested_notional_usd=min(cash,cash*qty/base+.01))
+                                   residual_limit_usd=.05,
+                                   suggested_notional_usd=min(cash,cash*(qty+min(.025*base/cash,float(step or 0)*.25))/base))
                 if residual_value > .05:
                     raise ValueError('DEX_VIRTUAL_NOTIONAL_OR_RESIDUAL_LIMIT')
                 native_raw=Decimal(str(contracts))*number(m['contractSize'],'CONTRACT_SIZE')*(10**r['asset_decimals'])
@@ -316,6 +339,8 @@ class Source(HistorySource):
                     side, native = "buy", buy
             notional = qty * native.reference_price
             if notional > self.cex_cap(r) or (r.get("mode", "paired") == "paired" and abs(base - qty) * native.reference_price > 0.05):
+                diagnostics.update(observed=notional,threshold=self.cex_cap(r),unit='USD',
+                                   suggested_notional_usd=min(cash*.999,cash*self.cex_cap(r)/notional*.999))
                 raise ValueError("DEX_VIRTUAL_NOTIONAL_OR_RESIDUAL_LIMIT")
             p = dict(symbol=r["cex_symbol"], cex_symbol=r["cex_symbol"], cex_venue=r["cex_venue"],
                      chain_id=r["chain_id"], base_qty=qty, cex_contracts=contracts,
@@ -358,6 +383,10 @@ class Source(HistorySource):
             immediate_gross = (x["cash"] - cash if p["virtual_mode"] == "paired" else 0) + (1 if side == "buy" else -1) * qty * (x["price"] - p["entry_price"])
             immediate_net = immediate_gross - p["entry_fees"] - qty * x["price"] * x["fee_rate"] - x["gas"] - p["safety"]
             p['entry_immediate_net'] = immediate_net
+            diagnostics.update(entry_edge_usd=p['entry_edge'],immediate_net_usd=immediate_net,
+                               reverse_loss_limit_usd=max(cash,notional)*.02,
+                               entry_fees_usd=p['entry_fees'],exit_fee_usd=qty*x['price']*x['fee_rate'],
+                               exit_gas_usd=x['gas'],safety_usd=p['safety'])
             if immediate_net <= -max(cash, notional) * 0.02:
                 raise ValueError("DEX_VIRTUAL_REVERSE_PREFLIGHT_NET_STOP")
             if self.focus and p["virtual_mode"] == "reference":
@@ -391,6 +420,8 @@ class Source(HistorySource):
                         raise ValueError(reason or "DEX_SIGNAL_CHANGED")
                     p["channel_signal"] = signal
             if self.clock() - min(q["ts"], reverse["ts"]) > 15 or self.clock() - native.market_evidence["book_ts"] > 1.5:
+                diagnostics.update(dex_buy_age_seconds=self.clock()-q['ts'],dex_sell_age_seconds=self.clock()-reverse['ts'],
+                                   cex_age_seconds=self.clock()-native.market_evidence['book_ts'],dex_max_age_seconds=15,cex_max_age_seconds=1.5)
                 raise ValueError("DEX_VIRTUAL_ENTRY_STALE")
             if self.clock() - x["cex"]["book_ts"] > 1.5 or (gas_book and self.clock() - gas_book["timestamp"] / 1000 > 1.5):
                 raise ValueError("DEX_VIRTUAL_ENTRY_STALE")
@@ -428,7 +459,9 @@ class Source(HistorySource):
                 fee = p['entry_fee_pct'] / 100
             else:
                 fee, _ = await self.fee(r)
-            gas, gas_price, gas_book = await self.gas(r, q)
+            # Entry admission caps must not hide an expensive executable exit.
+            # Charge the observed cost in the mark; risk logic decides closure.
+            gas, gas_price, gas_book = await self.gas(r, q,enforce_entry_budget=False)
             reader = self.exit_reader if fast and p['virtual_mode']=='reference' else self.reader
             native = await reader.quote(r["cex_venue"], SubmitRequest(r["cex_symbol"], "buy" if p["cex_side"] == "sell" else "sell", p["cex_contracts"], "market", reduce_only=True), p["contract_size"])
             if q.get("ok") and not 0 <= self.clock() - q["ts"] <= 15:

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+import os
 
 import pytest
 from app import paper_server
@@ -9,6 +10,7 @@ from app.railway_paper_server import prepare_environment, expand_watchlist, DEFA
 from app.configure_virtual_paper import default_routes
 
 
+@pytest.mark.skipif(os.name=='nt',reason='Railway file lock uses Unix fcntl')
 def test_server_checks_existing_wal_database_with_writable_recovery(tmp_path,monkeypatch):
     db=tmp_path/'arbitrage.sqlite3'
     with sqlite3.connect(db) as connection:

@@ -198,6 +198,83 @@ strategy_lab = StrategyLab(config.db_path)
 strategy_lab_runtime = None
 notification_bot = None
 secondary = None
+from .wallet_watch import Store as WalletWatchStore
+wallet_watch_store = WalletWatchStore(config.runtime_state_path + '.wallet_watch.json')
+wallet_watch_pending = {}
+numeric_pending = {}
+
+
+@dp.callback_query.middleware()
+async def clear_numeric_prompt(handler, event, data):
+    # Any navigation invalidates the previous input, including Back and modes.
+    numeric_pending.pop(event.from_user.id, None)
+    return await handler(event, data)
+
+
+async def numeric_prompt(q, kind, key):
+    from .trading_controls import LIMITS
+    from .trading_controls_view import LABELS
+    from .transfer_console import FIELDS
+    transfer_limits={'budget':(5,100),'min_spread':(2,20),'max_spread':(2,30),
+                     'min_net':(.25,5),'stress_drop':(1,10),'dex_deposit_fee_pct':(0,1),'mexc_deposit_fee_pct':(0,1),'daily_loss':(.1,1.25),'total_loss':(.1,2.5)}
+    limits=transfer_limits if kind=='sig' else LIMITS
+    if key not in limits:raise ValueError('Неизвестный параметр')
+    low,high=limits[key];label=FIELDS[key][0] if kind=='sig' else LABELS[key]
+    numeric_pending[q.from_user.id]=dict(kind=kind,key=key,chat=q.message.chat.id,
+        message=q.message.message_id,expires=time.time()+120,
+        environment=trading_controls.environment,revision=trading_controls.state['revision'])
+    await q.answer()
+    await safe_edit(q.message,f'⚙️ <b>{label}</b>\n\nПришли число от {low:g} до {high:g}.',
+        InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='‹ Назад',callback_data=f'{kind}:field:{key}')]]))
+
+
+@dp.message(lambda m: bool(m.from_user and m.from_user.id in numeric_pending))
+async def numeric_setting_message(m: Message):
+    if not allowed(m.from_user.id):return
+    pending=numeric_pending.get(m.from_user.id)
+    if not pending or pending['chat']!=m.chat.id:return
+    kind,key=pending['kind'],pending['key']
+    if m.text and m.text.startswith('/'):
+        numeric_pending.pop(m.from_user.id,None)
+        from aiogram.dispatcher.event.bases import SkipHandler
+        raise SkipHandler
+    back=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='‹ Назад',callback_data=f'{kind}:field:{key}')]])
+    try:
+        if time.time()>pending['expires']:
+            numeric_pending.pop(m.from_user.id,None)
+            raise ValueError('Время ввода истекло. Открой параметр заново')
+        from .numeric_settings import parse
+        value=parse(m.text,integer=key in ('max_positions','slippage_bps'))
+        if kind=='sig':
+            feed=getattr(secondary,'market_signals',None)
+            if feed is None:raise ValueError('Модуль недоступен')
+            await feed.store.set_control(key,value)
+            from .transfer_console import render
+            text,keyboard=await render(feed,'sig:field:'+key,scanner.paused)
+        else:
+            if (trading_controls.environment,trading_controls.state['revision'])!=(pending['environment'],pending['revision']):
+                numeric_pending.pop(m.from_user.id,None)
+                raise ValueError('Настройки изменились. Открой параметр заново')
+            from .trading_controls import LIMITS
+            low,high=LIMITS[key]
+            if not low<=value<=high:raise ValueError(f'Допустимо от {low:g} до {high:g}')
+            trading_controls.update(**{key:value})
+            apply_operator_paper_limits()
+            while trading_controls.events:
+                event=trading_controls.events[0]
+                await diary.record_decisions([dict(ts=event['ts'],strategy='operator_control',symbol='*',
+                    buy='',sell='',action='CONFIG_CHANGE',reason='OPERATOR_UPDATE',before=event['before'],after=event['after'])])
+                trading_controls.events.pop(0)
+            from .trading_controls_view import render
+            text,keyboard=render(trading_controls,config.live_enabled and config.live_entry_enabled,selected_key=key)
+        numeric_pending.pop(m.from_user.id,None)
+    except ValueError as exc:
+        text='⚙️ <b>Значение не сохранено</b>\n\n'+escape(str(exc)[:180])
+        keyboard=back
+    await m.bot.edit_message_text(text,chat_id=pending['chat'],message_id=pending['message'],reply_markup=keyboard,parse_mode='HTML')
+    try:await m.delete()
+    except Exception:pass
+
 live_monitor = None
 live_exit_coordinator = None
 live_entry_coordinator = None
@@ -244,7 +321,16 @@ def menu():
 
 
 def operator_paper_reason(strategy, row):
-    if paired_paper and getattr(secondary,'inventory_paper',None):
+    if paired_paper and getattr(secondary,'inventory_paper',None) and strategy == 'dex_paired':
+        if not strategy_runtime.enabled.get('product_dex_paired',False):
+            return 'PAIRED_PRODUCT_OPT_IN_REQUIRED'
+        if row.get('cex_venue') not in ('bybit','mexc'):
+            return 'PAIRED_PRODUCT_VENUE_DISABLED'
+        if row.get('fee_source') != 'ACCOUNT_READ_ONLY' and not (
+            row.get('cex_venue')=='mexc' and row.get('fee_source')=='MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER'
+        ):
+            return 'PAIRED_PRODUCT_ACCOUNT_FEE_REQUIRED'
+    if paired_paper and getattr(secondary,'inventory_paper',None) and strategy not in ('dex_paired','futures_futures','spot_futures'):
         return 'RESEARCH_ONLY_USE_STRATEGY_LAB'
     risk.roll_day()
     symbol = row.get('symbol') or row.get('base')
@@ -494,6 +580,9 @@ async def text_for(s):
         )
         return f"📔 ДНЕВНИК\nНаблюдений: {count}\nПоследнее: {stamp}\nЗакрыто paper: {trades}\nPaper NET: {pnl:+.4f} USD\nПрибыльных: {wins}"
     if s == "exchanges":
+        if paired_paper:
+            names=sorted(set(private_clients)|set(spot_private_clients))
+            return '🏦 <b>Биржи</b>\n\n'+('\n'.join(escape(x.upper())+' · ключ добавлен' for x in names) or 'Нет подключённых бирж.')
         health = scanner.health.snapshot()
         lines = []
         for x in scanner.ids:
@@ -614,9 +703,26 @@ async def start(m: Message):
         )
 
 
-@dp.message(F.text.contains("SHORT?") | F.text.contains("LONG?"))
+@dp.message(F.text.contains("SHORT?") | F.text.contains("LONG?") | F.caption.contains("SHORT?") | F.caption.contains("LONG?"))
 async def accept_dex_signal(m: Message):
     if not m.from_user or not allowed(m.from_user.id):
+        return
+    text=m.text or m.caption or ''
+    if paired_paper:
+        origin=m.forward_origin
+        if (origin is None or getattr(origin,'type',None)!='channel'
+                or (getattr(origin.chat,'username','') or '').lower()!='mexcdexspreadtracker'):
+            return await m.answer('Перешли исходный пост из @MexcDexSpreadTracker.')
+        intake=getattr(secondary,'paired_signal_intake',None)
+        if intake is None:
+            return await m.answer('Приём DEX-сигналов пока недоступен.')
+        status=await m.answer('🔎 Проверяю токен…')
+        result=await intake.accept(dict(id=origin.message_id,text=text,timestamp=origin.date.timestamp()))
+        from .tg_ui import button
+        label=(escape(result.get('base','Токен'))+' · проверка в приоритете' if result['ok']
+               else '⛔ '+escape(result['reason']))
+        await status.edit_text(label,parse_mode='HTML',reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [button('📉 Сжатие','pair:show','primary')]]))
         return
     if not dual_paper and not focus_enabled("DEX_CHANNEL_SIGNALS_ONLY"):
         return await m.answer("Приём сигналов включается переменной DEX_CHANNEL_SIGNALS_ONLY=true.")
@@ -632,8 +738,8 @@ async def accept_dex_signal(m: Message):
     try:
         resolver = getattr(engine.source, "resolve_signal", None)
         if resolver:
-            await resolver(m.text, origin.date.timestamp())
-        signal = signals.add(m.text, engine.source.routes, origin.date.timestamp(), "MexcDexSpreadTracker")
+            await resolver(text, origin.date.timestamp())
+        signal = signals.add(text, engine.source.routes, origin.date.timestamp(), "MexcDexSpreadTracker")
     except ValueError as exc:
         return await m.answer(str(exc))
     if paired_paper:
@@ -982,6 +1088,8 @@ def keyboard_for(screen):
     if screen == "top":
         return market_keyboard(merged_market(strategy_runtime))
     if screen == "exchanges":
+        if paired_paper:
+            return venue_keyboard(sorted(set(private_clients)|set(spot_private_clients)))
         return venue_keyboard(scanner.ids)
     if screen == "strategies":
         return strategy_menu(strategy_runtime.enabled)
@@ -1219,6 +1327,8 @@ async def trading_control_page(q: CallbackQuery):
     from .trading_controls_view import render
     try:
         parts = q.data.split(':')
+        if parts[1] == 'custom':
+            return await numeric_prompt(q,'ctl',parts[2])
         if parts[1] == 'dex':
             dex = getattr(secondary, 'dex_paired', None)
             if not dex or trading_controls.environment != 'paper' or trading_controls.profile()['mode'] != 'manual':
@@ -1228,9 +1338,9 @@ async def trading_control_page(q: CallbackQuery):
             from .dex_virtual_paper_source import route_key
             buttons = [[InlineKeyboardButton(text=r.get('label', r['cex_symbol'])[:50],
                 callback_data='dcard:'+hashlib.sha256(json.dumps(route_key(r)).encode()).hexdigest()[:16])]
-                for r in dex.source.routes[:12]]
-            buttons.append([InlineKeyboardButton(text='‹ Управление', callback_data='ctl:show')])
-            await safe_edit(q.message, 'Выбери DEX-пару для проверки. Позиция пока не открывается.', InlineKeyboardMarkup(inline_keyboard=buttons))
+                for r in [r for r in dex.source.routes if dex.source.venue_allowed(r['cex_venue'])][:12]]
+            buttons.append([InlineKeyboardButton(text='‹ Назад', callback_data='pair:show')])
+            await safe_edit(q.message, '🔎 <b>Выбери пару</b> · PAPER', InlineKeyboardMarkup(inline_keyboard=buttons))
             await q.answer()
             return
         if parts[1] == 'env':
@@ -1248,11 +1358,23 @@ async def trading_control_page(q: CallbackQuery):
                 before=event['before'], after=event['after'])])
             trading_controls.events.pop(0)
         text, keyboard = render(trading_controls, config.live_enabled and config.live_entry_enabled,
-                                show_risk=parts[1] in ('risk','set'))
+                                show_risk=parts[1] in ('risk','set','field'),
+                                selected_key=parts[2] if parts[1] in ('set','field') else None)
         await safe_edit(q.message, text, keyboard)
         await q.answer('Сохранено' if parts[1]!='show' else '')
     except (ValueError, IndexError):
         await q.answer('Недопустимая настройка', show_alert=True)
+
+
+@dp.callback_query(F.data == 'dismiss:signal')
+async def dismiss_signal(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    await q.answer('Пропущено')
+    try:
+        await q.message.delete()
+    except Exception:
+        await q.message.edit_text('Пропущено',reply_markup=None)
 
 
 @dp.callback_query(F.data.startswith('enter:'))
@@ -1286,6 +1408,9 @@ async def manual_entry(q: CallbackQuery):
                 if not route:
                     raise ValueError('DEX_VIRTUAL_ROUTE_CHANGED')
                 await dex.cycle(route, entry_enabled=True)
+                sync_ui=getattr(secondary.runtime.services.get('dex_paired'),'sync_ui',None)
+                if sync_ui is not None:
+                    await sync_ui()
                 result = 'DEX PAPER: ' + dex.state.get('last_decision', 'Проверь дневник')
             elif item['environment'] == 'paper' and paired_paper and item['strategy'] == 'futures_futures':
                 position, reason, fresh = await paper_futures_entry(row)
@@ -1332,11 +1457,13 @@ async def manual_dex_card(q: CallbackQuery):
     token = trading_controls.issue('dex_paired', dict(symbol=p['symbol'], route_key=list(route_key(route))))
     text = (f'DEX BUY ↔ CEX SHORT · PAPER\n{escape(p["symbol"])}\n'
             + f'Равный объём ног: {p["base_qty"]:.8g}\nDEX ${p["entry_cash"]:.2f} · CEX ${p["base_qty"]*p["entry_price"]:.2f}\n'
+            + f'Расходы ≈${p["paired_policy"]["costs"]:.3f} · резерв funding ${p["paired_policy"]["funding_reserve"]:.3f}\n'
             + f'NET при частичном схождении: ${p["paired_policy"]["partial_net"]:.4f}\n'
-            + 'Это прогноз. Подтверждение действительно 30 секунд; цены и риск проверяются повторно.')
+            + 'Оценка модели · подтверждение 30 сек.')
     await safe_edit(q.message, text, InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='Подтвердить PAPER вход', callback_data='enter:'+token)],
-        [InlineKeyboardButton(text='‹ Управление', callback_data='ctl:show')]]))
+        [InlineKeyboardButton(text='✓ Открыть', callback_data='enter:'+token,style='success'),
+         InlineKeyboardButton(text='Пропустить', callback_data='dismiss:signal')],
+        [InlineKeyboardButton(text='‹ Назад', callback_data='pair:show')]]))
 
 
 @dp.callback_query(F.data.startswith("strategy:"))
@@ -1347,7 +1474,7 @@ async def strategy_toggle(q: CallbackQuery):
     name = q.data.split(":", 1)[1]
     if name not in strategy_runtime.enabled:
         return await q.answer("Неизвестная стратегия")
-    if paired_paper and getattr(secondary,'inventory_paper',None) and name != 'spot_inventory':
+    if paired_paper and getattr(secondary,'inventory_paper',None) and name not in ('spot_inventory','dex_paired','futures_futures','spot_futures'):
         return await q.answer('Исследовательский режим: новые входы — в Paper/replay. Старые позиции сопровождаются.',show_alert=True)
     if paired_paper and name in ('dex_channel', 'dex_bybit', 'cex_dex'):
         return await q.answer('Старый односторонний режим: новые входы отключены. История и сопровождение сохранены.', show_alert=True)
@@ -1419,7 +1546,7 @@ async def inventory_action(q: CallbackQuery):
 def transfer_position_keyboard(p):
     ident=p['id'];status=p['status'];rows=[]
     if status=='BUY_PENDING':
-        rows.append([InlineKeyboardButton(text='⛔ Отменить покупку PAPER',callback_data=f'sig:position:{ident}:cancel_buy')])
+        rows.append([InlineKeyboardButton(text='Отменить покупку',callback_data=f'sig:position:{ident}:cancel_buy',style='danger')])
     if status in ('BASE_IN_TRANSIT','SELL_PENDING'):
         if p.get('sale_held'):
             rows.append([InlineKeyboardButton(text='▶️ Продолжить продажу',callback_data=f'sig:position:{ident}:resume_sale',style='primary')])
@@ -1428,8 +1555,176 @@ def transfer_position_keyboard(p):
             if status=='SELL_PENDING':
                 rows.append([InlineKeyboardButton(text='💱 Продать сейчас',callback_data=f'sig:position:{ident}:sell_now',style='primary')])
     rows.append([InlineKeyboardButton(text='↻ Состояние',callback_data=f'sig:position:{ident}:refresh'),
-                 InlineKeyboardButton(text='‹ Сигналы',callback_data='sig:show')])
+                 InlineKeyboardButton(text='‹ Назад',callback_data='sig:show')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.callback_query(F.data == 'balances:show')
+async def account_balances_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    await q.answer('Обновляю балансы')
+    from .account_balances import snapshot, render
+    rows=await snapshot(spot_private_clients,private_clients)
+    await safe_edit(q.message,render(rows),InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='👛 Кошелёк',callback_data='wallet:show',style='primary')],
+        [InlineKeyboardButton(text='↻ Обновить',callback_data='balances:show',style='primary'),
+         InlineKeyboardButton(text='‹ Назад',callback_data='home')]]))
+
+
+@dp.callback_query(F.data.startswith('wallet:'))
+async def wallet_watch_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    from .wallet_watch import snapshot,render
+    if q.data=='wallet:edit':
+        wallet_watch_pending[q.from_user.id]=(q.message.chat.id,q.message.message_id,time.time()+120)
+        await q.answer()
+        await safe_edit(q.message,'👛 <b>Адрес кошелька</b>\n\nПришли публичный EVM-адрес: 0x…\nТолько просмотр · 2 минуты на ввод.',InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='‹ Назад',callback_data='wallet:show')]]))
+        return
+    if q.data!='wallet:show':return await q.answer()
+    wallet_watch_pending.pop(q.from_user.id,None)
+    await q.answer('Читаю блокчейн')
+    try:
+        wallet=wallet_watch_store.get()
+    except (ValueError,KeyError,OSError):
+        wallet=None
+    routes=[]
+    service=getattr(getattr(secondary,'runtime',None),'services',{}).get('dex_paired')
+    if service:
+        routes=list(service.paper.source.routes)
+        scan=getattr(service,'scanner',None)
+        if scan:routes+=list(scan.catalog.values())
+    text=render(wallet,await snapshot(wallet,routes)) if wallet else '👛 <b>Кошелёк</b>\n\nАдрес не добавлен.'
+    await safe_edit(q.message,text,InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='↻ Обновить',callback_data='wallet:show',style='primary'),
+         InlineKeyboardButton(text='Адрес',callback_data='wallet:edit')],
+        [InlineKeyboardButton(text='‹ Балансы',callback_data='balances:show')]]))
+
+
+@dp.message(F.text.regexp(r'^0x[0-9a-fA-F]{40}$'))
+async def wallet_watch_address(m: Message):
+    if not m.from_user or not allowed(m.from_user.id):return
+    pending=wallet_watch_pending.get(m.from_user.id)
+    if not pending or pending[0]!=m.chat.id or time.time()>pending[2]:return
+    try:
+        wallet=wallet_watch_store.set(m.text)
+    except ValueError as exc:
+        return await m.answer(str(exc))
+    wallet_watch_pending.pop(m.from_user.id,None)
+    # Keep the saved address out of the public repository and trading config.
+    await m.bot.edit_message_text('👛 Адрес сохранён · только просмотр',chat_id=pending[0],message_id=pending[1],reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='Балансы кошелька',callback_data='wallet:show',style='primary')]]))
+
+
+@dp.callback_query(F.data.startswith('pairpos:'))
+async def paired_position_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    engine=getattr(secondary,'dex_paired',None)
+    service=getattr(getattr(secondary,'runtime',None),'services',{}).get('dex_paired')
+    sync=getattr(service,'sync_ui',None)
+    if engine is None or sync is None:
+        return await q.answer('PAPER-контур недоступен',show_alert=True)
+    try:
+        parts=q.data.split(':');_,ident,action=parts[:3]
+        if action not in ('close','refresh','view','policy','history','auto','set') or not ident.isdecimal():
+            raise ValueError('Недопустимое действие')
+        if str(ident) not in engine.positions:
+            await sync()
+            return await q.answer('Сделка завершена · результат в дневнике',show_alert=True)
+        if action=='close':
+            await engine.request_exit(ident)
+        if not hasattr(engine,'card_views'):engine.card_views={}
+        if action in ('policy','history'):engine.card_views[str(ident)]=action
+        elif action=='view':engine.card_views.pop(str(ident),None)
+        elif action=='auto':
+            p=engine.positions[str(ident)]
+            await engine.update_management(ident,auto_profit=not p.get('operator_auto_profit',True))
+        elif action=='set':
+            if len(parts)!=5:raise ValueError('Некорректный параметр')
+            await engine.update_management(ident,**{parts[3]:float(parts[4])})
+        await q.answer('Выход запрошен' if action=='close' else 'Обновляю')
+        if action in ('close','refresh'):await engine.cycle(entry_enabled=False)
+        await sync()
+    except ValueError as exc:
+        await q.answer(str(exc)[:190],show_alert=True)
+
+
+@dp.callback_query(F.data.startswith('audit:'))
+async def decision_diagnostics_page(q: CallbackQuery):
+    if not allowed(q.from_user.id):return await q.answer('Нет доступа',show_alert=True)
+    from .decision_journal import Journal
+    from .decision_diagnostics import render
+    journal=Journal(config.db_path)
+    try:
+        text,keyboard=await render(journal,secondary,q.data,trading_controls,scanner.paused)
+    except ValueError as exc:
+        return await q.answer(str(exc)[:190],show_alert=True)
+    await q.answer()
+    await safe_edit(q.message,text,keyboard)
+
+
+@dp.callback_query(F.data.startswith('pair:'))
+async def paired_control_action(q: CallbackQuery):
+    if not allowed(q.from_user.id):
+        return await q.answer('Нет доступа',show_alert=True)
+    engine=getattr(secondary,'dex_paired',None)
+    if q.data=='pair:probe':
+        service=secondary.runtime.services.get('dex_paired') if secondary else None
+        scan=getattr(service,'scanner',None)
+        evm=getattr(getattr(getattr(engine,'source',None),'provider',None),'evm',None)
+        if (scan is None or evm is None or scanner.paused
+                or not strategy_runtime.enabled.get('dex_paired',False)):
+            return await q.answer('Сначала включи сканер и сними паузу',show_alert=True)
+        if not evm.request_access_recheck():
+            return await q.answer('Проверка уже идёт или прошло меньше 30 секунд',show_alert=True)
+        scan.wake.set()
+        return await q.answer('Повторная проверка доступа поставлена в очередь')
+    if q.data=='pair:scan':
+        if engine is None:
+            return await q.answer('Сканер недоступен',show_alert=True)
+        from .paired_console import scanner as scan_view
+        service=secondary.runtime.services.get('dex_paired')
+        text,keyboard=scan_view(engine,service,manual=trading_controls.environment=='paper' and trading_controls.profile('paper')['mode']=='manual')
+        await q.answer()
+        return await safe_edit(q.message,text,keyboard)
+    try:
+        if q.data != 'pair:show':
+            if engine is None:
+                raise ValueError('Парный PAPER-контур не загружен')
+            if trading_controls.environment != 'paper':
+                raise ValueError('Сначала выбери среду PAPER в настройках')
+            if q.data == 'pair:toggle':
+                enabled=not strategy_runtime.enabled.get('product_dex_paired',False)
+                strategy_runtime.enabled['product_dex_paired']=enabled
+                strategy_runtime.enabled['dex_paired']=enabled
+                if enabled:
+                    # Opt-in always starts with confirmation, regardless of
+                    # the historical global PAPER profile's default.
+                    trading_controls.update(mode='manual')
+                strategy_toggles.save(strategy_runtime.enabled)
+                await diary.record_decisions([dict(ts=time.time(),strategy='dex_paired',symbol='*',
+                    buy='',sell='',action='CONFIG_CHANGE',reason='PAPER_ENTRY_TOGGLE',
+                    enabled=strategy_runtime.enabled['dex_paired'])])
+            elif q.data in ('pair:mode:observe','pair:mode:manual','pair:mode:auto'):
+                trading_controls.update(mode=q.data.rsplit(':',1)[1])
+                apply_operator_paper_limits()
+            else:
+                raise ValueError('Неизвестное действие')
+            while trading_controls.events:
+                event=trading_controls.events[0]
+                await diary.record_decisions([dict(ts=event['ts'],strategy='operator_control',symbol='*',
+                    buy='',sell='',action='CONFIG_CHANGE',reason='OPERATOR_UPDATE',
+                    before=event['before'],after=event['after'])])
+                trading_controls.events.pop(0)
+    except ValueError as exc:
+        return await q.answer(str(exc)[:190],show_alert=True)
+    from .paired_console import render
+    text,keyboard=render(engine,strategy_runtime.enabled,trading_controls,scanner.paused)
+    await q.answer()
+    await safe_edit(q.message,text,keyboard)
 
 
 @dp.callback_query(F.data.startswith('sig:'))
@@ -1440,14 +1735,24 @@ async def market_signals_action(q: CallbackQuery):
     if feed is None:
         return await q.answer('Сканер сигналов отключён: MARKET_SIGNALS_ENABLED',show_alert=True)
     try:
+        if q.data.startswith('sig:custom:'):
+            return await numeric_prompt(q,'sig',q.data.split(':',2)[2])
         if q.data.startswith('sig:position:'):
             _,_,ident,action=q.data.split(':',3)
             p=feed.paper.positions.get(ident)
+            if p is None:
+                if feed.position_card:
+                    await feed.paper.sync_cards(feed.position_card,feed.remove_position_card)
+                return await q.answer('Сделка завершена · результат в дневнике',show_alert=True)
             if action!='refresh':
                 if p is None:raise ValueError('Позиция уже закрыта')
                 await feed.paper.control(ident,action)
             current=feed.paper.state.get('position') or feed.paper.state.get('last_position')
             if current is None or current['id']!=ident:raise ValueError('Карточка позиции устарела')
+            if not feed.paper.state.get('position'):
+                if feed.position_card:
+                    await feed.paper.sync_cards(feed.position_card,feed.remove_position_card)
+                return await q.answer('Сделка завершена · результат в дневнике',show_alert=True)
             await q.answer('Действие записано' if action!='refresh' else '')
             await safe_edit(q.message,feed.paper.card(current),transfer_position_keyboard(current))
             # The card remains bound to this message after operator edits.
@@ -1469,57 +1774,39 @@ async def market_signals_action(q: CallbackQuery):
             row=await feed.store.signal(q.data.split(':',2)[2])
             e=await feed.review(row['symbol'],row['buy'],row['sell'],read_accounts=True)
             e['id']=row['id']
-            links=[[InlineKeyboardButton(text='↻ Новые котировки и балансы',callback_data=q.data)]]
+            links=[[InlineKeyboardButton(text='↻ Обновить',callback_data=q.data)]]
             if e['transfer'] and not e['reasons'] and e['trade_configured']:
                 token=await feed.store.issue(e)
-                links.append([InlineKeyboardButton(text='🧪 Подтвердить PAPER-покупку',callback_data='sig:paper:'+token,style='primary')])
-            links.append([InlineKeyboardButton(text='‹ Сигналы',callback_data='sig:show')])
+                links.append([InlineKeyboardButton(text='✓ Открыть',callback_data='sig:paper:'+token,style='success'),
+                              InlineKeyboardButton(text='Пропустить',callback_data='dismiss:signal')])
+            links.append([InlineKeyboardButton(text='‹ Назад',callback_data='sig:show')])
             await q.answer()
-            return await safe_edit(q.message,feed.format(e),InlineKeyboardMarkup(inline_keyboard=links))
+            return await safe_edit(q.message,feed.format(e,include_code=False),InlineKeyboardMarkup(inline_keyboard=links))
         if q.data.startswith('sig:paper:'):
             control=await feed.store.control()
             if control['mode']!='manual':raise ValueError('Режим изменился: ручное подтверждение недоступно')
             route=await feed.store.claim(q.data.split(':',2)[2])
             if not (feed.entry_enabled and not scanner.paused):raise ValueError('Сканер на паузе')
             e=await feed.review(**route)
+            if e.get('mode')!='manual':raise ValueError('Режим изменился: ручное подтверждение недоступно')
             if not e['trade_configured'] or e['reasons'] or e['transfer'] is None:
                 raise ValueError('Новые данные не прошли проверку; позиция не открыта')
             await feed.paper.open(dict(signal=e,transfer=e['transfer']))
             if feed.position_card:
-                await feed.paper.sync_cards(feed.position_card)
-            await q.answer('PAPER-цикл записан')
-            return await safe_edit(q.message,feed.paper.render(),InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text='↻ PAPER-цикл',callback_data='sig:state')],
-                [InlineKeyboardButton(text='‹ Сигналы',callback_data='sig:show')]]))
+                await feed.paper.sync_cards(feed.position_card,feed.remove_position_card)
+            await q.answer('Открыто · PAPER')
+            from .transfer_console import render
+            text,keyboard=await render(feed,'sig:show',scanner.paused)
+            return await safe_edit(q.message,text,keyboard)
+
     except ValueError as exc:
         await q.answer(str(exc)[:190],show_alert=True)
         return
-    enabled=await feed.store.enabled()
-    control=await feed.store.control()
-    reader=getattr(secondary,'public_channel_reader',None)
-    text=feed.status()+'\n\nУведомления: '+('включены' if enabled else 'выключены')
-    if scanner.paused:
-        text+='\nОбщая пауза: отправка и сканирование приостановлены.'
-    text+='\nКанал: '+escape(reader.status if reader else 'публичное чтение не запущено')
-    text+=(f"\n\n🔁 PAPER перевод · {'Авто' if control['mode']=='auto' else 'Подтверждаю сам'}"
-           f"\nПокупка до ${control['budget']:g}; спред {control['min_spread']:g}–{control['max_spread']:g}%"
-           f" · NET от ${control['min_net']:g} даже при падении цены на {control['stress_drop']:g}%"
-           '\nВход только на биржах с настроенным spot API; реальный режим недоступен.\n\n'+feed.paper.render())
-    rows=[[InlineKeyboardButton(text='👆 Подтверждаю сам',callback_data='sig:mode:manual',style='primary' if control['mode']=='manual' else None),
-           InlineKeyboardButton(text='🤖 PAPER авто',callback_data='sig:mode:auto',style='primary' if control['mode']=='auto' else None)],
-          [InlineKeyboardButton(text='Покупка $10',callback_data='sig:set:budget:10'),InlineKeyboardButton(text='$25',callback_data='sig:set:budget:25'),InlineKeyboardButton(text='$50',callback_data='sig:set:budget:50')],
-          [InlineKeyboardButton(text='Спред ≥5%',callback_data='sig:set:min_spread:5'),InlineKeyboardButton(text='≥7.5%',callback_data='sig:set:min_spread:7.5')],
-          [InlineKeyboardButton(text='Максимум 10%',callback_data='sig:set:max_spread:10'),InlineKeyboardButton(text='15%',callback_data='sig:set:max_spread:15')],
-          [InlineKeyboardButton(text='Падение 3%',callback_data='sig:set:stress_drop:3'),InlineKeyboardButton(text='5%',callback_data='sig:set:stress_drop:5')],
-          [InlineKeyboardButton(text='NET ≥$0.25',callback_data='sig:set:min_net:0.25'),InlineKeyboardButton(text='≥$0.50',callback_data='sig:set:min_net:0.5')],
-          [InlineKeyboardButton(text='Выключить сигналы' if enabled else 'Включить сигналы',callback_data='sig:toggle')],
-          [InlineKeyboardButton(text='↻ Обновить',callback_data='sig:show'),InlineKeyboardButton(text='‹ Сделки',callback_data='inv:show')]]
-    if not feed.paper.state.get('home'):
-        venues=sorted(feed.trade_venues)
-        rows.insert(1,[InlineKeyboardButton(text='🏦 Начать PAPER на '+v,callback_data='sig:fund:'+v) for v in venues[:3]])
-        if len(venues)>3:rows.insert(2,[InlineKeyboardButton(text='🏦 '+v,callback_data='sig:fund:'+v) for v in venues[3:7]])
+    from .transfer_console import render
+    text,keyboard=await render(feed,q.data,scanner.paused)
     await q.answer()
-    await safe_edit(q.message,text,InlineKeyboardMarkup(inline_keyboard=rows))
+    await safe_edit(q.message,text,keyboard)
+
 
 
 async def notify_paper_close(symbol, net, reason):
@@ -1549,8 +1836,8 @@ async def notify_dex_open(position, label):
 
 
 def paper_entry_reason(op):
-    if paired_paper and getattr(secondary,'inventory_paper',None):
-        return 'CONVERGENCE_EDGE_UNPROVEN_RESEARCH_ONLY'
+    # Futures/Futures is a PAPER product route, not a directional inventory
+    # experiment. Keep all normal venue, fee, NET, risk and position gates.
     reason = operator_paper_reason('futures_futures', op)
     if reason:
         return reason
@@ -1608,6 +1895,15 @@ async def scanning():
             quotes = await scanner.scan()
             if getattr(scanner, 'last_diagnostics', None):
                 await diary.record_scan(scanner.last_diagnostics)
+            if paired_paper and not quotes:
+                # A zero-trade scanner can be healthy but economically blocked.
+                # Emit only aggregate read-only evidence once per 2 minutes,
+                # not raw books, account data or individual opportunities.
+                now = time.time()
+                if now - getattr(scanning, '_last_ff_zero_report', 0) >= 120:
+                    from .ff_scan_diagnostics import summarize
+                    log.info('PAPER_FF_DIAGNOSTICS %s', summarize(scanner.last_diagnostics))
+                    scanning._last_ff_zero_report = now
             if paired_paper:
                 from .paired_futures_funding import attach
                 funding_slots = asyncio.Semaphore(max(1, scanner.concurrency // 2))
@@ -1702,6 +1998,13 @@ async def scanning():
                         except Exception:
                             log.exception('Paired Paper notification failed')
             await diary.record_decisions(decisions)
+            if paired_paper and latest and not paper.positions:
+                ts = time.time()
+                if ts - getattr(scanning, '_last_ff_decision_report', 0) >= 120:
+                    from .ff_scan_diagnostics import decision_reasons
+                    log.info('PAPER_FF_DECISIONS opportunities=%s reasons=%s',
+                             len(latest), decision_reasons(decisions))
+                    scanning._last_ff_decision_report = ts
             log.info(
                 "Cycle opportunities=%s paper=%s", len(latest), len(paper.positions)
             )
@@ -2241,6 +2544,12 @@ async def main():
         if paired_paper:
             from .paired_paper_profile import migrate_toggles
             migrate_toggles(config.runtime_state_path, strategy_runtime, strategy_toggles)
+            # Prove whether the Futures/Futures scanner can attempt entry.
+            # Never auto-enable a strategy previously switched off by the owner.
+            log.info("PAPER_FF_STARTUP enabled=%s mode=%s environment=%s paused=%s inventory_research=%s",
+                     strategy_runtime.enabled.get('futures_futures', False),
+                     trading_controls.profile('paper')['mode'], trading_controls.environment,
+                     scanner.paused, bool(getattr(secondary, 'inventory_paper', None)))
         sf_cycle = secondary.runtime.services["spot_futures"]
         sf_cycle.allow_open = (
             lambda x: not scanner.paused
@@ -2419,6 +2728,7 @@ async def main():
                     lambda p: not scanner.paused and operator_paper_reason('dex_paired', p) is None and all(venue_controller.get(p['cex_venue'])[k] for k in ('paper', 'scan')),
                     notify_open=notify_dex_open)
                 secondary.dex_paired.operator_notional = lambda: trading_controls.profile('paper')['notional_usd']
+                secondary.runtime.services['dex_paired'].auto_enabled = lambda: trading_controls.environment=='paper' and trading_controls.profile('paper')['mode']=='auto'
             await secondary.route_discovery.start()
             if focus_enabled("DEX_CHANNEL_PUBLIC_READER_ENABLED") and os.getenv('MARKET_SIGNALS_ENABLED','true').lower() not in ('true','1','yes','on'):
                 from .dex_public_channel_reader import Reader as PublicChannelReader
@@ -2455,10 +2765,69 @@ async def main():
                                                     'PUBLIC_CAPTURE_ROUTES_REQUIRED',time.time())
         bot = Bot(token=config.token)
         notification_bot = bot
+        paired_engine=getattr(secondary,'dex_paired',None)
+        if paired_engine is not None:
+            from .paired_position_cards import Cards
+            from aiogram.exceptions import TelegramBadRequest
+            cards=Cards(paired_engine)
+            async def deliver_pair(text,markup,message_id):
+                if message_id:
+                    try:
+                        await bot.edit_message_text(text,config.admin_id,message_id,parse_mode='HTML',reply_markup=markup)
+                        return message_id
+                    except TelegramBadRequest as exc:
+                        message=str(exc).lower()
+                        if 'message is not modified' in message:return message_id
+                        if 'message to edit not found' not in message:raise
+                sent=await bot.send_message(config.admin_id,text,parse_mode='HTML',reply_markup=markup)
+                return sent.message_id
+            async def remove_pair(message_id):
+                try:
+                    await bot.delete_message(config.admin_id,message_id)
+                except TelegramBadRequest as exc:
+                    if 'message to delete not found' not in str(exc).lower():raise
+            async def sync_pair():
+                await cards.sync(deliver_pair,remove_pair)
+            secondary.runtime.services['dex_paired'].sync_ui=sync_pair
+            async def pair_candidate(candidate):
+                if (trading_controls.environment!='paper' or trading_controls.profile('paper')['mode']!='manual'
+                        or not strategy_runtime.enabled.get('product_dex_paired',False) or scanner.paused):
+                    return
+                p=candidate['position'];route=candidate['route']
+                # Assess the same risk policy as confirmation, but never
+                # call an execution method inside this temporary context.
+                with trading_controls.manual_intent(dict(environment='paper',strategy='dex_paired',
+                        row=dict(symbol=p['symbol']),revision=trading_controls.state['revision'])):
+                    if operator_paper_reason('dex_paired',p) is not None:return
+                import hashlib,json,aiosqlite
+                from .dex_virtual_paper_source import route_key
+                key=hashlib.sha256(json.dumps(route_key(route)).encode()).hexdigest()[:16]
+                async with aiosqlite.connect(config.db_path) as db:
+                    await db.execute('CREATE TABLE IF NOT EXISTS paired_candidate_alerts(route TEXT PRIMARY KEY,sent REAL)')
+                    row=await (await db.execute('SELECT sent FROM paired_candidate_alerts WHERE route=?',(key,))).fetchone()
+                    if row and 0<=time.time()-row[0]<300:return
+                    text=(f'📉 <b>Сжатие · PAPER · {escape(p["symbol"])}</b>\n\n'
+                          f'DEX BUY ↔ {escape(p["cex_venue"].upper())} SHORT\n'
+                          f'Объём хеджа {p["base_qty"]:.8g}\n'
+                          f'DEX ${p["entry_cash"]:.2f} · фьючерс ${p["base_qty"]*p["entry_price"]:.2f}\n'
+                          f'Сценарный NET ${p["paired_policy"]["partial_net"]:.4f}\n\n'
+                          f'Расходы ≈${p["paired_policy"]["costs"]:.3f}\n'
+                          'Оценка модели · перед входом повторная проверка.')
+                    await bot.send_message(config.admin_id,text,parse_mode='HTML',reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text='Проверить',callback_data='dcard:'+key,style='primary'),
+                         InlineKeyboardButton(text='Пропустить',callback_data='dismiss:signal')]]))
+                    await db.execute('INSERT INTO paired_candidate_alerts VALUES(?,?) ON CONFLICT(route) DO UPDATE SET sent=excluded.sent',(key,time.time()))
+                    await db.commit()
+            secondary.runtime.services['dex_paired'].notify_candidate=pair_candidate
+            paired_engine.on_opened=None
+            paired_engine.on_closed=None
         strategy_lab.on_open = lambda p: notify_strategy_open(p['plan']['strategy'],p['plan'])
         if paired_paper:
             from .inventory_experiment import build as build_inventory, migrate as migrate_inventory
             migrate_inventory(config.runtime_state_path,strategy_runtime,strategy_toggles,trading_controls)
+            # Retire new inventory experiments; their open positions remain monitored.
+            strategy_runtime.enabled['spot_inventory']=False
+            strategy_toggles.save(strategy_runtime.enabled)
             async def inventory_notification(event,position):
                 plan=position['plan']
                 from .inventory_cards import entry_text,entry_keyboard,card_row
@@ -2481,22 +2850,45 @@ async def main():
             await build_inventory(secondary,config.db_path,trading_controls,strategy_runtime,
                                   inventory_notification,lambda:scanner.paused,venue_controller.get,
                                   network_clients=private_clients)
+        if paired_engine is not None and getattr(secondary,'route_discovery',None) is not None:
+            paired_engine.source.operator_profile=lambda:trading_controls.profile('paper')
+            paired_engine.entry_block_reason=lambda p:operator_paper_reason('dex_paired',p)
+            if paired_engine.entry_executor:
+                paired_engine.entry_executor.allow_start=lambda:not scanner.paused and strategy_runtime.enabled.get('product_dex_paired',False) and strategy_runtime.enabled.get('dex_paired',False)
+            from .paired_signal_intake import Intake
+            secondary.paired_signal_intake=Intake(config.db_path,secondary.route_discovery,
+                                                  secondary.runtime.services['dex_paired'])
         if os.getenv('MARKET_SIGNALS_ENABLED','true').lower() in ('true','1','yes','on'):
             from .market_signals import Scanner as MarketSignals
             from .channel_signal_review import Reviewer
             async def market_signal_notification(text):
                 import re
                 match=re.search(r'Код карточки: ([0-9a-f]{16})',text)
+                text=re.sub(r'\nКод карточки: [0-9a-f]{16}','',text)
                 markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-                    text='🔎 Проверить сейчас',callback_data='sig:card:'+match[1])]]) if match else None
+                    text='Проверить',callback_data='sig:card:'+match[1],style='primary'),
+                    InlineKeyboardButton(text='Пропустить',callback_data='dismiss:signal')]]) if match else None
                 await bot.send_message(config.admin_id,text,parse_mode='HTML',
                                        disable_web_page_preview=True,reply_markup=markup)
             from .credentials import configured
             trade_venues={'gate' if v=='gateio' else v for v in configured() if v in spot_private_clients}
+            # The secondary bundle reuses futures market clients. MEXC needs its
+            # own spot adapter; reuse the already loaded Bybit spot account client.
+            spot_shared={v:c for v,c in getattr(secondary,'clients',{}).items() if v!='mexc'}
+            if 'bybit' in spot_private_clients:
+                spot_shared['bybit']=spot_private_clients['bybit']
             feed=MarketSignals(config.db_path,market_signal_notification,
                                trade_venues=trade_venues,account_clients=spot_private_clients,
-                               shared_clients=getattr(secondary,'clients',{}))
+                               shared_clients=spot_shared,paper_venues={'mexc'})
+            feed.venue_allowed=lambda venue,kind:not scanner.paused and venue_controller.get(venue)[kind]
             await feed.init()
+            recovered_decisions=await feed.journal.recover_interrupted()
+            log.info("DECISION_JOURNAL_READY strategies=A,B live=DISABLED recovered=%s",recovered_decisions)
+            from .decision_diagnostics import Service as DiagnosticsService
+            from .product_execution_status import inspect as execution_status
+            secondary.runtime.add('decision_diagnostics',DiagnosticsService(feed.journal,
+                lambda:execution_status(secondary,trading_controls,scanner.paused)))
+            feed.actionable_only=True
             async def position_card(p,text,message_id):
                 markup=transfer_position_keyboard(p)
                 if message_id:
@@ -2508,7 +2900,23 @@ async def main():
                 sent=await bot.send_message(config.admin_id,text,parse_mode='HTML',reply_markup=markup)
                 return sent.message_id
             feed.position_card=position_card
+            async def remove_position_card(message_id):
+                from aiogram.exceptions import TelegramBadRequest
+                try:
+                    await bot.delete_message(config.admin_id,message_id)
+                except TelegramBadRequest as exc:
+                    if 'message to delete not found' not in str(exc).lower():
+                        raise
+            feed.remove_position_card=remove_position_card
             feed.channel_review=Reviewer(secondary)
+            if getattr(secondary,'dex_paired',None) and getattr(secondary,'kyber_provider',None):
+                from .dex_transfer_router import Router as DexTransfer
+                dex_transfer=DexTransfer(feed,secondary.runtime.services['dex_paired'])
+                await dex_transfer.init()
+                dex_transfer.paused=lambda:scanner.paused
+                secondary.runtime.add('dex_transfer',dex_transfer)
+                from .dex_spot_catalog import Catalog as DexSpotCatalog
+                secondary.runtime.add('dex_spot_catalog',DexSpotCatalog(dex_transfer))
             secondary.market_signals=feed
             secondary.runtime.add('market_signals',feed)
             from .dex_public_channel_reader import Reader as PublicChannelReader
@@ -2516,8 +2924,15 @@ async def main():
             if channel_engine is None:
                 from types import SimpleNamespace
                 channel_engine=SimpleNamespace(path=config.db_path,clock=time.time,sql=lambda s:s)
+            async def channel_post(post):
+                await feed.queue_channel(post)
+                intake=getattr(secondary,'paired_signal_intake',None)
+                if intake is not None:
+                    result=await intake.accept(post)
+                    if result.get('ok') and not result.get('duplicate'):
+                        log.info('PAPER_CHANNEL | candidate=%s | intake_ms=%s',result.get('base'),result.get('elapsed_ms'))
             secondary.public_channel_reader=PublicChannelReader(
-                channel_engine,lambda:True,on_post=feed.queue_channel,report_only=True)
+                channel_engine,lambda:True,on_post=channel_post,report_only=True)
             if secondary.dex_experiments.get('dex_channel'):
                 secondary.dex_experiments['dex_channel'].channel_reader=secondary.public_channel_reader
             await secondary.public_channel_reader.start()

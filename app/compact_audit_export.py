@@ -1,3 +1,4 @@
+from .payload_codec import loads as payload_loads
 """Bounded, streaming read-only audit; no Excel or readiness recomputation."""
 import asyncio
 import csv
@@ -13,7 +14,7 @@ from .secret_redaction import redact
 
 def selected_tables():
     return {title: table for title, table in TABLES.items()
-            if title.startswith(("Inventory Paper ","Market signals ","Transfer PAPER ","Transfer signal ")) or title == "Channel reader state" or title.startswith('Strategy lab ')
+            if title.startswith(("Inventory Paper ","Market signals ","Transfer PAPER ","Transfer signal ")) or title in ("Channel reader state", "DEX scanner state", "Paired channel intake", "Paired Telegram cards",'Candidate checks','Candidate registry','Trade lifecycle','Strategy configuration','Diagnostic reports','Asset identity registry') or title.startswith('Strategy lab ')
             or "trades" in title.lower()
             or title in ("Paper trades", "Paper marks", "Decisions", "Ledger", "Scan cycles")
             or (title.startswith(("DEX channel", "DEX Bybit", "DEX paired", "CEX DEX Paper", "DEX virtual"))
@@ -55,7 +56,7 @@ def build_sync(path, directory, row_limit=5000):
                             data = dict(row)
                             if "payload" in data:
                                 try:
-                                    data["payload"] = json.loads(data["payload"])
+                                    data["payload"] = payload_loads(data["payload"])
                                 except (ValueError, TypeError):
                                     # Unknown payload cannot be safely inspected for secrets.
                                     data["payload"] = "[UNPARSEABLE_PAYLOAD_OMITTED]"

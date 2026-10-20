@@ -101,6 +101,8 @@ class Engine:
         self.allow_open = lambda p: True
         self.on_closed = None
         self.on_opened = None
+        self.entry_block_reason = lambda p:'RISK_OR_VENUE_DISABLED'
+        self.entry_executor = None
         if type(virtual) is not bool:
             raise ValueError("DEX_PAPER_MODE_INVALID")
         self.virtual = virtual
@@ -138,14 +140,81 @@ class Engine:
     async def cycle(self, route=None, entry_enabled=True):
         async with self.lock:
             try:
+                if self.namespace=='paired' and getattr(self.source,'operator_profile',lambda:{})().get('mode')=='observe':
+                    entry_enabled=False
                 return await self._cycle(route, entry_enabled)
             finally:
                 self.pending = 0
 
+    async def request_exit(self, ident):
+        """Persist a paired PAPER exit intent; the monitor still needs fresh quotes."""
+        if not self.virtual or self.namespace != 'paired':
+            raise ValueError('PAIRED_PAPER_ONLY')
+        async with self.lock:
+            state=copy.deepcopy(self.state)
+            p=state['positions'].get(str(ident))
+            if p is None:
+                raise ValueError('POSITION_ALREADY_CLOSED')
+            if p.get('operator_exit_requested') or p.get('exit_quote'):
+                return
+            p['operator_exit_requested']=self.clock()
+            async with aiosqlite.connect(self.path) as db:
+                await db.execute('BEGIN IMMEDIATE')
+                c=await db.execute(self.sql('UPDATE cex_dex_paper_state SET version=version+1,payload=? WHERE id=1 AND version=?'),
+                                   (json.dumps(state),self.version))
+                if c.rowcount!=1:
+                    raise ValueError('DEX_PAPER_CONCURRENT_WRITER')
+                await db.execute(self.sql('UPDATE cex_dex_paper SET payload=? WHERE id=?'),(json.dumps(p),p['id']))
+                await db.execute(self.sql('INSERT INTO cex_dex_paper_decisions(ts,reason,payload) VALUES(?,?,?)'),
+                                 (self.clock(),'MANUAL_EXIT_REQUESTED',json.dumps(dict(position_id=p['id']))))
+                await db.commit()
+            self.state,self.version=state,self.version+1
+
+    async def update_management(self,ident,**changes):
+        if not self.virtual or self.namespace!='paired':raise ValueError('PAIRED_PAPER_ONLY')
+        if set(changes)-{'stop_usd','target_usd','max_seconds','auto_profit'}:raise ValueError('Неизвестный параметр')
+        async with self.lock:
+            state=copy.deepcopy(self.state);p=state['positions'].get(str(ident))
+            if p is None or p.get('exit_quote'):raise ValueError('Сделка закрыта или уже выходит')
+            if p.get('execution_phase') not in (None,'DONE'):raise ValueError('Дождись завершения или отмены входа; закрытие доступно')
+            profile=getattr(self.source,'operator_profile',lambda:{})()
+            for key,value in changes.items():
+                if key=='auto_profit':
+                    if type(value) is not bool:raise ValueError('Нужен переключатель')
+                    p['operator_auto_profit']=value;continue
+                high={'stop_usd':profile.get('stop_loss_usd',20),'target_usd':100,'max_seconds':profile.get('max_hold_seconds',1200)}[key]
+                low=60 if key=='max_seconds' else .01
+                if isinstance(value,bool) or not isinstance(value,(float,int)) or not math.isfinite(value) or not low<=value<=high:
+                    raise ValueError(f'Допустимо от {low:g} до {high:g}')
+                p['paired_policy'][key]=value
+            p['management_changed_at']=self.clock()
+            async with aiosqlite.connect(self.path) as db:
+                await db.execute('BEGIN IMMEDIATE')
+                c=await db.execute(self.sql('UPDATE cex_dex_paper_state SET version=version+1,payload=? WHERE id=1 AND version=?'),(json.dumps(state),self.version))
+                if c.rowcount!=1:raise ValueError('DEX_PAPER_CONCURRENT_WRITER')
+                await db.execute(self.sql('UPDATE cex_dex_paper SET payload=? WHERE id=?'),(json.dumps(p),p['id']))
+                await db.execute(self.sql('INSERT INTO cex_dex_paper_decisions(ts,reason,payload) VALUES(?,?,?)'),
+                    (self.clock(),'POSITION_MANAGEMENT_CHANGE',json.dumps(dict(position_id=p['id'],changes=changes))))
+                journal=getattr(self.source,'journal',None)
+                if journal:await journal.lifecycle(db,'A',p,'POSITION_MANAGEMENT_CHANGE',p['status'])
+                await db.commit()
+            self.state,self.version=state,self.version+1
+
     async def _cycle(self, route, entry_enabled):
         state = copy.deepcopy(self.state)
         saved, marks, events, closed, decisions, opened = [], [], [], [], [], []
+        entry_events=[]
         for key, p in list(state["positions"].items()):
+            if self.entry_executor and p.get('execution_phase') not in (None,'DONE'):
+                p,event,completed=await self.entry_executor.advance(p)
+                saved.append(p);entry_events.append((p,event))
+                decisions.append(('PAPER_ENTRY_'+event,dict(position_id=p['id'],status=p['status'],
+                    error=p.get('execution_error'),hedged_base_qty=p.get('hedged_base_qty'),dex_filled_qty=p.get('dex_filled_qty'))))
+                if p['status']=='CANCELLED_BEFORE_FILL':
+                    del state['positions'][key]
+                elif completed:
+                    del state['positions'][key];closed.append(copy.deepcopy(completed))
+                continue
             pending = p["status"] == "EXIT_ACCOUNTING_PENDING"
             until = p["exit_at"] if pending else self.clock()
             # Historical IO precedes the fresh actionable exit quotes.
@@ -226,7 +295,9 @@ class Engine:
                 reason = exit_reason(p, m, h.verified)
             if not pending and p.get('paired_policy'):
                 from .paired_paper_policy import exit_reason
-                reason = exit_reason(p['paired_policy'], p['opened_at'], p['best_net'], m, h.verified)
+                reason = exit_reason(p['paired_policy'], p['opened_at'], p['best_net'], m, h.verified,p.get('operator_auto_profit',True))
+            if not pending and self.virtual and self.namespace=='paired' and p.get('operator_exit_requested') is not None:
+                reason = p.get('execution_exit_reason','MANUAL_EXIT')
             if reason:
                 p.update(
                     status="EXIT_ACCOUNTING_PENDING",
@@ -268,6 +339,12 @@ class Engine:
             reservation = self.source.reserve_for_route(route) if self.virtual else 12
             decision_detail = {}
             failure_detail = {}
+            journal=getattr(self.source,'journal',None)
+            parent_trace=route.get('parent_trace_id')
+            if journal and parent_trace:
+                await journal.check(parent_trace,'EXECUTOR','PASS','PAPER_ENGINE_RECHECK_REQUESTED')
+            if journal and parent_trace and self.used_capital+self.external_reserved()+reservation>self.budget():
+                await journal.finish(parent_trace,'REJECTED','SHARED_CAPITAL_LOW',dict(observed=self.used_capital+self.external_reserved()+reservation,threshold=self.budget(),unit='USD'))
             if self.used_capital + self.external_reserved() + reservation <= self.budget():
                 # Make the reservation visible to the other Paper modules during IO.
                 self.pending = reservation
@@ -279,10 +356,10 @@ class Engine:
                     p = x["position"]
                     if self.virtual:
                         decision_detail = {k: p[k] for k in ("virtual_mode", "cex_venue", "cex_side", "entry_price", "entry_edge", "entry_fees", "fee_source", "dex_reference_bid", "dex_reference_ask", "reserve")}
-                    if p["entry_edge"] < self.min_edge:
+                    if not p.get('paired_policy') and p["entry_edge"] < self.min_edge:
                         reason = "DEX_MODEL_EDGE_LOW"
                     elif not self.allow_open(p):
-                        reason = "RISK_OR_VENUE_DISABLED"
+                        reason = self.entry_block_reason(p) or 'RISK_OR_VENUE_DISABLED'
                     elif self.external_reserved() + p["reserve"] > self.budget():
                         reason = "SHARED_CAPITAL_LOW"
                     else:
@@ -292,6 +369,7 @@ class Engine:
                             id=pid, closed_at=None, status="OPEN",
                             net=p.get('entry_immediate_net', 0), best_net=0
                         )
+                        if self.entry_executor:p=self.entry_executor.reserve(p)
                         state["positions"][str(pid)] = p
                         if self.namespace and p.get("channel_signal"):
                             key = json.dumps(p["virtual_route_key"], separators=(",", ":"))
@@ -299,6 +377,14 @@ class Engine:
                         saved.append(p)
                         opened.append(copy.deepcopy(p))
                         reason = "DEX_PAPER_OPEN"
+                    journal=getattr(self.source,'journal',None)
+                    trace=p.get('trace_id')
+                    if journal and trace:
+                        if reason=='DEX_PAPER_OPEN':
+                            await journal.check(trace,'RISK','PASS','CAPITAL_AND_OPERATOR_LIMITS',dict(reserve=p['reserve'],budget=self.budget()))
+                            await journal.check(trace,'EXECUTOR','PASS','PAPER_ENGINE_ACCEPTED')
+                        else:
+                            await journal.finish(trace,'REJECTED',reason,dict(reserve=p['reserve'],budget=self.budget(),external_reserved=self.external_reserved()))
             # Never persist the route: it contains the wallet address.
             decisions.append(
                 (
@@ -345,6 +431,14 @@ class Engine:
                         json.dumps(p),
                     ),
                 )
+            journal=getattr(self.source,'journal',None)
+            if journal:
+                for p in opened:
+                    await journal.lifecycle(d,'A',p,'ENTRY_RESERVED' if self.entry_executor else 'DEX_PAPER_OPEN',p['status'])
+                for p,event in entry_events:
+                    if p['status']!='CLOSED':await journal.lifecycle(d,'A',p,event,p['status'])
+                for p in closed:
+                    await journal.lifecycle(d,'A',p,p['exit_reason'],p['status'])
             for pid, m in marks:
                 await d.execute(
                     self.sql("INSERT INTO cex_dex_paper_marks(position_id,ts,net,payload) VALUES(?,?,?,?)"),

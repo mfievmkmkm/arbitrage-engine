@@ -28,6 +28,37 @@ def test_equal_base_fees_and_total_capital():
         economics(book(100,quantity=.1),book(107))
 
 
+def test_public_spot_fee_is_not_raised_to_two_tenths_percent():
+    from app.market_signals import priced
+    client=NS(precisionMode=4)
+    market=dict(symbol='X/USDT',precision={'amount':.001},taker=.0005)
+    # The market rate remains a PAPER assumption until account-read evidence.
+    result=priced(dict(asks=[['1', '100']],bids=[['.99', '100']],timestamp=100000),client,market)
+    assert result['fee_rate']==D('.0005')
+
+
+def test_transfer_networks_require_account_read_when_public_mexc_has_no_data(tmp_path):
+    async def go():
+        calls=[]
+        class Client:
+            has={'fetchCurrencies':True}
+            def __init__(self,rows):self.rows=rows
+            async def fetch_currencies(self):
+                calls.append(self.rows)
+                return self.rows
+        public=Client({})
+        scanner=Scanner(tmp_path/'db',None,clock=lambda:100,venues=[],shared_clients={'mexc':public})
+        await scanner.init()
+        with pytest.raises(ValueError,match='MEXC: для сетей'):
+            await scanner.currencies('mexc')
+        account=Client({'USDT':{'networks':{}}})
+        scanner.accounts.clients['mexc']=account
+        rows=await scanner.currencies('mexc')
+        assert 'USDT' in rows and calls==[{},account.rows]
+        await scanner.close()
+    asyncio.run(go())
+
+
 def test_discovery_excludes_dex_and_includes_supported_spot_adapters():
     venues=discover()
     assert {'gate','mexc','bybit','binance','okx'}<=set(venues)
@@ -93,7 +124,7 @@ def test_durable_queue_dedup_toggle_and_delivery_retry(tmp_path):
     asyncio.run(go())
 
 
-def test_missing_identity_is_reported_not_qualified_and_links_present(tmp_path):
+def test_missing_identity_is_reported_without_claiming_net(tmp_path):
     async def go():
         s=Scanner(tmp_path/'db',None,clock=lambda:100,venues=[])
         await s.init()
@@ -106,9 +137,9 @@ def test_missing_identity_is_reported_not_qualified_and_links_present(tmp_path):
         e=await s.evaluate('X/USDT','bybit','gate')
         assert e['transfer'] is None
         t=s.format(e)
-        assert 'ВХОД НЕ ПОДТВЕРЖДЁН' in t and 'Невозможно проверить последовательный перевод' in t
-        assert 'https://www.bybit.com/en/trade/spot/X/USDT' in t
-        assert 'https://www.gate.com/trade/X_USDT' in t
+        assert 'Вход недоступен' in t and 'сеть и контракт' in t
+        assert 'BYBIT → GATE' in t
+        assert 'Сценарный NET' not in t
         assert len(t)<4096
     asyncio.run(go())
 
@@ -213,7 +244,7 @@ def test_route_rotation_survives_cooldown_bucket_and_old_spot_is_not_resent(tmp_
         async def notify(text):sent.append(text)
         s=Scanner(tmp_path/'db',notify,clock=lambda:now[0],venues=[])
         await s.init()
-        s.candidates=lambda:[(10-i,'X'+str(i)+'/USDT','a','b') for i in range(50)]
+        s.candidates=lambda min_spread=5:[(10-i,'X'+str(i)+'/USDT','a','b') for i in range(50)]
         async def evaluate(symbol,*args):seen.append(symbol);return None
         s.evaluate=evaluate
         await s.cycle()
@@ -224,4 +255,26 @@ def test_route_rotation_survives_cooldown_bucket_and_old_spot_is_not_resent(tmp_
         now[0]=400
         await s.flush()
         assert not sent and not await s.store.pending()
+    asyncio.run(go())
+
+
+def test_product_notifications_keep_only_actionable_routes_and_preserve_reviews(tmp_path):
+    async def go():
+        sent=[]
+        async def notify(text):sent.append(text)
+        s=Scanner(tmp_path/'db',notify,clock=lambda:1000,venues=[])
+        await s.init();s.actionable_only=True
+        for key,kind,payload,result in (
+            ('channel:1','channel',{'text':'report'},'channel review retained'),
+            ('blocked','spot',{'trade_configured':True,'reasons':['unknown network']},'blocked review retained'),
+            ('ready','spot',{'trade_configured':True,'reasons':[]},'ready signal')):
+            await s.store.enqueue(key,kind,payload)
+            await s.store.result(key,result)
+        await s.flush()
+        assert sent==['ready signal']
+        assert await s.store.pending()==[]
+        import sqlite3
+        with sqlite3.connect(s.store.path) as db:
+            row=db.execute('SELECT result,delivered FROM market_signal_queue WHERE key=?',('channel:1',)).fetchone()
+            assert row==('channel review retained',1)
     asyncio.run(go())

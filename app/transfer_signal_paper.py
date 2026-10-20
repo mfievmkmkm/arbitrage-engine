@@ -11,6 +11,7 @@ class Paper:
     def __init__(self,store,clock):
         self.store,self.clock=store,clock
         self.lock=asyncio.Lock();self.state=None;self.version=0
+        self.entry_guard=lambda buy,sell:True
 
     @property
     def positions(self):
@@ -19,6 +20,9 @@ class Paper:
 
     async def init(self):
         import aiosqlite
+        from .decision_journal import Journal
+        self.journal=Journal(self.store.path,self.clock)
+        await self.journal.init()
         initial=dict(cash='250',balances={},home='',realized='0',closed=0,wins=0,losses=0,position=None,last_position=None,
                      position_cards={},daily={},last_error='',notifications={})
         async with aiosqlite.connect(self.store.path) as db:
@@ -61,23 +65,51 @@ class Paper:
             if c.rowcount!=1:raise ValueError('Другой процесс изменил PAPER-счёт; перезапустите экземпляр')
             await db.execute('INSERT INTO signal_transfer_events(ts,reason,payload) VALUES(?,?,?)',
                              (self.clock(),reason,json.dumps(payload,allow_nan=False)))
+            position=state.get('position') or state.get('last_position')
+            if position and position.get('trace_id'):
+                await self.journal.lifecycle(db,'B',position,reason,position['status'])
             await db.commit()
         self.state=state;self.version+=1
 
     async def open(self,review):
+        try:
+            return await self._open(review)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            trace=review.get('signal',{}).get('trace_id')
+            if trace:
+                reason=str(exc) if isinstance(exc,ValueError) else type(exc).__name__
+                await self.journal.check(trace,'EXECUTOR','FAIL',reason)
+                await self.journal.finish(trace,'REJECTED',reason)
+            raise
+
+    async def _open(self,review):
+        signal=review.get('signal',{})
+        if not self.entry_guard(signal.get('buy',''),signal.get('sell','')):raise ValueError('Площадка или входы выключены')
+        if (review.get("transfer") or {}).get("kind")=="DEX_SEQUENTIAL_V1":
+            if not hasattr(self,"dex_transfer"):raise ValueError("DEX-перевод недоступен")
+            return await self.dex_transfer.open(review)
         async with self.lock:
             e=review['signal'];plan=review['transfer']
-            if plan is None or plan['reasons']:
+            if plan is None or plan['reasons'] or e.get('reasons') or e.get('trade_configured') is False:
                 raise ValueError('Переводная модель не прошла фильтры')
             if not 0<=self.clock()-e['ts']<=3:
                 raise ValueError('Нужны новые котировки')
             if self.state['position']:
                 raise ValueError('Сначала завершите текущую PAPER-позицию')
-            if D(self.state['realized'])<=D('-2.5') or D(self.state['daily'].get(day(self.clock()),'0'))<=D('-1.25'):
-                raise ValueError('Достигнут лимит убытка PAPER: день $1.25, весь тест $2.50')
+            risk=await self.store.control()
+            if e.get('settings_revision',risk['revision'])!=risk['revision']:
+                raise ValueError('Настройки изменились; нужна новая проверка')
+            if risk['mode']=='observe' or not await self.store.enabled():
+                raise ValueError('Наблюдение или входы выключены')
+            if e.get('mode') is not None and e['mode']!=risk['mode']:
+                raise ValueError('Режим изменился; нужна новая проверка')
+            if D(self.state['realized'])<=-D(risk['total_loss']) or D(self.state['daily'].get(day(self.clock()),'0'))<=-D(risk['daily_loss']):
+                raise ValueError('Достигнут лимит убытка PAPER')
             if not self.state.get('home'):raise ValueError('Сначала выбери исходную биржу PAPER-капитала')
             state=copy.deepcopy(self.state)
-            p=dict(id=str(self.version+1),signal=dict(symbol=e['symbol'],buy=e['buy'],sell=e['sell']),
+            p=dict(id=str(self.version+1),trace_id=e.get('trace_id'),signal=dict(symbol=e['symbol'],buy=e['buy'],sell=e['sell']),
                    plan=plan,opened=self.clock(),due=self.clock()+900,status='BASE_IN_TRANSIT',
                    remaining=plan['received_qty'],proceeds='0',sell_fees='0',dust='0',sold='0',fills=[],funding_fee='0')
             if plan.get('funding_route'):
@@ -94,6 +126,8 @@ class Paper:
                      +(f"Сначала USDT {plan['funding_source']} → {e['buy']}; покупка после нового стакана." if p['status']=='USDT_TO_BUY_IN_TRANSIT' else f"Куплено по модели на ${float(plan['spent']):.4f}.")+
                      ' Продажа по будущему стакану после зачисления монеты; найденный спред не зафиксирован.')
             key='open:'+p['id'];state['notifications'][key]=message
+            if p.get('trace_id'):
+                await self.journal.check(p['trace_id'],'EXECUTOR','PASS','SEQUENTIAL_PAPER_ACCEPTED')
             await self.save(state,'FUNDING_RESERVATION' if p['status']=='USDT_TO_BUY_IN_TRANSIT' else 'BUY_AND_BASE_RESERVATION',p)
             return p
 
@@ -101,6 +135,10 @@ class Paper:
         async with self.lock:
             p0=self.state.get('position')
             if not p0 or self.clock()<p0['due']:return
+            if p0.get('kind')=='DEX_SEQUENTIAL_V1':
+                handler=getattr(self,'dex_transfer',None)
+                if handler is None:return  # Preserve unknown exposure on missing module.
+                return await handler.monitor_unlocked()
             state=copy.deepcopy(self.state);p=state['position'];s=p['signal'];plan=p['plan']
             try:
                 if p['status']=='USDT_TO_BUY_IN_TRANSIT':
@@ -201,6 +239,9 @@ class Paper:
         async with self.lock:
             state=copy.deepcopy(self.state);p=state.get('position')
             if not p or p['id']!=ident:raise ValueError('Активная позиция изменилась')
+            if action=='cancel_buy' and p.get('kind')=='DEX_SEQUENTIAL_V1':
+                if not hasattr(self,'dex_transfer'):raise ValueError('DEX-перевод недоступен')
+                return await self.dex_transfer.cancel_unlocked(state,p)
             if action=='cancel_buy' and p['status']=='BUY_PENDING':
                 fee=D(p['funding_fee']);loss=-fee
                 state['realized']=str(D(state['realized'])+loss)
@@ -224,41 +265,59 @@ class Paper:
     def card(self,p):
         from html import escape
         s=p['signal'];model=p['plan'];status=p['status']
+        from .dex_transfer_source import venue_label
         stages={'USDT_TO_BUY_IN_TRANSIT':'USDT переводится к месту покупки',
-                'BUY_PENDING':'USDT зачислен, покупка ожидает свежей проверки',
+                'BUY_PENDING':'Покупка ожидает свежей проверки',
+                'BASE_TRANSFER_PENDING':'Монета куплена, перевод ожидает проверки сети',
+                'RETURN_PENDING':'Продано, возврат USDT ожидает проверки',
                 'BASE_IN_TRANSIT':'Монета переводится к месту продажи',
                 'SELL_PENDING':'Продажа по доступному свежему стакану',
                 'QUOTE_IN_TRANSIT':'USDT возвращается после продажи',
                 'CLOSED':'Цикл закрыт','BUY_ABORTED':'Покупка отменена',
                 'ABORTED_AFTER_FUNDING':'Покупка отменена',
                 'CANCELLED_BEFORE_BUY':'Покупка отменена оператором'}
-        text=(f"🧪 <b>PAPER · позиция #{escape(p['id'])}</b>\n"
-              f"{escape(s['symbol'])}: {escape(s['buy'])} → {escape(s['sell'])}\n"
-              f"Этап: {escape(stages.get(status,status))}\n"
-              f"План: купить на ${float(model['spent']):.2f}, перевести BASE и продать после зачисления. "
-              f"NET при неизменной цене ${float(model['net_after_reserve']):+.3f}; это сценарий, не прибыль.\n"
-              f"BASE осталось {escape(p['remaining'])}; продано {escape(p['sold'])}; "
-              f"выручка ${float(p['proceeds']):.3f}.\n")
-        if p.get('sale_held'):text+='⚠ Продажа удержана вручную: рыночный риск растёт.\n'
-        if p.get('net') is not None:text+=f"Итог PAPER {float(p['net']):+.4f} USDT.\n"
+        text=(f"🔁 <b>{escape(s['symbol'])} · PAPER</b> · #{escape(p['id'])}\n"
+              f"{escape(venue_label(s['buy']))} → {escape(venue_label(s['sell']))}\n\n"
+              f"<b>{escape(stages.get(status,status))}</b>\n"
+              f"{'План покупки' if status in ('USDT_TO_BUY_IN_TRANSIT','BUY_PENDING') else 'Покупка'} ${float(p.get('actual_spent',model['spent'])):.2f}\n"
+              f"Осталось {float(p['remaining']):.8g} · продано {float(p['sold']):.8g}\n"
+              f"Выручка ${float(p['proceeds']):.3f}\n")
+        if p.get('sale_held'):text+='⏸ Продажа удержана\n'
+        if p.get('net') is not None:text+=f"<b>NET {float(p['net']):+.4f} USDT</b>\n"
         if self.state['last_error'] and self.state.get('position') and p['id']==self.state['position']['id']:
             text+='Последняя проблема: '+escape(self.state['last_error'])+'\n'
-        return text+'В пути перевод не отменяется. Цена продажи берётся позже; реальных сделок нет.'
+        return text+'Цена продажи не закреплена.'
 
-    async def flush(self,notify):
+    async def flush(self,notify,quiet_lifecycle=False):
         # Persistent outbox with at-least-once delivery. State lock prevents
         # UI opens racing a completion notification acknowledgement.
         async with self.lock:
             for key,message in list(self.state['notifications'].items()):
-                await notify(message)
+                if not quiet_lifecycle or not key.startswith(('open:','close:','abort:','buy:','cancel:')):
+                    await notify(message)
                 state=copy.deepcopy(self.state);state['notifications'].pop(key,None)
                 await self.save(state,'NOTIFIED',dict(key=key))
 
-    async def sync_cards(self,deliver):
+    async def sync_cards(self,deliver,remove=None):
         # A dedicated Telegram message per position; resend only on change.
         async with self.lock:
+            active=self.state.get('position')
+            # The financial close is committed before Telegram is touched.
+            # Retry failed deletions, including older cards after a restart.
+            if remove is not None:
+                for ident,card in list(self.state['position_cards'].items()):
+                    if active and active['id']==ident:continue
+                    try:
+                        if card.get('message_id'):
+                            await remove(card['message_id'])
+                    except Exception:
+                        continue
+                    state=copy.deepcopy(self.state)
+                    state['position_cards'].pop(ident,None)
+                    await self.save(state,'POSITION_CARD_REMOVED',dict(id=ident))
             for p in (self.state.get('position'),self.state.get('last_position')):
                 if not p:continue
+                if remove is not None and (not active or p['id']!=active['id']):continue
                 ident=p['id'];card=self.state['position_cards'].get(ident,{})
                 text=self.card(p)
                 if card.get('text')==text:continue

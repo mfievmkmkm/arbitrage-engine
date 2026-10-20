@@ -47,6 +47,12 @@ def run_database(db):
         with sqlite3.connect(db.as_uri() + "?mode=rw", uri=True) as connection:
             if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
                 raise ValueError("PAPER_SERVER_DATABASE_CHECK_FAILED")
+            # WAL lets read-only scans/exports coexist with short journal writes.
+            # The default bounded checkpoint avoids a perpetually growing WAL.
+            if connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower()!='wal':
+                raise ValueError('PAPER_SERVER_WAL_UNAVAILABLE')
+            connection.execute('PRAGMA wal_autocheckpoint=1000')
+            print('SQLITE_CONCURRENCY journal=WAL checkpoint_pages=1000',flush=True)
         runpy.run_module("app.main", run_name="__main__")
 
 

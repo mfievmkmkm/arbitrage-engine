@@ -22,6 +22,17 @@ class Provider:
         self.access_block_until = 0
         self.access_error_code = None
         self.access_status = None
+        self.access_failures = 0
+        self.requests_sent = 0
+        self.responses_ok = 0
+        self.suppressed = 0
+        self.last_request_at = float("-inf")
+        self.last_manual_probe = float("-inf")
+        from .dex_request_budget import Budget
+        self.budget = Budget()
+        self.token_cache = {}
+        self.token_locks = {}
+        self.metadata_budget = Budget(spacing=2.1, concurrency=2)
 
     async def start(self):
         if self.session is None:
@@ -32,6 +43,20 @@ class Provider:
             await self.session.close()
 
     async def token(self, network, address):
+        key = (network, address.lower())
+        async with self.token_locks.setdefault(key, asyncio.Lock()):
+            cached = self.token_cache.get(key)
+            if cached and 0 <= self.clock()-cached[0] < 3600:
+                return dict(cached[1])
+            permit = await self.metadata_budget.acquire()
+            try:
+                result = await self._token(network, address)
+            finally:
+                self.metadata_budget.release(permit)
+            self.token_cache[key] = (self.clock(), dict(result))
+            return result
+
+    async def _token(self, network, address):
         if not ADDRESS.fullmatch(address):
             raise ValueError("TOKEN_ADDRESSES_INVALID")
         await self.start()
@@ -49,7 +74,43 @@ class Provider:
             raise ValueError("EVM_TOKEN_METADATA_INVALID")
         return dict(symbol=attr["symbol"], decimals=decimals)
 
+    def health(self):
+        now=self.clock()
+        until=max(self.access_block_until,self.rate_limit_until)
+        reason=('DEX_HTTP_'+str(self.access_status) if self.access_block_until>now
+                else 'DEX_HTTP_429' if self.rate_limit_until>now else None)
+        return dict(blocked=until>now,reason=reason,retry_after_seconds=max(0,until-now),
+                    error_code=self.access_error_code,requests_sent=self.requests_sent,
+                    responses_ok=self.responses_ok,suppressed=self.suppressed)
+
+    def request_access_recheck(self):
+        now=self.clock()
+        if (self.access_status not in (401,403) or self.rate_limit_until>now
+                or now-max(self.last_request_at,self.last_manual_probe)<30):
+            return False
+        self.last_manual_probe=now
+        self.access_block_until=0
+        return True
+
     async def price(self, chain_id, sell_token, buy_token, sell_amount, slippage_bps=None):
+        # Fast rejection avoids queueing every route behind a known account block.
+        # _price still rechecks access after admission for concurrent callers.
+        health=self.health()
+        if self.access_block_until>self.clock():
+            self.suppressed+=1
+            return dict(ok=False,reason=health['reason'],error_code=self.access_error_code,
+                        retry_after_seconds=health['retry_after_seconds'],request_sent=False,
+                        action_required='CHECK_API_ACCESS')
+        permit = await self.budget.acquire()
+        try:
+            result=await self._price(chain_id, sell_token, buy_token, sell_amount, slippage_bps)
+            if result.get('request_sent') is False:self.suppressed+=1
+            if result.get('ok'):self.responses_ok+=1
+            return result
+        finally:
+            self.budget.release(permit)
+
+    async def _price(self, chain_id, sell_token, buy_token, sell_amount, slippage_bps=None):
         if not self.api_key:
             return {"ok": False, "reason": "DEX_API_KEY_MISSING"}
         if (
@@ -91,6 +152,8 @@ class Provider:
         headers = {"0x-api-key": self.api_key, "0x-version": "v2"}
         started = self.clock()
         try:
+            self.requests_sent+=1
+            self.last_request_at=self.clock()
             async with self.session.get(
                 "https://api.0x.org/swap/allowance-holder/price",
                 params=params,
@@ -119,6 +182,8 @@ class Provider:
                                 pass
                             self.rate_limit_until = self.clock() + delay
                         elif response.status in (401, 403):
+                            self.access_failures+=1
+                            delay=min(1800,30*2**min(6,self.access_failures-1))
                             self.access_block_until = self.clock() + delay
                             self.access_error_code = code or ('UNAUTHORIZED' if response.status == 401 else 'HTTP_403_UNKNOWN')
                             self.access_status = response.status
@@ -129,6 +194,10 @@ class Provider:
                                 request_sent=True,
                                 action_required='CHECK_API_ACCESS' if response.status in (401, 403) else None)
                 raw = await response.json()
+                self.access_failures=0
+                self.access_block_until=0
+                self.access_status=None
+                self.access_error_code=None
             if not 0 <= self.clock() - started <= 8:
                 return dict(ok=False, reason='DEX_PRICE_RESPONSE_STALE')
             if not isinstance(raw, dict):

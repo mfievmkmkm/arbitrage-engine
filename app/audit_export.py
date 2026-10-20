@@ -1,3 +1,4 @@
+from .payload_codec import loads as payload_loads
 """Complete database audit, built on request without exposing credentials."""
 
 import json
@@ -10,6 +11,15 @@ from .export_service import write_csv
 from .secret_redaction import redact
 
 TABLES = {
+    'Candidate checks': 'arb_checks',
+    'Candidate registry': 'arb_candidates',
+    'Trade lifecycle': 'arb_lifecycle',
+    'Strategy configuration': 'arb_config_events',
+    'Diagnostic reports': 'arb_diagnostic_reports',
+    'Asset identity registry': 'asset_identity_evidence',
+    "DEX scanner state": "dex_scanner_audit",
+    "Paired channel intake": "paired_channel_intake",
+    "Paired Telegram cards": "paired_telegram_cards",
     "Market signals queue": "market_signal_queue",
     "Market signals settings": "market_signal_settings",
     "Market signals channel posts": "channel_signal_posts",
@@ -113,7 +123,7 @@ async def build(path, directory):
             for row in rows:
                 if "payload" in row:
                     try:
-                        row["payload"] = json.loads(row["payload"])
+                        row["payload"] = payload_loads(row["payload"])
                     except (ValueError, TypeError):
                         pass
             sheets[title] = redact(rows)
