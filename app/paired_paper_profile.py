@@ -25,10 +25,26 @@ def migrate_toggles(path, runtime, store):
     if first:
         runtime.enabled.update(futures_futures=True, spot_futures=False,
                                spot_spot=False, funding_arb=False, dex_paired=True)
+    # A previous migration persisted both agreed A routes as disabled. The
+    # operator requested PAPER auto-entry, but reboot retained the obsolete
+    # off toggles. Re-activate these two PAPER routes exactly once on upgrade;
+    # future Telegram off toggles remain authoritative across restarts.
+    # This is NOT LIVE authorization and bypasses no per-candidate risk gate.
+    convergence_marker = Path(str(path) + '.convergence_v2.json')
+    activation = not convergence_marker.exists()
+    if activation:
+        runtime.enabled.update(futures_futures=True, spot_futures=True)
     # Deprecated one-sided modes remain monitoring-only across restarts/toggles.
     runtime.enabled.update(dex_channel=False, dex_bybit=False, cex_dex=False)
     runtime.enabled.setdefault('dex_paired', True)
     store.save(runtime.enabled)
+    if activation:
+        temporary = convergence_marker.with_suffix('.tmp')
+        temporary.write_text(json.dumps(dict(version=2, ts=time.time(),
+            mode='PAPER_ONLY', activated=['futures_futures','spot_futures'],
+            one_time=True, live_authority=False, old_history_preserved=True)),
+            encoding='utf-8')
+        temporary.replace(convergence_marker)
     if first:
         temporary = marker.with_suffix('.tmp')
         temporary.write_text(json.dumps(dict(version=1, ts=time.time(),
