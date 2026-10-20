@@ -1895,6 +1895,15 @@ async def scanning():
             quotes = await scanner.scan()
             if getattr(scanner, 'last_diagnostics', None):
                 await diary.record_scan(scanner.last_diagnostics)
+            if paired_paper and not quotes:
+                # A zero-trade scanner can be healthy but economically blocked.
+                # Emit only aggregate read-only evidence once per 2 minutes,
+                # not raw books, account data or individual opportunities.
+                now = time.time()
+                if now - getattr(scanning, '_last_ff_zero_report', 0) >= 120:
+                    from .ff_scan_diagnostics import summarize
+                    log.info('PAPER_FF_DIAGNOSTICS %s', summarize(scanner.last_diagnostics))
+                    scanning._last_ff_zero_report = now
             if paired_paper:
                 from .paired_futures_funding import attach
                 funding_slots = asyncio.Semaphore(max(1, scanner.concurrency // 2))
