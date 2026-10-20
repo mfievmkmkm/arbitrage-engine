@@ -124,7 +124,7 @@ class Engine:
         return self.pending + sum(p["reserve"] for p in self.positions.values())
 
     async def init(self):
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.executescript(self.sql(SCHEMA) + LEDGER_SCHEMA)
             await d.execute(
                 self.sql("INSERT OR IGNORE INTO cex_dex_paper_state VALUES(1,0,?)"),
@@ -158,7 +158,7 @@ class Engine:
             if p.get('operator_exit_requested') or p.get('exit_quote'):
                 return
             p['operator_exit_requested']=self.clock()
-            async with aiosqlite.connect(self.path) as db:
+            async with aiosqlite.connect(self.path, timeout=30.0) as db:
                 await db.execute('BEGIN IMMEDIATE')
                 c=await db.execute(self.sql('UPDATE cex_dex_paper_state SET version=version+1,payload=? WHERE id=1 AND version=?'),
                                    (json.dumps(state),self.version))
@@ -188,7 +188,7 @@ class Engine:
                     raise ValueError(f'Допустимо от {low:g} до {high:g}')
                 p['paired_policy'][key]=value
             p['management_changed_at']=self.clock()
-            async with aiosqlite.connect(self.path) as db:
+            async with aiosqlite.connect(self.path, timeout=30.0) as db:
                 await db.execute('BEGIN IMMEDIATE')
                 c=await db.execute(self.sql('UPDATE cex_dex_paper_state SET version=version+1,payload=? WHERE id=1 AND version=?'),(json.dumps(state),self.version))
                 if c.rowcount!=1:raise ValueError('DEX_PAPER_CONCURRENT_WRITER')
@@ -410,7 +410,7 @@ class Engine:
                 state["checked_count"] = state.get("checked_count", 0) + 1
                 counts = state.setdefault("decision_counts", {})
                 counts[reason] = counts.get(reason, 0) + 1
-        async with aiosqlite.connect(self.path) as d:
+        async with aiosqlite.connect(self.path, timeout=30.0) as d:
             await d.execute("BEGIN IMMEDIATE")
             cursor = await d.execute(
                 self.sql("UPDATE cex_dex_paper_state SET version=version+1,payload=? WHERE id=1 AND version=?"),
