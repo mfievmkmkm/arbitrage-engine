@@ -42,3 +42,25 @@ def test_journal_and_audit_use_bounded_busy_timeouts(tmp_path, monkeypatch):
         await audit.save(str(tmp_path/'audit.sqlite3'),'scope',dict(ok=True))
     asyncio.run(run())
     assert 20 in observed and 15 in observed
+
+
+def test_confirmed_paired_paper_close_reports_reason_and_model_pnl(caplog):
+    from app.paper import PaperPosition, PaperEngine
+    class DiaryStub:
+        def __init__(self): self.saved=[]
+        async def close_paper_position(self, value, reason):
+            self.saved.append((value, reason))
+    diary=DiaryStub()
+    paper=PaperEngine(diary, capital=250)
+    p=PaperPosition(id=5,symbol='TEST/USDT:USDT',buy='bybit',sell='okx',
+                    notional=100,entry_buy=100,entry_sell=102,entry_spread=2,opened_at=1,
+                    paired_policy={'mechanism':'TWO_LEG_CONVERGENCE'}, current_net_usd=-.47)
+    paper.positions[p.id]=p
+    async def run():
+        with caplog.at_level('INFO',logger='arbitrage'):
+            return await paper.close(p.id,'TIME_STOP')
+    result=asyncio.run(run())
+    assert diary.saved and diary.saved[0][1]=='TIME_STOP'
+    assert result.status=='CLOSED' and not paper.positions
+    assert 'PAPER_FF_CLOSED id=5' in caplog.text
+    assert 'model_net_usd=-0.470000' in caplog.text
