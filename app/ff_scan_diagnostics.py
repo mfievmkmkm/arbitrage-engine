@@ -30,3 +30,18 @@ def summarize(diagnostics):
     result = {key: d[key] for key in fields if type(d.get(key)) is int and d[key] >= 0}
     result["counters"] = counts
     return result
+
+
+def decision_reasons(decisions, limit=12):
+    """Aggregate only known, safe reason-code identifiers, never raw quotes."""
+    from collections import Counter
+    import re
+    counts = Counter()
+    for row in decisions:
+        if not isinstance(row, dict) or row.get('paired_paper') is not True:
+            continue
+        reason = row.get('reason')
+        if not isinstance(reason, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{1,79}', reason):
+            reason = 'OTHER_NON_CODE_REASON'
+        counts[reason] += 1
+    return dict(counts.most_common(limit))
