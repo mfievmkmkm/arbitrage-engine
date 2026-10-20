@@ -330,7 +330,7 @@ def operator_paper_reason(strategy, row):
             row.get('cex_venue')=='mexc' and row.get('fee_source')=='MEXC_API_FUTURES_PUBLIC_SCHEDULE_PAPER'
         ):
             return 'PAIRED_PRODUCT_ACCOUNT_FEE_REQUIRED'
-    if paired_paper and getattr(secondary,'inventory_paper',None) and strategy != 'dex_paired':
+    if paired_paper and getattr(secondary,'inventory_paper',None) and strategy not in ('dex_paired','futures_futures','spot_futures'):
         return 'RESEARCH_ONLY_USE_STRATEGY_LAB'
     risk.roll_day()
     symbol = row.get('symbol') or row.get('base')
@@ -1474,7 +1474,7 @@ async def strategy_toggle(q: CallbackQuery):
     name = q.data.split(":", 1)[1]
     if name not in strategy_runtime.enabled:
         return await q.answer("Неизвестная стратегия")
-    if paired_paper and getattr(secondary,'inventory_paper',None) and name not in ('spot_inventory','dex_paired'):
+    if paired_paper and getattr(secondary,'inventory_paper',None) and name not in ('spot_inventory','dex_paired','futures_futures','spot_futures'):
         return await q.answer('Исследовательский режим: новые входы — в Paper/replay. Старые позиции сопровождаются.',show_alert=True)
     if paired_paper and name in ('dex_channel', 'dex_bybit', 'cex_dex'):
         return await q.answer('Старый односторонний режим: новые входы отключены. История и сопровождение сохранены.', show_alert=True)
@@ -1836,8 +1836,8 @@ async def notify_dex_open(position, label):
 
 
 def paper_entry_reason(op):
-    if paired_paper and getattr(secondary,'inventory_paper',None):
-        return 'CONVERGENCE_EDGE_UNPROVEN_RESEARCH_ONLY'
+    # Futures/Futures is a PAPER product route, not a directional inventory
+    # experiment. Keep all normal venue, fee, NET, risk and position gates.
     reason = operator_paper_reason('futures_futures', op)
     if reason:
         return reason
