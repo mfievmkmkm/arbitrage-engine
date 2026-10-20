@@ -1,3 +1,4 @@
+from .payload_codec import loads as payload_loads
 """Complete database audit, built on request without exposing credentials."""
 
 import json
@@ -122,7 +123,7 @@ async def build(path, directory):
             for row in rows:
                 if "payload" in row:
                     try:
-                        row["payload"] = json.loads(row["payload"])
+                        row["payload"] = payload_loads(row["payload"])
                     except (ValueError, TypeError):
                         pass
             sheets[title] = redact(rows)

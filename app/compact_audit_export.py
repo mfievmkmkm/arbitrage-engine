@@ -1,3 +1,4 @@
+from .payload_codec import loads as payload_loads
 """Bounded, streaming read-only audit; no Excel or readiness recomputation."""
 import asyncio
 import csv
@@ -55,7 +56,7 @@ def build_sync(path, directory, row_limit=5000):
                             data = dict(row)
                             if "payload" in data:
                                 try:
-                                    data["payload"] = json.loads(data["payload"])
+                                    data["payload"] = payload_loads(data["payload"])
                                 except (ValueError, TypeError):
                                     # Unknown payload cannot be safely inspected for secrets.
                                     data["payload"] = "[UNPARSEABLE_PAYLOAD_OMITTED]"

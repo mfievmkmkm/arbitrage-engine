@@ -6,6 +6,7 @@ import uuid
 from html import escape
 import aiosqlite
 from .secret_redaction import redact
+from .payload_codec import pack,loads as payload_loads
 
 STAGES=('SIGNAL','MATCH','IDENTITY','NETWORK','QUOTES','COSTS','RISK','EXECUTOR','EXECUTED','CLOSED')
 REMEDIES={
@@ -43,7 +44,7 @@ CREATE TABLE IF NOT EXISTS arb_diagnostic_reports(
 
 
 def dump(value):
-    return json.dumps(redact(value),ensure_ascii=False,allow_nan=False,default=str)
+    return pack(json.dumps(redact(value),ensure_ascii=False,allow_nan=False,default=str))
 
 
 def failure_stage(reason):
@@ -131,7 +132,7 @@ class Journal:
         if row is None:raise ValueError('Проверка не найдена')
         out=[f'🩺 <b>{escape(row[1])} · {row[0]}</b>',escape(f'{row[2]} → {row[3]} · {row[4]} · {row[5]}'),escape(f'{row[6]} · {row[7]}')]
         for ts,stage,status,reason,payload in reversed(checks):
-            data=json.loads(payload)
+            data=payload_loads(payload)
             facts={k:v for k,v in data.items() if k in ('observed','threshold','unit','partial_net_usd','costs_usd','raw_edge_usd','immediate_net_usd','reverse_loss_limit_usd','error_type')}
             numeric=('spread_pct','net','stress_net','net_after_reserve','budget','spent','partial_net','raw_edge','costs','funding_reserve','target_usd','stop_usd','min_spread','max_spread','min_net','stress_drop','gas')
             facts.update({k:v for k,v in data.items() if k in numeric})
@@ -166,7 +167,7 @@ class Journal:
             rows=await (await db.execute('SELECT strategy,mode,position_id,payload FROM arb_lifecycle WHERE status="CLOSED" ORDER BY id DESC LIMIT 5000')).fetchall()
         unique={}
         for strategy,mode,pid,payload in rows:
-            unique.setdefault((strategy,mode,pid),json.loads(payload))
+            unique.setdefault((strategy,mode,pid),payload_loads(payload))
         groups={}
         for (strategy,mode,pid),p in unique.items():
             if p.get('net') is None:continue

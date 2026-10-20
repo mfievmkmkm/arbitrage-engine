@@ -1,3 +1,4 @@
+from .payload_codec import pack
 """Durable isolated PAPER wallet. No private clients, orders or withdrawals.
 
 Orders use displayed native-lot depth and IOC limits. A later second-leg book
@@ -104,7 +105,7 @@ class Engine(Operator):
             if c.rowcount!=1:
                 raise Invalid('INVENTORY_CONCURRENT_WRITER')
             await db.execute('INSERT INTO inventory_paper_events(ts,reason,payload) VALUES(?,?,?)',
-                             (float(now),reason,json.dumps(plain(payload),allow_nan=False)))
+                             (float(now),reason,pack(json.dumps(plain(payload),allow_nan=False))))
             for p in trades:
                 await db.execute('INSERT INTO inventory_paper_trades VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,net=excluded.net,payload=excluded.payload',
                     (p['id'],float(p['opened_at']),p['status'],float(p['net']) if p.get('net') is not None else None,json.dumps(plain(p))))
