@@ -200,9 +200,17 @@ class Scanner:
                     symbols=(symbols[start:]+symbols[:start])[:4]
                     self.symbol_cursor[name]=(start+len(symbols))%max(1,count)
                     rows={s:await asyncio.wait_for(c.fetch_ticker(s),5) for s in symbols}
-            self.tickers[name] = (self.clock(),{s:t for s,t in rows.items() if spot(self.clients[name].markets.get(s,{}))
-                                                    and positive(t.get('bid')) and positive(t.get('ask'))
-                                                    and t['bid'] < t['ask']})
+            # CCXT tickers may carry large raw exchange payloads in 'info'.
+            # Discovery needs bid/ask only; keep no untrusted raw ticker maps
+            # resident across cycles on the 1 GB Railway worker.
+            compact = {}
+            for symbol, ticker in rows.items():
+                if not isinstance(ticker, dict) or not spot(self.clients[name].markets.get(symbol, {})):
+                    continue
+                bid, ask = positive(ticker.get('bid')), positive(ticker.get('ask'))
+                if bid is not None and ask is not None and bid < ask:
+                    compact[symbol] = dict(bid=bid, ask=ask)
+            self.tickers[name] = (self.clock(), compact)
             self.health[name] = 'OK'
         except Exception as exc:
             self.tickers.pop(name,None)
