@@ -26,7 +26,10 @@ def sha(path):
 
 
 def seal(path):
-    with open(path,'rb') as f:os.fsync(f.fileno())
+    # Windows _commit (used by os.fsync) requires a writable file descriptor.
+    # Keep an actual fsync; do not mask an I/O failure or weaken backup safety.
+    with open(path,'r+b') as f:
+        os.fsync(f.fileno())
 
 
 def syncdir(path):
