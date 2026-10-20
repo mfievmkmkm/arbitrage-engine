@@ -1998,6 +1998,13 @@ async def scanning():
                         except Exception:
                             log.exception('Paired Paper notification failed')
             await diary.record_decisions(decisions)
+            if paired_paper and latest and not paper.positions:
+                ts = time.time()
+                if ts - getattr(scanning, '_last_ff_decision_report', 0) >= 120:
+                    from .ff_scan_diagnostics import decision_reasons
+                    log.info('PAPER_FF_DECISIONS opportunities=%s reasons=%s',
+                             len(latest), decision_reasons(decisions))
+                    scanning._last_ff_decision_report = ts
             log.info(
                 "Cycle opportunities=%s paper=%s", len(latest), len(paper.positions)
             )
