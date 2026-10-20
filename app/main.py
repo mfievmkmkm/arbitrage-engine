@@ -2528,6 +2528,12 @@ async def main():
         if paired_paper:
             from .paired_paper_profile import migrate_toggles
             migrate_toggles(config.runtime_state_path, strategy_runtime, strategy_toggles)
+            # Prove whether the Futures/Futures scanner can attempt entry.
+            # Never auto-enable a strategy previously switched off by the owner.
+            log.info("PAPER_FF_STARTUP enabled=%s mode=%s environment=%s paused=%s inventory_research=%s",
+                     strategy_runtime.enabled.get('futures_futures', False),
+                     trading_controls.profile('paper')['mode'], trading_controls.environment,
+                     scanner.paused, bool(getattr(secondary, 'inventory_paper', None)))
         sf_cycle = secondary.runtime.services["spot_futures"]
         sf_cycle.allow_open = (
             lambda x: not scanner.paused
